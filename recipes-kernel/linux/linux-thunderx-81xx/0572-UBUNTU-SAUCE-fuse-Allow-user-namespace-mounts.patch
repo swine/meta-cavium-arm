@@ -1,0 +1,36 @@
+From 82dd40a6d2c739cac58ab9f55c346612d02e3b24 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Thu, 2 Oct 2014 15:51:41 -0500
+Subject: [PATCH 0572/1767] UBUNTU: SAUCE: fuse: Allow user namespace mounts
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/fuse/inode.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/fs/fuse/inode.c b/fs/fuse/inode.c
+index b7bdfda..2fd338c 100644
+--- a/fs/fuse/inode.c
++++ b/fs/fuse/inode.c
+@@ -1201,7 +1201,7 @@ static void fuse_kill_sb_anon(struct super_block *sb)
+ static struct file_system_type fuse_fs_type = {
+ 	.owner		= THIS_MODULE,
+ 	.name		= "fuse",
+-	.fs_flags	= FS_HAS_SUBTYPE,
++	.fs_flags	= FS_HAS_SUBTYPE | FS_USERNS_MOUNT,
+ 	.mount		= fuse_mount,
+ 	.kill_sb	= fuse_kill_sb_anon,
+ };
+@@ -1233,7 +1233,7 @@ static struct file_system_type fuseblk_fs_type = {
+ 	.name		= "fuseblk",
+ 	.mount		= fuse_mount_blk,
+ 	.kill_sb	= fuse_kill_sb_blk,
+-	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_SUBTYPE,
++	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_SUBTYPE | FS_USERNS_MOUNT,
+ };
+ MODULE_ALIAS_FS("fuseblk");
+ 
+-- 
+1.9.3
+

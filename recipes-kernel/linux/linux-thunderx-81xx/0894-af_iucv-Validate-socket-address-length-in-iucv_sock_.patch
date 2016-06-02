@@ -1,0 +1,37 @@
+From cf06bb3e5d4525201cc993d175358f39fd21bb09 Mon Sep 17 00:00:00 2001
+From: Ursula Braun <ursula.braun@de.ibm.com>
+Date: Tue, 19 Jan 2016 10:41:33 +0100
+Subject: [PATCH 0894/1767] af_iucv: Validate socket address length in
+ iucv_sock_bind()
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+[ Upstream commit 52a82e23b9f2a9e1d429c5207f8575784290d008 ]
+
+Signed-off-by: Ursula Braun <ursula.braun@de.ibm.com>
+Reported-by: Dmitry Vyukov <dvyukov@google.com>
+Reviewed-by: Evgeny Cherkashin <Eugene.Crosser@ru.ibm.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/iucv/af_iucv.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/net/iucv/af_iucv.c b/net/iucv/af_iucv.c
+index 435608c..20ab7b2 100644
+--- a/net/iucv/af_iucv.c
++++ b/net/iucv/af_iucv.c
+@@ -708,6 +708,9 @@ static int iucv_sock_bind(struct socket *sock, struct sockaddr *addr,
+ 	if (!addr || addr->sa_family != AF_IUCV)
+ 		return -EINVAL;
+ 
++	if (addr_len < sizeof(struct sockaddr_iucv))
++		return -EINVAL;
++
+ 	lock_sock(sk);
+ 	if (sk->sk_state != IUCV_OPEN) {
+ 		err = -EBADFD;
+-- 
+1.9.3
+

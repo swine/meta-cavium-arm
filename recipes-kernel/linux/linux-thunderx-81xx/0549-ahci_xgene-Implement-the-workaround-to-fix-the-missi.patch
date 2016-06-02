@@ -1,0 +1,87 @@
+From 8e861333de2b66b04d75b38b58dac37303edc8e0 Mon Sep 17 00:00:00 2001
+From: Suman Tripathi <stripathi@apm.com>
+Date: Sat, 6 Feb 2016 11:25:24 +0530
+Subject: [PATCH 0549/1767] ahci_xgene: Implement the workaround to fix the
+ missing of the edge interrupt for the HOST_IRQ_STAT.
+
+Due to H/W errata, the HOST_IRQ_STAT register misses the edge interrupt
+when clearing the HOST_IRQ_STAT register and hardware reporting the
+PORT_IRQ_STAT register happens to be at the same clock cycle.
+
+Signed-off-by: Suman Tripathi <stripathi@apm.com>
+Signed-off-by: Tejun Heo <tj@kernel.org>
+(cherry picked from linux-next commit 32aea2680de01f539d928112150279fdeeabca00)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/ata/ahci_xgene.c | 47 ++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/ata/ahci_xgene.c b/drivers/ata/ahci_xgene.c
+index 8b8ccb6..8e3f7fa 100644
+--- a/drivers/ata/ahci_xgene.c
++++ b/drivers/ata/ahci_xgene.c
+@@ -548,6 +548,51 @@ softreset_retry:
+ 	return rc;
+ }
+ 
++/**
++ * xgene_ahci_handle_broken_edge_irq - Handle the broken irq.
++ * @ata_host: Host that recieved the irq
++ * @irq_masked: HOST_IRQ_STAT value
++ *
++ * For hardware with broken edge trigger latch
++ * the HOST_IRQ_STAT register misses the edge interrupt
++ * when clearing of HOST_IRQ_STAT register and hardware
++ * reporting the PORT_IRQ_STAT register at the
++ * same clock cycle.
++ * As such, the algorithm below outlines the workaround.
++ *
++ * 1. Read HOST_IRQ_STAT register and save the state.
++ * 2. Clear the HOST_IRQ_STAT register.
++ * 3. Read back the HOST_IRQ_STAT register.
++ * 4. If HOST_IRQ_STAT register equals to zero, then
++ *    traverse the rest of port's PORT_IRQ_STAT register
++ *    to check if an interrupt is triggered at that point else
++ *    go to step 6.
++ * 5. If PORT_IRQ_STAT register of rest ports is not equal to zero
++ *    then update the state of HOST_IRQ_STAT saved in step 1.
++ * 6. Handle port interrupts.
++ * 7. Exit
++ */
++static int xgene_ahci_handle_broken_edge_irq(struct ata_host *host,
++					     u32 irq_masked)
++{
++	struct ahci_host_priv *hpriv = host->private_data;
++	void __iomem *port_mmio;
++	int i;
++
++	if (!readl(hpriv->mmio + HOST_IRQ_STAT)) {
++		for (i = 0; i < host->n_ports; i++) {
++			if (irq_masked & (1 << i))
++				continue;
++
++			port_mmio = ahci_port_base(host->ports[i]);
++			if (readl(port_mmio + PORT_IRQ_STAT))
++				irq_masked |= (1 << i);
++		}
++	}
++
++	return ahci_handle_port_intr(host, irq_masked);
++}
++
+ static irqreturn_t xgene_ahci_irq_intr(int irq, void *dev_instance)
+ {
+ 	struct ata_host *host = dev_instance;
+@@ -576,7 +621,7 @@ static irqreturn_t xgene_ahci_irq_intr(int irq, void *dev_instance)
+ 	 */
+ 	writel(irq_stat, mmio + HOST_IRQ_STAT);
+ 
+-	rc = ahci_handle_port_intr(host, irq_masked);
++	rc = xgene_ahci_handle_broken_edge_irq(host, irq_masked);
+ 
+ 	spin_unlock(&host->lock);
+ 
+-- 
+1.9.3
+

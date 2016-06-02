@@ -1,0 +1,169 @@
+From edaaf8c6413503998bfe8dcb277236a648a170ed Mon Sep 17 00:00:00 2001
+From: Harish Chegondi <harish.chegondi@intel.com>
+Date: Mon, 7 Dec 2015 14:28:18 -0800
+Subject: [PATCH 0346/1767] perf/x86/intel: Add perf core PMU support for Intel
+ Knights Landing
+
+BugLink: http://bugs.launchpad.net/bugs/1461360
+
+Knights Landing core is based on Silvermont core with several differences.
+Like Silvermont, Knights Landing has 8 pairs of LBR MSRs. However, the
+LBR MSRs addresses match those of the Xeon cores' first 8 pairs of LBR MSRs
+Unlike Silvermont, Knights Landing supports hyperthreading. Knights Landing
+offcore response events config register mask is different from that of the
+Silvermont.
+
+This patch was developed based on a patch from Andi Kleen.
+
+For more details, please refer to the public document:
+
+  https://software.intel.com/sites/default/files/managed/15/8d/IntelXeonPhi%E2%84%A2x200ProcessorPerformanceMonitoringReferenceManual_Volume1_Registers_v0%206.pdf
+
+Signed-off-by: Harish Chegondi <harish.chegondi@intel.com>
+Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+Cc: Andi Kleen <andi.kleen@intel.com>
+Cc: Arnaldo Carvalho de Melo <acme@redhat.com>
+Cc: Harish Chegondi <harish.chegondi@gmail.com>
+Cc: Jiri Olsa <jolsa@redhat.com>
+Cc: Kan Liang <kan.liang@intel.com>
+Cc: Linus Torvalds <torvalds@linux-foundation.org>
+Cc: Lukasz Anaczkowski <lukasz.anaczkowski@intel.com>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Stephane Eranian <eranian@google.com>
+Cc: Thomas Gleixner <tglx@linutronix.de>
+Cc: Vince Weaver <vincent.weaver@maine.edu>
+Link: http://lkml.kernel.org/r/d14593c7311f78c93c9cf6b006be843777c5ad5c.1449517401.git.harish.chegondi@intel.com
+Signed-off-by: Ingo Molnar <mingo@kernel.org>
+(cherry picked from commit 1e7b93906249a7ccca730be03168ace15f95709e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/kernel/cpu/perf_event.h           |  2 +
+ arch/x86/kernel/cpu/perf_event_intel.c     | 62 ++++++++++++++++++++++++++++++
+ arch/x86/kernel/cpu/perf_event_intel_lbr.c | 14 +++++++
+ 3 files changed, 78 insertions(+)
+
+diff --git a/arch/x86/kernel/cpu/perf_event.h b/arch/x86/kernel/cpu/perf_event.h
+index d0e35eb..ff5b330 100644
+--- a/arch/x86/kernel/cpu/perf_event.h
++++ b/arch/x86/kernel/cpu/perf_event.h
+@@ -907,6 +907,8 @@ void intel_pmu_lbr_init_hsw(void);
+ 
+ void intel_pmu_lbr_init_skl(void);
+ 
++void intel_pmu_lbr_init_knl(void);
++
+ int intel_pmu_setup_lbr_filter(struct perf_event *event);
+ 
+ void intel_pt_interrupt(void);
+diff --git a/arch/x86/kernel/cpu/perf_event_intel.c b/arch/x86/kernel/cpu/perf_event_intel.c
+index e2a4300..c20032b 100644
+--- a/arch/x86/kernel/cpu/perf_event_intel.c
++++ b/arch/x86/kernel/cpu/perf_event_intel.c
+@@ -185,6 +185,14 @@ struct event_constraint intel_skl_event_constraints[] = {
+ 	EVENT_CONSTRAINT_END
+ };
+ 
++static struct extra_reg intel_knl_extra_regs[] __read_mostly = {
++	INTEL_UEVENT_EXTRA_REG(0x01b7,
++			       MSR_OFFCORE_RSP_0, 0x7f9ffbffffull, RSP_0),
++	INTEL_UEVENT_EXTRA_REG(0x02b7,
++			       MSR_OFFCORE_RSP_1, 0x3f9ffbffffull, RSP_1),
++	EVENT_EXTRA_END
++};
++
+ static struct extra_reg intel_snb_extra_regs[] __read_mostly = {
+ 	/* must define OFFCORE_RSP_X first, see intel_fixup_er() */
+ 	INTEL_UEVENT_EXTRA_REG(0x01b7, MSR_OFFCORE_RSP_0, 0x3f807f8fffull, RSP_0),
+@@ -1457,6 +1465,42 @@ static __initconst const u64 slm_hw_cache_event_ids
+  },
+ };
+ 
++#define KNL_OT_L2_HITE		BIT_ULL(19) /* Other Tile L2 Hit */
++#define KNL_OT_L2_HITF		BIT_ULL(20) /* Other Tile L2 Hit */
++#define KNL_MCDRAM_LOCAL	BIT_ULL(21)
++#define KNL_MCDRAM_FAR		BIT_ULL(22)
++#define KNL_DDR_LOCAL		BIT_ULL(23)
++#define KNL_DDR_FAR		BIT_ULL(24)
++#define KNL_DRAM_ANY		(KNL_MCDRAM_LOCAL | KNL_MCDRAM_FAR | \
++				    KNL_DDR_LOCAL | KNL_DDR_FAR)
++#define KNL_L2_READ		SLM_DMND_READ
++#define KNL_L2_WRITE		SLM_DMND_WRITE
++#define KNL_L2_PREFETCH		SLM_DMND_PREFETCH
++#define KNL_L2_ACCESS		SLM_LLC_ACCESS
++#define KNL_L2_MISS		(KNL_OT_L2_HITE | KNL_OT_L2_HITF | \
++				   KNL_DRAM_ANY | SNB_SNP_ANY | \
++						  SNB_NON_DRAM)
++
++static __initconst const u64 knl_hw_cache_extra_regs
++				[PERF_COUNT_HW_CACHE_MAX]
++				[PERF_COUNT_HW_CACHE_OP_MAX]
++				[PERF_COUNT_HW_CACHE_RESULT_MAX] = {
++	[C(LL)] = {
++		[C(OP_READ)] = {
++			[C(RESULT_ACCESS)] = KNL_L2_READ | KNL_L2_ACCESS,
++			[C(RESULT_MISS)]   = 0,
++		},
++		[C(OP_WRITE)] = {
++			[C(RESULT_ACCESS)] = KNL_L2_WRITE | KNL_L2_ACCESS,
++			[C(RESULT_MISS)]   = KNL_L2_WRITE | KNL_L2_MISS,
++		},
++		[C(OP_PREFETCH)] = {
++			[C(RESULT_ACCESS)] = KNL_L2_PREFETCH | KNL_L2_ACCESS,
++			[C(RESULT_MISS)]   = KNL_L2_PREFETCH | KNL_L2_MISS,
++		},
++	},
++};
++
+ /*
+  * Use from PMIs where the LBRs are already disabled.
+  */
+@@ -3511,6 +3555,24 @@ __init int intel_pmu_init(void)
+ 		pr_cont("Broadwell events, ");
+ 		break;
+ 
++	case 87: /* Knights Landing Xeon Phi */
++		memcpy(hw_cache_event_ids,
++		       slm_hw_cache_event_ids, sizeof(hw_cache_event_ids));
++		memcpy(hw_cache_extra_regs,
++		       knl_hw_cache_extra_regs, sizeof(hw_cache_extra_regs));
++		intel_pmu_lbr_init_knl();
++
++		x86_pmu.event_constraints = intel_slm_event_constraints;
++		x86_pmu.pebs_constraints = intel_slm_pebs_event_constraints;
++		x86_pmu.extra_regs = intel_knl_extra_regs;
++
++		/* all extra regs are per-cpu when HT is on */
++		x86_pmu.flags |= PMU_FL_HAS_RSP_1;
++		x86_pmu.flags |= PMU_FL_NO_HT_SHARING;
++
++		pr_cont("Knights Landing events, ");
++		break;
++
+ 	case 78: /* 14nm Skylake Mobile */
+ 	case 94: /* 14nm Skylake Desktop */
+ 		x86_pmu.late_ack = true;
+diff --git a/arch/x86/kernel/cpu/perf_event_intel_lbr.c b/arch/x86/kernel/cpu/perf_event_intel_lbr.c
+index 659f01e..0b8eabc 100644
+--- a/arch/x86/kernel/cpu/perf_event_intel_lbr.c
++++ b/arch/x86/kernel/cpu/perf_event_intel_lbr.c
+@@ -1028,3 +1028,17 @@ void __init intel_pmu_lbr_init_atom(void)
+ 	 */
+ 	pr_cont("8-deep LBR, ");
+ }
++
++/* Knights Landing */
++void intel_pmu_lbr_init_knl(void)
++{
++	x86_pmu.lbr_nr	   = 8;
++	x86_pmu.lbr_tos    = MSR_LBR_TOS;
++	x86_pmu.lbr_from   = MSR_LBR_NHM_FROM;
++	x86_pmu.lbr_to     = MSR_LBR_NHM_TO;
++
++	x86_pmu.lbr_sel_mask = LBR_SEL_MASK;
++	x86_pmu.lbr_sel_map  = snb_lbr_sel_map;
++
++	pr_cont("8-deep LBR, ");
++}
+-- 
+1.9.3
+

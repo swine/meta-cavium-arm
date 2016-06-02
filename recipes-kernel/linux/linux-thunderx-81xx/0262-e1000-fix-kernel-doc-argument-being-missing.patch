@@ -1,0 +1,32 @@
+From 4b774a47dc9ca2e5f406c07f76bc78f6a31d221b Mon Sep 17 00:00:00 2001
+From: Jean Sacren <sakiwit@gmail.com>
+Date: Sat, 19 Sep 2015 05:08:46 -0600
+Subject: [PATCH 0262/1767] e1000: fix kernel-doc argument being missing
+
+Due to historical reason, 'phy_data' has never been included in the
+kernel doc. Fix it so that the requirement could be fulfilled.
+
+Signed-off-by: Jean Sacren <sakiwit@gmail.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit f03fed668a9193036db0258229af87e9ba46ed5e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/e1000/e1000_hw.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/ethernet/intel/e1000/e1000_hw.c b/drivers/net/ethernet/intel/e1000/e1000_hw.c
+index 59d1769..dbae55e 100644
+--- a/drivers/net/ethernet/intel/e1000/e1000_hw.c
++++ b/drivers/net/ethernet/intel/e1000/e1000_hw.c
+@@ -2806,6 +2806,7 @@ static u16 e1000_shift_in_mdi_bits(struct e1000_hw *hw)
+  * e1000_read_phy_reg - read a phy register
+  * @hw: Struct containing variables accessed by shared code
+  * @reg_addr: address of the PHY register to read
++ * @phy_data: pointer to the value on the PHY register
+  *
+  * Reads the value from a PHY register, if the value is on a specific non zero
+  * page, sets the page first.
+-- 
+1.9.3
+

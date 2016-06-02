@@ -1,0 +1,42 @@
+From 87602b59a10052faa834d33f021ceb6ac656209c Mon Sep 17 00:00:00 2001
+From: Dmitry Fleytman <dmitry@daynix.com>
+Date: Tue, 13 Oct 2015 12:48:18 +0300
+Subject: [PATCH 0265/1767] e1000e: fix division by zero on jumbo MTUs
+
+This patch fixes possible division by zero in receive
+interrupt handler when working without adaptive interrupt
+moderation.
+
+The adaptive interrupt moderation mechanism is typically
+disabled on jumbo MTUs.
+
+Signed-off-by: Dmitry Fleytman <dmitry@daynix.com>
+Signed-off-by: Leonid Bloch <leonid@daynix.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit b77ac46bbae862dcb3f51296825c940404c69b0f)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/e1000e/netdev.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/e1000e/netdev.c b/drivers/net/ethernet/intel/e1000e/netdev.c
+index 0003bf6..7724473 100644
+--- a/drivers/net/ethernet/intel/e1000e/netdev.c
++++ b/drivers/net/ethernet/intel/e1000e/netdev.c
+@@ -1959,8 +1959,10 @@ static irqreturn_t e1000_intr_msix_rx(int __always_unused irq, void *data)
+ 	 * previous interrupt.
+ 	 */
+ 	if (rx_ring->set_itr) {
+-		writel(1000000000 / (rx_ring->itr_val * 256),
+-		       rx_ring->itr_register);
++		u32 itr = rx_ring->itr_val ?
++			  1000000000 / (rx_ring->itr_val * 256) : 0;
++
++		writel(itr, rx_ring->itr_register);
+ 		rx_ring->set_itr = 0;
+ 	}
+ 
+-- 
+1.9.3
+

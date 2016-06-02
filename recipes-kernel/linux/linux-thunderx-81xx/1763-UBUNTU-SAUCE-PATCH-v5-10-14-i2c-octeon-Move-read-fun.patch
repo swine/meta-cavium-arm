@@ -1,0 +1,130 @@
+From 5cca29b88ca12c4c01094f5a9435cefbaea5bac2 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Mon, 4 Apr 2016 15:33:07 -0600
+Subject: [PATCH 1763/1767] UBUNTU: SAUCE: [PATCH v5 10/14] i2c: octeon: Move
+ read function before write
+
+Just sorting the functions to be consistent with the other
+read/write variants.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/i2c/busses/i2c-octeon.c | 94 ++++++++++++++++++++---------------------
+ 1 file changed, 47 insertions(+), 47 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-octeon.c b/drivers/i2c/busses/i2c-octeon.c
+index 9621b66..95cd301 100644
+--- a/drivers/i2c/busses/i2c-octeon.c
++++ b/drivers/i2c/busses/i2c-octeon.c
+@@ -928,53 +928,6 @@ static int octeon_i2c_start(struct octeon_i2c *i2c, int first)
+ }
+ 
+ /**
+- * octeon_i2c_write - send data to the bus via low-level controller
+- * @i2c: The struct octeon_i2c
+- * @target: Target address
+- * @data: Pointer to the data to be sent
+- * @length: Length of the data
+- * @last: is last msg in combined operation?
+- *
+- * The address is sent over the bus, then the data.
+- *
+- * Returns 0 on success, otherwise a negative errno.
+- */
+-static int octeon_i2c_write(struct octeon_i2c *i2c, int target,
+-			    const u8 *data, int length, int first, int last)
+-{
+-	int i, result;
+-
+-	result = octeon_i2c_start(i2c, first);
+-	if (result)
+-		return result;
+-
+-	octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_DATA, target << 1);
+-	octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_CTL, TWSI_CTL_ENAB);
+-
+-	result = octeon_i2c_wait(i2c);
+-	if (result)
+-		return result;
+-
+-	for (i = 0; i < length; i++) {
+-		result = check_arb(i2c, false);
+-		if (result)
+-			return result;
+-
+-		octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_DATA, data[i]);
+-		octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_CTL, TWSI_CTL_ENAB);
+-
+-		result = octeon_i2c_wait(i2c);
+-		if (result)
+-			return result;
+-		result = check_arb(i2c, false);
+-		if (result)
+-			return result;
+-	}
+-
+-	return 0;
+-}
+-
+-/**
+  * octeon_i2c_read - receive data from the bus via low-level controller
+  * @i2c: The struct octeon_i2c
+  * @target: Target address
+@@ -1040,6 +993,53 @@ static int octeon_i2c_read(struct octeon_i2c *i2c, int target, u8 *data,
+ }
+ 
+ /**
++ * octeon_i2c_write - send data to the bus via low-level controller
++ * @i2c: The struct octeon_i2c
++ * @target: Target address
++ * @data: Pointer to the data to be sent
++ * @length: Length of the data
++ * @last: is last msg in combined operation?
++ *
++ * The address is sent over the bus, then the data.
++ *
++ * Returns 0 on success, otherwise a negative errno.
++ */
++static int octeon_i2c_write(struct octeon_i2c *i2c, int target,
++			    const u8 *data, int length, int first, int last)
++{
++	int i, result;
++
++	result = octeon_i2c_start(i2c, first);
++	if (result)
++		return result;
++
++	octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_DATA, target << 1);
++	octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_CTL, TWSI_CTL_ENAB);
++
++	result = octeon_i2c_wait(i2c);
++	if (result)
++		return result;
++
++	for (i = 0; i < length; i++) {
++		result = check_arb(i2c, false);
++		if (result)
++			return result;
++
++		octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_DATA, data[i]);
++		octeon_i2c_write_sw(i2c, SW_TWSI_EOP_TWSI_CTL, TWSI_CTL_ENAB);
++
++		result = octeon_i2c_wait(i2c);
++		if (result)
++			return result;
++		result = check_arb(i2c, false);
++		if (result)
++			return result;
++	}
++
++	return 0;
++}
++
++/**
+  * octeon_i2c_xfer - The driver's master_xfer function
+  * @adap: Pointer to the i2c_adapter structure
+  * @msgs: Pointer to the messages to be processed
+-- 
+1.9.3
+

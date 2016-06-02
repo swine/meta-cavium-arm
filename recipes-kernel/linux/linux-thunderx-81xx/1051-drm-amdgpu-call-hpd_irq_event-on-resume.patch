@@ -1,0 +1,35 @@
+From 37cb8aca34dd09299c1f797005d17d27e3475de2 Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Tue, 24 Nov 2015 14:30:56 -0500
+Subject: [PATCH 1051/1767] drm/amdgpu: call hpd_irq_event on resume
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 54fb2a5cd0baf8e97d743de411e2f832d1afa68d upstream.
+
+Need to call this on resume if displays changes during
+suspend in order to properly be notified of changes.
+
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index d5b4213..58cb698 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -1788,6 +1788,7 @@ int amdgpu_resume_kms(struct drm_device *dev, bool resume, bool fbcon)
+ 	}
+ 
+ 	drm_kms_helper_poll_enable(dev);
++	drm_helper_hpd_irq_event(dev);
+ 
+ 	if (fbcon) {
+ 		amdgpu_fbdev_set_suspend(adev, 0);
+-- 
+1.9.3
+

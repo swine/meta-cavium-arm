@@ -1,0 +1,65 @@
+From 3609f6bf444c7087a75691db11f6b448be5525e9 Mon Sep 17 00:00:00 2001
+From: Suravee Suthikulpanit <Suravee.Suthikulpanit@amd.com>
+Date: Thu, 10 Dec 2015 08:55:28 -0800
+Subject: [PATCH 0275/1767] irqdomain: Introduce is_fwnode_irqchip helper
+
+Since there will be several places checking if fwnode.type
+is equal FWNODE_IRQCHIP, this patch adds a convenient function
+for this purpose.
+
+Acked-by: Marc Zyngier <marc.zyngier@arm.com>
+Signed-off-by: Suravee Suthikulpanit <Suravee.Suthikulpanit@amd.com>
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+(cherry picked from commit 75aba7b0e9ac416ca53c0c97680b8e9aedf09284)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/irqchip/irq-gic.c | 2 +-
+ include/linux/irqdomain.h | 5 +++++
+ kernel/irq/irqdomain.c    | 2 +-
+ 3 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/irqchip/irq-gic.c b/drivers/irqchip/irq-gic.c
+index abf2ffa..fcd327f 100644
+--- a/drivers/irqchip/irq-gic.c
++++ b/drivers/irqchip/irq-gic.c
+@@ -972,7 +972,7 @@ static int gic_irq_domain_translate(struct irq_domain *d,
+ 		return 0;
+ 	}
+ 
+-	if (fwspec->fwnode->type == FWNODE_IRQCHIP) {
++	if (is_fwnode_irqchip(fwspec->fwnode)) {
+ 		if(fwspec->param_count != 2)
+ 			return -EINVAL;
+ 
+diff --git a/include/linux/irqdomain.h b/include/linux/irqdomain.h
+index a06feda..d72fabc 100644
+--- a/include/linux/irqdomain.h
++++ b/include/linux/irqdomain.h
+@@ -211,6 +211,11 @@ static inline struct fwnode_handle *of_node_to_fwnode(struct device_node *node)
+ 	return node ? &node->fwnode : NULL;
+ }
+ 
++static inline bool is_fwnode_irqchip(struct fwnode_handle *fwnode)
++{
++	return fwnode && fwnode->type == FWNODE_IRQCHIP;
++}
++
+ static inline struct irq_domain *irq_find_matching_host(struct device_node *node,
+ 							enum irq_domain_bus_token bus_token)
+ {
+diff --git a/kernel/irq/irqdomain.c b/kernel/irq/irqdomain.c
+index 22aa961..7f34d98 100644
+--- a/kernel/irq/irqdomain.c
++++ b/kernel/irq/irqdomain.c
+@@ -70,7 +70,7 @@ void irq_domain_free_fwnode(struct fwnode_handle *fwnode)
+ {
+ 	struct irqchip_fwid *fwid;
+ 
+-	if (WARN_ON(fwnode->type != FWNODE_IRQCHIP))
++	if (WARN_ON(!is_fwnode_irqchip(fwnode)))
+ 		return;
+ 
+ 	fwid = container_of(fwnode, struct irqchip_fwid, fwnode);
+-- 
+1.9.3
+

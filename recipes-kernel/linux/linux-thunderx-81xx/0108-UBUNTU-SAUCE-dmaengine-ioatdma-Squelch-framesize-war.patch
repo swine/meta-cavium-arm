@@ -1,0 +1,44 @@
+From e6f8cf480db955496bd19e857d11039420c8fdd5 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Fri, 8 Jan 2016 21:37:45 +0000
+Subject: [PATCH 0108/1767] UBUNTU: SAUCE: dmaengine: ioatdma: Squelch
+ framesize warnings
+
+  CC [M]  drivers/dma/ioat/prep.o
+drivers/dma/ioat/prep.c: In function 'ioat_prep_pqxor':
+drivers/dma/ioat/prep.c:682:1: warning: the frame size of 1048 bytes is larger than 1024 bytes [-Wframe-larger-than=]
+ }
+ ^
+drivers/dma/ioat/prep.c: In function 'ioat_prep_pqxor_val':
+drivers/dma/ioat/prep.c:714:1: warning: the frame size of 1048 bytes is larger than 1024 bytes [-Wframe-larger-than=]
+ }
+
+gcc version 5.3.1 20151219 (Ubuntu 5.3.1-4ubuntu1)
+
+Cc: Vinod Koul <vinod.koul@intel.com>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Dave Jiang <dave.jiang@intel.com>
+Cc: Prarit Bhargava <prarit@redhat.com>
+Cc: Nicholas Mc Guire <der.herr@hofr.at>
+Cc: Jarkko Nikula <jarkko.nikula@linux.intel.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/dma/ioat/prep.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/dma/ioat/prep.c b/drivers/dma/ioat/prep.c
+index 6bb4a13..243421a 100644
+--- a/drivers/dma/ioat/prep.c
++++ b/drivers/dma/ioat/prep.c
+@@ -26,7 +26,7 @@
+ #include "hw.h"
+ #include "dma.h"
+ 
+-#define MAX_SCF	1024
++#define MAX_SCF	256
+ 
+ /* provide a lookup table for setting the source address in the base or
+  * extended descriptor of an xor or pq descriptor
+-- 
+1.9.3
+

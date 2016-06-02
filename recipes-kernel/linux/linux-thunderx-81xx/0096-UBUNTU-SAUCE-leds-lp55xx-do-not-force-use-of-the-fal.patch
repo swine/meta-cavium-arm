@@ -1,0 +1,29 @@
+From 84f40e0e58012b7cfc0da89e1226a1be62cc33ec Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Thu, 1 Oct 2015 18:01:29 +0100
+Subject: [PATCH 0096/1767] UBUNTU: SAUCE: leds: lp55xx -- do not force use of
+ the fallback loader
+
+The lp55xx driver uses the firmware loader to get its firmware.  Do not
+force us to use the fallback the kernel one should be sufficient.
+
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ drivers/leds/Kconfig | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/drivers/leds/Kconfig b/drivers/leds/Kconfig
+index b1ab8bd..8a64118 100644
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -230,7 +230,6 @@ config LEDS_LP55XX_COMMON
+ 	tristate "Common Driver for TI/National LP5521/5523/55231/5562/8501"
+ 	depends on LEDS_LP5521 || LEDS_LP5523 || LEDS_LP5562 || LEDS_LP8501
+ 	select FW_LOADER
+-	select FW_LOADER_USER_HELPER
+ 	help
+ 	  This option supports common operations for LP5521/5523/55231/5562/8501
+ 	  devices.
+-- 
+1.9.3
+

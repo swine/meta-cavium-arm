@@ -1,0 +1,83 @@
+From 208c30e1798837eed55acfb3c2acef7cabbded42 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Mon, 16 May 2016 17:44:10 -0700
+Subject: [PATCH 29/39] net: thunderx: Firmware now configures LMAC0/2 instead
+ of 1/3
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 23 +++++++++++++++--------
+ 1 file changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index 3659626..c8b96b8 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -855,7 +855,6 @@ static void bgx_set_lmac_config(struct bgx *bgx, u8 idx)
+ 	u8 lane_to_sds;
+ 
+ 	lmac = &bgx->lmac[idx];
+-	lmac->lmacid = idx;
+ 
+ 	if (!bgx->is_81xx) {
+ 		/* Read LMAC0 type to figure out QLM mode
+@@ -871,9 +870,9 @@ static void bgx_set_lmac_config(struct bgx *bgx, u8 idx)
+ 	}
+ 
+ 	/* On 81xx BGX can be split across 2 DLMs
+-	 * firmware programs lmac_type of LMAC1 and LMAC3
++	 * firmware programs lmac_type of LMAC0 and LMAC2
+ 	 */
+-	if ((idx == 1) || (idx == 3)) {
++	if ((idx == 0) || (idx == 2)) {
+ 		cmr_cfg = bgx_reg_read(bgx, idx, BGX_CMRX_CFG);
+ 		lmac_type = (u8)((cmr_cfg >> 8) & 0x07);
+ 		lane_to_sds = (u8)(cmr_cfg & 0xFF);
+@@ -887,11 +886,11 @@ static void bgx_set_lmac_config(struct bgx *bgx, u8 idx)
+ 				SPU_PMD_CRTL_TRAIN_EN;
+ 		lmac_set_lane2sds(lmac);
+ 
+-		/* Set LMAC type of other lmac on same DLM i.e LMAC 0/2 */
+-		olmac = &bgx->lmac[idx - 1];
++		/* Set LMAC type of other lmac on same DLM i.e LMAC 1/3 */
++		olmac = &bgx->lmac[idx + 1];
+ 		olmac->lmac_type = lmac->lmac_type;
+ 		olmac->use_training =
+-		bgx_reg_read(bgx, idx - 1, BGX_SPUX_BR_PMD_CRTL) &
++		bgx_reg_read(bgx, idx + 1, BGX_SPUX_BR_PMD_CRTL) &
+ 			SPU_PMD_CRTL_TRAIN_EN;
+ 		lmac_set_lane2sds(olmac);
+ 	}
+@@ -913,10 +912,18 @@ static bool is_dlm0_in_bgx_mode(struct bgx *bgx)
+ 
+ static void bgx_get_qlm_mode(struct bgx *bgx)
+ {
++	struct lmac *lmac;
+ 	struct lmac *lmac01;
+ 	struct lmac *lmac23;
+ 	u8  idx;
+ 
++	/* Init all LMAC's type to invalid */
++	for (idx = 0; idx < MAX_LMAC_PER_BGX; idx++) {
++		lmac = &bgx->lmac[idx];
++		lmac->lmac_type = BGX_MODE_INVALID;
++		lmac->lmacid = idx;
++	}
++
+ 	/* It is assumed that low level firmware sets this value */
+ 	bgx->lmac_count = bgx_reg_read(bgx, 0, BGX_CMR_RX_LMACS) & 0x7;
+ 	if (bgx->lmac_count > MAX_LMAC_PER_BGX)
+@@ -931,8 +938,8 @@ static void bgx_get_qlm_mode(struct bgx *bgx)
+ 	}
+ 
+ 	if (bgx->lmac_count) {
+-		bgx_print_qlm_mode(bgx, 1);
+-		bgx_print_qlm_mode(bgx, 3);
++		bgx_print_qlm_mode(bgx, 0);
++		bgx_print_qlm_mode(bgx, 2);
+ 	}
+ 
+ 	/* If DLM0 is not in BGX mode then LMAC0/1 have
+-- 
+1.9.1
+

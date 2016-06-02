@@ -1,0 +1,25 @@
+From 3dd1c83246c2a930f041b6720f1a370418cc9897 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Sun, 8 May 2016 12:51:12 +0530
+Subject: [PATCH 18/39] net: thunderx: Fixed 88xx LMAC config corruption
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index 0726e3d..13480a2 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -853,6 +853,7 @@ static void bgx_set_lmac_config(struct bgx *bgx, u8 idx)
+ 			bgx_reg_read(bgx, 0, BGX_SPUX_BR_PMD_CRTL) &
+ 				SPU_PMD_CRTL_TRAIN_EN;
+ 		lmac_set_lane2sds(lmac);
++		return;
+ 	}
+ 
+ 	/* On 81xx BGX can be split across 2 DLMs
+-- 
+1.9.1
+

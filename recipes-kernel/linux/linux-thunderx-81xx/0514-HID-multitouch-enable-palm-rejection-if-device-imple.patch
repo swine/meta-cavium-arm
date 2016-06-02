@@ -1,0 +1,45 @@
+From 729ee1bd6cd404394345a234afc0d88af599f311 Mon Sep 17 00:00:00 2001
+From: Allen Hung <allen_hung@dell.com>
+Date: Fri, 20 Nov 2015 18:21:06 +0800
+Subject: [PATCH 0514/1767] HID: multitouch: enable palm rejection if device
+ implements confidence usage
+
+BugLink: http://bugs.launchpad.net/bugs/1541671
+
+The usage Confidence is mandary to Windows Precision Touchpad devices. The
+appearance of this usage is checked in hidinput_connect but the quirk
+MT_QUIRK_VALID_IS_CONFIDENCE is not applied to device accordingly.
+Apply this quirk and also remove quirk MT_QUIRK_ALWAYS_VALID to enable palm
+rejection for the WIN 8 touchpad devices which have implemented usage
+Confidence in its input reports.
+
+Tested on Dell XPS 13 laptop.
+
+Signed-off-by: Allen Hung <allen_hung@dell.com>
+Reviewed-by: Benjamin Tissoires <benjamin.tissoires@redhat.com>
+Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+(cherry picked from commit 25a84db15b3f3a24d3ea7d2baf90693bcff34b0c)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/hid/hid-multitouch.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/hid/hid-multitouch.c b/drivers/hid/hid-multitouch.c
+index 2b8ff18..4ee7716 100644
+--- a/drivers/hid/hid-multitouch.c
++++ b/drivers/hid/hid-multitouch.c
+@@ -497,6 +497,11 @@ static int mt_touch_input_mapping(struct hid_device *hdev, struct hid_input *hi,
+ 			mt_store_field(usage, td, hi);
+ 			return 1;
+ 		case HID_DG_CONFIDENCE:
++			if (cls->name == MT_CLS_WIN_8 &&
++				field->application == HID_DG_TOUCHPAD) {
++				cls->quirks &= ~MT_QUIRK_ALWAYS_VALID;
++				cls->quirks |= MT_QUIRK_VALID_IS_CONFIDENCE;
++			}
+ 			mt_store_field(usage, td, hi);
+ 			return 1;
+ 		case HID_DG_TIPSWITCH:
+-- 
+1.9.3
+

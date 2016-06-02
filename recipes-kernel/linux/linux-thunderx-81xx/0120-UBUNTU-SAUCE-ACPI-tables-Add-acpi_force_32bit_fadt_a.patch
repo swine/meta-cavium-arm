@@ -1,0 +1,60 @@
+From 54aece74568219fb4d03956a6db723bdf7ba69e5 Mon Sep 17 00:00:00 2001
+From: Colin Ian King <colin.king@canonical.com>
+Date: Thu, 21 Jan 2016 16:45:18 +0000
+Subject: [PATCH 0120/1767] UBUNTU: SAUCE: ACPI / tables: Add
+ acpi_force_32bit_fadt_addr option to force 32 bit FADT addresses (LP:
+ #1529381)
+
+BugLink: https://bugs.launchpad.net/bugs/1529381
+
+Some HP laptops seem to have invalid 64 bit FADT X_PM* addresses
+which are causing various boot issues.  In these cases, it would
+be useful to force ACPI to use the valid legacy 32 bit equivalent
+PM addresses.  Add a acpi_force_32bit_fadt_addr to set the ACPICA
+acpi_gbl_use32_bit_fadt_addresses to TRUE to force this override.
+
+Signed-off-by: Colin Ian King <colin.king@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ Documentation/kernel-parameters.txt |  6 ++++++
+ drivers/acpi/tables.c               | 10 ++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
+index fb56bce..fe1fb6364 100644
+--- a/Documentation/kernel-parameters.txt
++++ b/Documentation/kernel-parameters.txt
+@@ -193,6 +193,12 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+ 			(e.g. thinkpad_acpi, sony_acpi, etc.) instead
+ 			of the ACPI video.ko driver.
+ 
++	acpi_force_32bit_fadt_addr
++			force FADT to use 32 bit addresses rather than the
++			64 bit X_* addresses. Some firmware have broken 64
++			bit addresses for force ACPI ignore these and use
++			the older legacy 32 bit addresss.
++
+ 	acpica_no_return_repair [HW, ACPI]
+ 			Disable AML predefined validation mechanism
+ 			This mechanism can repair the evaluation result to make
+diff --git a/drivers/acpi/tables.c b/drivers/acpi/tables.c
+index 6c0f079..ebdf564 100644
+--- a/drivers/acpi/tables.c
++++ b/drivers/acpi/tables.c
+@@ -484,3 +484,13 @@ static int __init acpi_force_table_verification_setup(char *s)
+ }
+ 
+ early_param("acpi_force_table_verification", acpi_force_table_verification_setup);
++
++static int __init acpi_force_32bit_fadt_addr(char *s)
++{
++	pr_info("Forcing 32 Bit FADT addresses\n");
++	acpi_gbl_use32_bit_fadt_addresses = TRUE;
++
++	return 0;
++}
++
++early_param("acpi_force_32bit_fadt_addr", acpi_force_32bit_fadt_addr);
+-- 
+1.9.3
+

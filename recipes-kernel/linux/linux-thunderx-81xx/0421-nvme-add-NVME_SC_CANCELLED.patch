@@ -1,0 +1,57 @@
+From b1edba973d80c9e0c60e4a2b6537d788083382ce Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Thu, 26 Nov 2015 12:58:11 +0100
+Subject: [PATCH 0421/1767] nvme: add NVME_SC_CANCELLED
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+To properly document how we are using a negative Linux error value to
+communicate request cancellations inside the driver.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Acked-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 297465c873ae8c99180617ca904dc1a4a738f25d)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/nvme.h | 10 ++++++++++
+ drivers/nvme/host/pci.c  |  2 +-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvme/host/nvme.h b/drivers/nvme/host/nvme.h
+index 39ccd0a..c372b0e 100644
+--- a/drivers/nvme/host/nvme.h
++++ b/drivers/nvme/host/nvme.h
+@@ -19,6 +19,16 @@
+ #include <linux/kref.h>
+ #include <linux/blk-mq.h>
+ 
++enum {
++	/*
++	 * Driver internal status code for commands that were cancelled due
++	 * to timeouts or controller shutdown.  The value is negative so
++	 * that it a) doesn't overlap with the unsigned hardware error codes,
++	 * and b) can easily be tested for.
++	 */
++	NVME_SC_CANCELLED		= -EINTR,
++};
++
+ extern unsigned char nvme_io_timeout;
+ #define NVME_IO_TIMEOUT	(nvme_io_timeout * HZ)
+ 
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 3e825bd..1a39f9c 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -621,7 +621,7 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
+ 
+ 		if (req->cmd_type == REQ_TYPE_DRV_PRIV) {
+ 			if (cmd_rq->ctx == CMD_CTX_CANCELLED)
+-				error = -EINTR;
++				error = NVME_SC_CANCELLED;
+ 			else
+ 				error = status;
+ 		} else {
+-- 
+1.9.3
+

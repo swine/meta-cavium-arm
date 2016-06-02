@@ -1,0 +1,34 @@
+From c7c627ef85b4b692130b77208c7906f17e509d90 Mon Sep 17 00:00:00 2001
+From: Tyler Hicks <tyhicks@canonical.com>
+Date: Wed, 23 Mar 2016 16:41:33 -0500
+Subject: [PATCH 1672/1767] UBUNTU: SAUCE: apparmor: Consult sysctl when
+ reading profiles in a user ns
+
+BugLink: https://launchpad.net/bugs/1560583
+
+Check the value of the unprivileged_userns_apparmor_policy sysctl when a
+namespace root process attempts to read the apparmorfs profiles file.
+
+Signed-off-by: Tyler Hicks <tyhicks@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index b86227f..12cd14f 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -625,7 +625,8 @@ bool policy_admin_capable(void)
+ 
+ 	if (ns_capable(user_ns, CAP_MAC_ADMIN) &&
+ 	    (user_ns == &init_user_ns ||
+-	     (user_ns->level == 1 && ns != root_ns)))
++	     (unprivileged_userns_apparmor_policy != 0 &&
++	      user_ns->level == 1 && ns != root_ns)))
+ 		response = true;
+ 	aa_put_ns(ns);
+ 
+-- 
+1.9.3
+

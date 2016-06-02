@@ -1,0 +1,51 @@
+From 39257298493a1c95746b156ff0c6b32310a7a732 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Mon, 1 Feb 2016 16:03:45 -0700
+Subject: [PATCH 0452/1767] UBUNTU: SAUCE: nvme merge cleanup
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/Makefile |  3 ++-
+ drivers/nvme/host/core.c   | 11 ++++++++++-
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvme/host/Makefile b/drivers/nvme/host/Makefile
+index baf9f52..51bf908 100644
+--- a/drivers/nvme/host/Makefile
++++ b/drivers/nvme/host/Makefile
+@@ -1,5 +1,6 @@
+ 
+ obj-$(CONFIG_BLK_DEV_NVME)     += nvme.o
+ 
+-nvme-y					+= core.o pci.o lightnvm.o
++lightnvm-$(CONFIG_NVM)			:= lightnvm.o
++nvme-y					+= core.o pci.o $(lightnvm-y)
+ nvme-$(CONFIG_BLK_DEV_NVME_SCSI)        += scsi.o
+diff --git a/drivers/nvme/host/core.c b/drivers/nvme/host/core.c
+index 3e9c5e1..c5bf001 100644
+--- a/drivers/nvme/host/core.c
++++ b/drivers/nvme/host/core.c
+@@ -1185,8 +1185,17 @@ static void nvme_ns_remove(struct nvme_ns *ns)
+ 
+ 	lockdep_assert_held(&ns->ctrl->namespaces_mutex);
+ 
+-	if (kill)
++	if (kill) {
+ 		blk_set_queue_dying(ns->queue);
++
++		/*
++		 * The controller was shutdown first if we got here through
++		 * device removal. The shutdown may requeue outstanding
++		 * requests. These need to be aborted immediately so
++		 * del_gendisk doesn't block indefinitely for their completion.
++		 */
++		blk_mq_abort_requeue_list(ns->queue);
++	}
+ 	if (ns->disk->flags & GENHD_FL_UP) {
+ 		if (blk_get_integrity(ns->disk))
+ 			blk_integrity_unregister(ns->disk);
+-- 
+1.9.3
+

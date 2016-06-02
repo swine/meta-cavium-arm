@@ -1,0 +1,26 @@
+From 983d12454c4ec42bdc195f3458f8e6d97d18f118 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Tue, 3 Sep 2013 14:53:59 +0100
+Subject: [PATCH 0062/1767] UBUNTU: SAUCE: disable stack-protector for ARM
+ compressed bootloader
+
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ arch/arm/boot/compressed/Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm/boot/compressed/Makefile b/arch/arm/boot/compressed/Makefile
+index 3f9a9eb..32697ff 100644
+--- a/arch/arm/boot/compressed/Makefile
++++ b/arch/arm/boot/compressed/Makefile
+@@ -3,6 +3,7 @@
+ #
+ # create a compressed vmlinuz image from the original vmlinux
+ #
++KBUILD_CFLAGS := $(filter-out -fstack-protector, $(KBUILD_CFLAGS)) -fno-stack-protector
+ 
+ OBJS		=
+ 
+-- 
+1.9.3
+

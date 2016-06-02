@@ -1,0 +1,38 @@
+From a35bda8ca2843660ab63e2e5527a6229eeda729e Mon Sep 17 00:00:00 2001
+From: Carol L Soto <clsoto@linux.vnet.ibm.com>
+Date: Wed, 3 Feb 2016 14:27:10 -0500
+Subject: [PATCH 0515/1767] UBUNTU: SAUCE: IB/IPoIB: Do not set skb truesize
+ since using one linearskb
+
+BugLink: http://bugs.launchpad.net/bugs/1541326
+
+This patch is being upstreamed.
+
+We are seeing this warning: at net/core/skbuff.c:4174
+and before commit a44878d10063 ("IB/ipoib: Use one linear skb in RX flow")
+skb truesize was not being set when ipoib was using just one skb.
+Removing this line avoids the warning when running tcp tests like iperf.
+
+Fixes: a44878d10063 ("IB/ipoib: Use one linear skb in RX flow")
+Signed-off-by: Carol L Soto <clsoto@linux.vnet.ibm.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/infiniband/ulp/ipoib/ipoib_ib.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/infiniband/ulp/ipoib/ipoib_ib.c b/drivers/infiniband/ulp/ipoib/ipoib_ib.c
+index 5ea0c14..fa9c42f 100644
+--- a/drivers/infiniband/ulp/ipoib/ipoib_ib.c
++++ b/drivers/infiniband/ulp/ipoib/ipoib_ib.c
+@@ -245,8 +245,6 @@ static void ipoib_ib_handle_rx_wc(struct net_device *dev, struct ib_wc *wc)
+ 	skb_reset_mac_header(skb);
+ 	skb_pull(skb, IPOIB_ENCAP_LEN);
+ 
+-	skb->truesize = SKB_TRUESIZE(skb->len);
+-
+ 	++dev->stats.rx_packets;
+ 	dev->stats.rx_bytes += skb->len;
+ 
+-- 
+1.9.3
+

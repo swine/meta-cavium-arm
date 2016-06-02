@@ -1,0 +1,49 @@
+From ff0dbb74c17a013f04f540cab6901e8a5395e0a4 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:37 -0700
+Subject: [PATCH 1611/1767] Revert "UBUNTU: SAUCE: apparmor Fix: refcount bug
+ in pivotroot mediation"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 2c30f8bde8c7986abcd2d18b4fa21565eede7dca.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/include/context.h | 2 --
+ security/apparmor/lsm.c             | 4 ++--
+ 2 files changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/security/apparmor/include/context.h b/security/apparmor/include/context.h
+index 4c1acfc..9adac5d 100644
+--- a/security/apparmor/include/context.h
++++ b/security/apparmor/include/context.h
+@@ -162,8 +162,6 @@ static inline void aa_end_current_label(struct aa_label *label)
+  *   just return the up to date label
+  *
+  * The returned reference must be put with aa_end_current_label()
+- * This must NOT be used if the task cred could be updated within the
+- * critical section between aa_begin_current_label() .. aa_end_current_label()
+  */
+ static inline struct aa_label *aa_begin_current_label(bool update)
+ {
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index 4b8602d..a866a0b 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -580,10 +580,10 @@ static int apparmor_sb_pivotroot(struct path *old_path, struct path *new_path)
+ 	struct aa_label *label;
+ 	int error = 0;
+ 
+-	label = aa_get_current_label();
++	label = aa_begin_current_label(NO_UPDATE);
+ 	if (!unconfined(label))
+ 		error = aa_pivotroot(label, old_path, new_path);
+-	aa_put_label(label);
++	aa_end_current_label(label);
+ 
+ 	return error;
+ }
+-- 
+1.9.3
+

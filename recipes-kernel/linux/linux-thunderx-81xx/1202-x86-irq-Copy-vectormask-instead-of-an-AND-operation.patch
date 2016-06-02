@@ -1,0 +1,47 @@
+From 480bc935c321ab1da64fccc3b0d70ba82fc0fe69 Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Thu, 31 Dec 2015 16:30:49 +0000
+Subject: [PATCH 1202/1767] x86/irq: Copy vectormask instead of an AND
+ operation
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 9ac15b7a8af4cf3337a101498c0ed690d23ade75 upstream.
+
+In the case that the new vector mask is a subset of the existing mask there is
+no point to do a AND operation of currentmask & newmask. The result is
+newmask. So we can simply copy the new mask to the current mask and be done
+with it. Preparatory patch for further consolidation.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Tested-by: Borislav Petkov <bp@alien8.de>
+Tested-by: Joe Lawrence <joe.lawrence@stratus.com>
+Cc: Jiang Liu <jiang.liu@linux.intel.com>
+Cc: Jeremiah Mahler <jmmahler@gmail.com>
+Cc: andy.shevchenko@gmail.com
+Cc: Guenter Roeck <linux@roeck-us.net>
+Link: http://lkml.kernel.org/r/20151231160106.640253454@linutronix.de
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/kernel/apic/vector.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/apic/vector.c b/arch/x86/kernel/apic/vector.c
+index 940e18d..1bd29c6 100644
+--- a/arch/x86/kernel/apic/vector.c
++++ b/arch/x86/kernel/apic/vector.c
+@@ -156,7 +156,7 @@ static int __assign_irq_vector(int irq, struct apic_chip_data *d,
+ 				       vector_cpumask);
+ 			d->move_in_progress =
+ 			   cpumask_intersects(d->old_domain, cpu_online_mask);
+-			cpumask_and(d->domain, d->domain, vector_cpumask);
++			cpumask_copy(d->domain, vector_cpumask);
+ 			goto success;
+ 		}
+ 
+-- 
+1.9.3
+

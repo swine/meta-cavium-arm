@@ -1,0 +1,69 @@
+From 623cd7a127e10b73d180ef30561fa8261602d7ac Mon Sep 17 00:00:00 2001
+From: Andrey Smetanin <asmetanin@virtuozzo.com>
+Date: Thu, 11 Feb 2016 16:44:58 +0300
+Subject: [PATCH 1728/1767] drivers/hv: Move VMBus hypercall codes into Hyper-V
+ UAPI header
+
+BugLink: http://bugs.launchpad.net/bugs/1541585
+
+VMBus hypercall codes inside Hyper-V UAPI header will
+be used by QEMU to implement VMBus host devices support.
+
+Signed-off-by: Andrey Smetanin <asmetanin@virtuozzo.com>
+Acked-by: K. Y. Srinivasan <kys@microsoft.com>
+Reviewed-by: Roman Kagan <rkagan@virtuozzo.com>
+CC: Gleb Natapov <gleb@kernel.org>
+CC: Paolo Bonzini <pbonzini@redhat.com>
+CC: Joerg Roedel <joro@8bytes.org>
+CC: "K. Y. Srinivasan" <kys@microsoft.com>
+CC: Haiyang Zhang <haiyangz@microsoft.com>
+CC: Roman Kagan <rkagan@virtuozzo.com>
+CC: Denis V. Lunev <den@openvz.org>
+CC: qemu-devel@nongnu.org
+[Do not rename the constant at the same time as moving it, as that
+ would cause semantic conflicts with the Hyper-V tree. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+(back ported from commit 18f098618aa031f4c8a907c550fcd6785280c977)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+
+ Conflicts:
+	arch/x86/include/uapi/asm/hyperv.h
+---
+ arch/x86/include/uapi/asm/hyperv.h | 2 ++
+ drivers/hv/hyperv_vmbus.h          | 6 ------
+ 2 files changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/include/uapi/asm/hyperv.h b/arch/x86/include/uapi/asm/hyperv.h
+index 2a5629e..ecb7770 100644
+--- a/arch/x86/include/uapi/asm/hyperv.h
++++ b/arch/x86/include/uapi/asm/hyperv.h
+@@ -227,6 +227,8 @@
+ 
+ /* Declare the various hypercall operations. */
+ #define HV_X64_HV_NOTIFY_LONG_SPIN_WAIT		0x0008
++#define HVCALL_POST_MESSAGE			0x005c
++#define HVCALL_SIGNAL_EVENT			0x005d
+ 
+ #define HV_X64_MSR_APIC_ASSIST_PAGE_ENABLE		0x00000001
+ #define HV_X64_MSR_APIC_ASSIST_PAGE_ADDRESS_SHIFT	12
+diff --git a/drivers/hv/hyperv_vmbus.h b/drivers/hv/hyperv_vmbus.h
+index 8d9a81e..f9f5766 100644
+--- a/drivers/hv/hyperv_vmbus.h
++++ b/drivers/hv/hyperv_vmbus.h
+@@ -251,12 +251,6 @@ struct hv_monitor_page {
+ 	u8 rsvdz4[1984];
+ };
+ 
+-/* Declare the various hypercall operations. */
+-enum hv_call_code {
+-	HVCALL_POST_MESSAGE	= 0x005c,
+-	HVCALL_SIGNAL_EVENT	= 0x005d,
+-};
+-
+ /* Definition of the hv_post_message hypercall input structure. */
+ struct hv_input_post_message {
+ 	union hv_connection_id connectionid;
+-- 
+1.9.3
+

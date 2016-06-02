@@ -1,0 +1,269 @@
+From 0e8d33c904bbf9f2e630df27ef86d587e67e658d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:21 +0100
+Subject: [PATCH 0369/1767] lightnvm: refactor end_io functions for sync
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+To implement sync I/O support within the LightNVM core, the end_io
+functions are refactored to take an end_io function pointer instead of
+testing for initialized media manager, followed by calling its end_io
+function.
+
+Sync I/O can then be implemented using a callback that signal I/O
+completion. This is similar to the logic found in blk_to_execute_io().
+By implementing it this way, the underlying device I/Os submission logic
+is abstracted away from core, targets, and media managers.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 91276162de9476b8ff32d9452e849210e5dd09e9)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/block/null_blk.c     |  3 +--
+ drivers/lightnvm/core.c      | 16 ++++++++++++++++
+ drivers/lightnvm/gennvm.c    | 34 ++++++++++++++--------------------
+ drivers/lightnvm/rrpc.c      |  6 ++----
+ drivers/nvme/host/lightnvm.c |  5 +----
+ include/linux/lightnvm.h     | 12 ++++++++----
+ 6 files changed, 42 insertions(+), 34 deletions(-)
+
+diff --git a/drivers/block/null_blk.c b/drivers/block/null_blk.c
+index 09e3c0d..e6cad40 100644
+--- a/drivers/block/null_blk.c
++++ b/drivers/block/null_blk.c
+@@ -436,9 +436,8 @@ static void null_del_dev(struct nullb *nullb)
+ static void null_lnvm_end_io(struct request *rq, int error)
+ {
+ 	struct nvm_rq *rqd = rq->end_io_data;
+-	struct nvm_dev *dev = rqd->dev;
+ 
+-	dev->mt->end_io(rqd, error);
++	nvm_end_io(rqd, error);
+ 
+ 	blk_put_request(rq);
+ }
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index 081b0f5..fa1a052 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -27,6 +27,7 @@
+ #include <linux/module.h>
+ #include <linux/miscdevice.h>
+ #include <linux/lightnvm.h>
++#include <linux/sched/sysctl.h>
+ #include <uapi/linux/lightnvm.h>
+ 
+ static LIST_HEAD(nvm_targets);
+@@ -288,6 +289,21 @@ int nvm_erase_ppa(struct nvm_dev *dev, struct ppa_addr ppa)
+ }
+ EXPORT_SYMBOL(nvm_erase_ppa);
+ 
++void nvm_end_io(struct nvm_rq *rqd, int error)
++{
++	rqd->end_io(rqd, error);
++}
++EXPORT_SYMBOL(nvm_end_io);
++
++static void nvm_end_io_sync(struct nvm_rq *rqd, int errors)
++{
++	struct completion *waiting = rqd->wait;
++
++	rqd->wait = NULL;
++
++	complete(waiting);
++}
++
+ static int nvm_core_init(struct nvm_dev *dev)
+ {
+ 	struct nvm_id *id = &dev->identity;
+diff --git a/drivers/lightnvm/gennvm.c b/drivers/lightnvm/gennvm.c
+index 373be72..12ddcaa 100644
+--- a/drivers/lightnvm/gennvm.c
++++ b/drivers/lightnvm/gennvm.c
+@@ -317,18 +317,6 @@ static void gennvm_put_blk(struct nvm_dev *dev, struct nvm_block *blk)
+ 	spin_unlock(&vlun->lock);
+ }
+ 
+-static int gennvm_submit_io(struct nvm_dev *dev, struct nvm_rq *rqd)
+-{
+-	if (!dev->ops->submit_io)
+-		return -ENODEV;
+-
+-	/* Convert address space */
+-	nvm_generic_to_addr_mode(dev, rqd);
+-
+-	rqd->dev = dev;
+-	return dev->ops->submit_io(dev, rqd);
+-}
+-
+ static void gennvm_blk_set_type(struct nvm_dev *dev, struct ppa_addr *ppa,
+ 								int type)
+ {
+@@ -375,25 +363,32 @@ static void gennvm_mark_blk_bad(struct nvm_dev *dev, struct nvm_rq *rqd)
+ 		gennvm_blk_set_type(dev, &rqd->ppa_addr, 2);
+ }
+ 
+-static int gennvm_end_io(struct nvm_rq *rqd, int error)
++static void gennvm_end_io(struct nvm_rq *rqd, int error)
+ {
+ 	struct nvm_tgt_instance *ins = rqd->ins;
+-	int ret = 0;
+ 
+ 	switch (error) {
+ 	case NVM_RSP_SUCCESS:
+-		break;
+ 	case NVM_RSP_ERR_EMPTYPAGE:
+ 		break;
+ 	case NVM_RSP_ERR_FAILWRITE:
+ 		gennvm_mark_blk_bad(rqd->dev, rqd);
+-	default:
+-		ret++;
+ 	}
+ 
+-	ret += ins->tt->end_io(rqd, error);
++	ins->tt->end_io(rqd, error);
++}
+ 
+-	return ret;
++static int gennvm_submit_io(struct nvm_dev *dev, struct nvm_rq *rqd)
++{
++	if (!dev->ops->submit_io)
++		return -ENODEV;
++
++	/* Convert address space */
++	nvm_generic_to_addr_mode(dev, rqd);
++
++	rqd->dev = dev;
++	rqd->end_io = gennvm_end_io;
++	return dev->ops->submit_io(dev, rqd);
+ }
+ 
+ static int gennvm_erase_blk(struct nvm_dev *dev, struct nvm_block *blk,
+@@ -442,7 +437,6 @@ static struct nvmm_type gennvm = {
+ 	.put_blk	= gennvm_put_blk,
+ 
+ 	.submit_io	= gennvm_submit_io,
+-	.end_io		= gennvm_end_io,
+ 	.erase_blk	= gennvm_erase_blk,
+ 
+ 	.get_lun	= gennvm_get_lun,
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index 748cab49..661c6f3 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -642,7 +642,7 @@ static void rrpc_end_io_write(struct rrpc *rrpc, struct rrpc_rq *rrqd,
+ 	}
+ }
+ 
+-static int rrpc_end_io(struct nvm_rq *rqd, int error)
++static void rrpc_end_io(struct nvm_rq *rqd, int error)
+ {
+ 	struct rrpc *rrpc = container_of(rqd->ins, struct rrpc, instance);
+ 	struct rrpc_rq *rrqd = nvm_rq_to_pdu(rqd);
+@@ -655,7 +655,7 @@ static int rrpc_end_io(struct nvm_rq *rqd, int error)
+ 	bio_put(rqd->bio);
+ 
+ 	if (rrqd->flags & NVM_IOTYPE_GC)
+-		return 0;
++		return;
+ 
+ 	rrpc_unlock_rq(rrpc, rqd);
+ 
+@@ -665,8 +665,6 @@ static int rrpc_end_io(struct nvm_rq *rqd, int error)
+ 		nvm_dev_dma_free(rrpc->dev, rqd->metadata, rqd->dma_metadata);
+ 
+ 	mempool_free(rqd, rrpc->rq_pool);
+-
+-	return 0;
+ }
+ 
+ static int rrpc_read_ppalist_rq(struct rrpc *rrpc, struct bio *bio,
+diff --git a/drivers/nvme/host/lightnvm.c b/drivers/nvme/host/lightnvm.c
+index 15f2acb..1d1830e 100644
+--- a/drivers/nvme/host/lightnvm.c
++++ b/drivers/nvme/host/lightnvm.c
+@@ -453,11 +453,8 @@ static inline void nvme_nvm_rqtocmd(struct request *rq, struct nvm_rq *rqd,
+ static void nvme_nvm_end_io(struct request *rq, int error)
+ {
+ 	struct nvm_rq *rqd = rq->end_io_data;
+-	struct nvm_dev *dev = rqd->dev;
+ 
+-	if (dev->mt && dev->mt->end_io(rqd, error))
+-		pr_err("nvme: err status: %x result: %lx\n",
+-				rq->errors, (unsigned long)rq->special);
++	nvm_end_io(rqd, error);
+ 
+ 	kfree(rq->cmd);
+ 	blk_mq_free_request(rq);
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index 2fd6871..9c9fe9c 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -148,6 +148,9 @@ struct ppa_addr {
+ 	};
+ };
+ 
++struct nvm_rq;
++typedef void (nvm_end_io_fn)(struct nvm_rq *, int);
++
+ struct nvm_rq {
+ 	struct nvm_tgt_instance *ins;
+ 	struct nvm_dev *dev;
+@@ -164,6 +167,9 @@ struct nvm_rq {
+ 	void *metadata;
+ 	dma_addr_t dma_metadata;
+ 
++	struct completion *wait;
++	nvm_end_io_fn *end_io;
++
+ 	uint8_t opcode;
+ 	uint16_t nr_pages;
+ 	uint16_t flags;
+@@ -347,7 +353,6 @@ static inline struct ppa_addr block_to_ppa(struct nvm_dev *dev,
+ 
+ typedef blk_qc_t (nvm_tgt_make_rq_fn)(struct request_queue *, struct bio *);
+ typedef sector_t (nvm_tgt_capacity_fn)(void *);
+-typedef int (nvm_tgt_end_io_fn)(struct nvm_rq *, int);
+ typedef void *(nvm_tgt_init_fn)(struct nvm_dev *, struct gendisk *, int, int);
+ typedef void (nvm_tgt_exit_fn)(void *);
+ 
+@@ -358,7 +363,7 @@ struct nvm_tgt_type {
+ 	/* target entry points */
+ 	nvm_tgt_make_rq_fn *make_rq;
+ 	nvm_tgt_capacity_fn *capacity;
+-	nvm_tgt_end_io_fn *end_io;
++	nvm_end_io_fn *end_io;
+ 
+ 	/* module-specific init/teardown */
+ 	nvm_tgt_init_fn *init;
+@@ -383,7 +388,6 @@ typedef int (nvmm_open_blk_fn)(struct nvm_dev *, struct nvm_block *);
+ typedef int (nvmm_close_blk_fn)(struct nvm_dev *, struct nvm_block *);
+ typedef void (nvmm_flush_blk_fn)(struct nvm_dev *, struct nvm_block *);
+ typedef int (nvmm_submit_io_fn)(struct nvm_dev *, struct nvm_rq *);
+-typedef int (nvmm_end_io_fn)(struct nvm_rq *, int);
+ typedef int (nvmm_erase_blk_fn)(struct nvm_dev *, struct nvm_block *,
+ 								unsigned long);
+ typedef struct nvm_lun *(nvmm_get_lun_fn)(struct nvm_dev *, int);
+@@ -404,7 +408,6 @@ struct nvmm_type {
+ 	nvmm_flush_blk_fn *flush_blk;
+ 
+ 	nvmm_submit_io_fn *submit_io;
+-	nvmm_end_io_fn *end_io;
+ 	nvmm_erase_blk_fn *erase_blk;
+ 
+ 	/* Configuration management */
+@@ -434,6 +437,7 @@ extern int nvm_set_rqd_ppalist(struct nvm_dev *, struct nvm_rq *,
+ extern void nvm_free_rqd_ppalist(struct nvm_dev *, struct nvm_rq *);
+ extern int nvm_erase_ppa(struct nvm_dev *, struct ppa_addr);
+ extern int nvm_erase_blk(struct nvm_dev *, struct nvm_block *);
++extern void nvm_end_io(struct nvm_rq *, int);
+ #else /* CONFIG_NVM */
+ struct nvm_dev_ops;
+ 
+-- 
+1.9.3
+

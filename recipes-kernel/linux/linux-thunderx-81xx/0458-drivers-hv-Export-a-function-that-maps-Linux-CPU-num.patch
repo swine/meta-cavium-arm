@@ -1,0 +1,65 @@
+From c95dd37ca7d87de9c7ab0c2225649342f7409578 Mon Sep 17 00:00:00 2001
+From: Jake Oshins <jakeo@microsoft.com>
+Date: Mon, 14 Dec 2015 16:01:39 -0800
+Subject: [PATCH 0458/1767] drivers:hv: Export a function that maps Linux CPU
+ num onto Hyper-V proc num
+
+This patch exposes the mapping between Linux CPU number and Hyper-V virtual
+processor number.  This is necessary because the hypervisor needs to know which
+virtual processors to target when making a mapping in the Interrupt Redirection
+Table in the I/O MMU.
+
+Signed-off-by: Jake Oshins <jakeo@microsoft.com>
+Signed-off-by: K. Y. Srinivasan <kys@microsoft.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+(cherry picked from commit 619848bd074343ff2bdeeafca0be39748f6da372)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/hv/vmbus_drv.c | 17 +++++++++++++++++
+ include/linux/hyperv.h |  2 ++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/drivers/hv/vmbus_drv.c b/drivers/hv/vmbus_drv.c
+index 3297731..c01b689 100644
+--- a/drivers/hv/vmbus_drv.c
++++ b/drivers/hv/vmbus_drv.c
+@@ -1193,6 +1193,23 @@ int vmbus_allocate_mmio(struct resource **new, struct hv_device *device_obj,
+ }
+ EXPORT_SYMBOL_GPL(vmbus_allocate_mmio);
+ 
++/**
++ * vmbus_cpu_number_to_vp_number() - Map CPU to VP.
++ * @cpu_number: CPU number in Linux terms
++ *
++ * This function returns the mapping between the Linux processor
++ * number and the hypervisor's virtual processor number, useful
++ * in making hypercalls and such that talk about specific
++ * processors.
++ *
++ * Return: Virtual processor number in Hyper-V terms
++ */
++int vmbus_cpu_number_to_vp_number(int cpu_number)
++{
++	return hv_context.vp_index[cpu_number];
++}
++EXPORT_SYMBOL_GPL(vmbus_cpu_number_to_vp_number);
++
+ static int vmbus_acpi_add(struct acpi_device *device)
+ {
+ 	acpi_status result;
+diff --git a/include/linux/hyperv.h b/include/linux/hyperv.h
+index 8fdc17b..fddb3e0 100644
+--- a/include/linux/hyperv.h
++++ b/include/linux/hyperv.h
+@@ -983,6 +983,8 @@ int vmbus_allocate_mmio(struct resource **new, struct hv_device *device_obj,
+ 			resource_size_t size, resource_size_t align,
+ 			bool fb_overlap_ok);
+ 
++int vmbus_cpu_number_to_vp_number(int cpu_number);
++
+ /**
+  * VMBUS_DEVICE - macro used to describe a specific hyperv vmbus device
+  *
+-- 
+1.9.3
+

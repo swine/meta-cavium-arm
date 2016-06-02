@@ -1,0 +1,36 @@
+From 83dc258e14ecc5a2b1f8f54e96500df197595714 Mon Sep 17 00:00:00 2001
+From: David Daney <david.daney@cavium.com>
+Date: Mon, 14 Mar 2016 17:30:38 -0700
+Subject: [PATCH 1737/1767] net: cavium: For Kconfig THUNDER_NIC_BGX, select
+ MDIO_THUNDER.
+
+BugLink: http://bugs.launchpad.net/bugs/1562968
+
+Previously we selected MDIO_OCTEON, which after creating the Thunder
+specific MDIO bus driver is much less useful.
+
+Signed-off-by: David Daney <david.daney@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit 9277a4f875adbeeb6209c0a3e3cf04c752522b2e)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/cavium/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index 8fb84e6..953aa40 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -35,7 +35,7 @@ config	THUNDER_NIC_BGX
+ 	tristate "Thunder MAC interface driver (BGX)"
+ 	depends on 64BIT
+ 	select PHYLIB
+-	select MDIO_OCTEON
++	select MDIO_THUNDER
+ 	---help---
+ 	  This driver supports programming and controlling of MAC
+ 	  interface from NIC physical function driver.
+-- 
+1.9.3
+

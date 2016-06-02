@@ -1,0 +1,36 @@
+From 4956397b8d873e3beeed3408e7b2a1e2b58ebd8b Mon Sep 17 00:00:00 2001
+From: Konstantin Khlebnikov <koct9i@gmail.com>
+Date: Fri, 11 Mar 2016 15:23:14 -0600
+Subject: [PATCH 1524/1767] ovl: copy new uid/gid into overlayfs runtime inode
+
+Overlayfs must update uid/gid after chown, otherwise functions
+like inode_owner_or_capable() will check user against stale uid.
+Catched by xfstests generic/087, it chowns file and calls utimes.
+
+Signed-off-by: Konstantin Khlebnikov <koct9i@gmail.com>
+Signed-off-by: Miklos Szeredi <miklos@szeredi.hu>
+Cc: <stable@vger.kernel.org>
+(backported from commit b81de061fa59f17d2730aabb1b84419ef3913810)
+BugLink: http://bugs.launchpad.net/bugs/1555997
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/overlayfs/inode.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
+index b29036a..05ac9a9 100644
+--- a/fs/overlayfs/inode.c
++++ b/fs/overlayfs/inode.c
+@@ -65,6 +65,8 @@ int ovl_setattr(struct dentry *dentry, struct iattr *attr)
+ 
+ 		mutex_lock(&upperdentry->d_inode->i_mutex);
+ 		err = notify_change(upperdentry, attr, NULL);
++		if (!err)
++			ovl_copyattr(upperdentry->d_inode, dentry->d_inode);
+ 		mutex_unlock(&upperdentry->d_inode->i_mutex);
+ 	}
+ 	ovl_drop_write(dentry);
+-- 
+1.9.3
+

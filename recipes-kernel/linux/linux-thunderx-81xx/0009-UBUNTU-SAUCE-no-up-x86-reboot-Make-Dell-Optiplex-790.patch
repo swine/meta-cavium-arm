@@ -1,0 +1,38 @@
+From 85fd2559edc345cabaa445712913db2d3834aaa9 Mon Sep 17 00:00:00 2001
+From: Leann Ogasawara <leann.ogasawara@canonical.com>
+Date: Fri, 9 Sep 2011 13:23:51 -0700
+Subject: [PATCH 0009/1767] UBUNTU: SAUCE: (no-up) x86: reboot: Make Dell
+ Optiplex 790 use reboot=pci
+
+BugLink: http://bugs.launchpad.net/bugs/818933
+
+The Dell Optiplex 790 doesn't reboot unless reboot=pci is set.
+
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/kernel/reboot.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/x86/kernel/reboot.c b/arch/x86/kernel/reboot.c
+index b7432ee..d8cac8d 100644
+--- a/arch/x86/kernel/reboot.c
++++ b/arch/x86/kernel/reboot.c
+@@ -423,6 +423,14 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
+ 			DMI_MATCH(DMI_PRODUCT_NAME, "Latitude E6520"),
+ 		},
+ 	},
++	{       /* Handle problems with rebooting on the OptiPlex 790. */
++		.callback = set_pci_reboot,
++		.ident = "Dell OptiPlex 790",
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
++			DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 790"),
++		},
++	},
+ 	{ }
+ };
+ 
+-- 
+1.9.3
+

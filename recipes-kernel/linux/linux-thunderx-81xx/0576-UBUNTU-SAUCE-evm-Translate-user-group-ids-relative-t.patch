@@ -1,0 +1,34 @@
+From 01c9401ec1403072024b0bf20c6d555b02136547 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Thu, 5 Feb 2015 10:44:50 -0600
+Subject: [PATCH 0576/1767] UBUNTU: SAUCE: evm: Translate user/group ids
+ relative to s_user_ns when computing HMAC
+
+The EVM HMAC should be calculated using the on disk user and
+group ids, so the k[ug]ids in the inode must be translated
+relative to the s_user_ns of the inode's super block.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/integrity/evm/evm_crypto.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/security/integrity/evm/evm_crypto.c b/security/integrity/evm/evm_crypto.c
+index 461f8d8..5ec691d 100644
+--- a/security/integrity/evm/evm_crypto.c
++++ b/security/integrity/evm/evm_crypto.c
+@@ -108,8 +108,8 @@ static void hmac_add_misc(struct shash_desc *desc, struct inode *inode,
+ 	memset(&hmac_misc, 0, sizeof(hmac_misc));
+ 	hmac_misc.ino = inode->i_ino;
+ 	hmac_misc.generation = inode->i_generation;
+-	hmac_misc.uid = from_kuid(&init_user_ns, inode->i_uid);
+-	hmac_misc.gid = from_kgid(&init_user_ns, inode->i_gid);
++	hmac_misc.uid = from_kuid(inode->i_sb->s_user_ns, inode->i_uid);
++	hmac_misc.gid = from_kgid(inode->i_sb->s_user_ns, inode->i_gid);
+ 	hmac_misc.mode = inode->i_mode;
+ 	crypto_shash_update(desc, (const u8 *)&hmac_misc, sizeof(hmac_misc));
+ 	if (evm_hmac_attrs & EVM_ATTR_FSUUID)
+-- 
+1.9.3
+

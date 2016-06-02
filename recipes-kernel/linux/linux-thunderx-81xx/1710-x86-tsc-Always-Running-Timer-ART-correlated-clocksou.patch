@@ -1,0 +1,179 @@
+From 6fffa0effd1ce2981d47d383435452aa04613246 Mon Sep 17 00:00:00 2001
+From: "Christopher S. Hall" <christopher.s.hall@intel.com>
+Date: Mon, 29 Feb 2016 06:33:47 -0800
+Subject: [PATCH 1710/1767] x86/tsc: Always Running Timer (ART) correlated
+ clocksource
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1519625
+
+On modern Intel systems TSC is derived from the new Always Running Timer
+(ART). ART can be captured simultaneous to the capture of
+audio and network device clocks, allowing a correlation between timebases
+to be constructed. Upon capture, the driver converts the captured ART
+value to the appropriate system clock using the correlated clocksource
+mechanism.
+
+On systems that support ART a new CPUID leaf (0x15) returns parameters
+“m” and “n” such that:
+
+TSC_value = (ART_value * m) / n + k [n >= 1]
+
+[k is an offset that can adjusted by a privileged agent. The
+IA32_TSC_ADJUST MSR is an example of an interface to adjust k.
+See 17.14.4 of the Intel SDM for more details]
+
+Cc: Prarit Bhargava <prarit@redhat.com>
+Cc: Richard Cochran <richardcochran@gmail.com>
+Cc: Thomas Gleixner <tglx@linutronix.de>
+Cc: Ingo Molnar <mingo@kernel.org>
+Cc: Andy Lutomirski <luto@amacapital.net>
+Cc: kevin.b.stanton@intel.com
+Cc: kevin.j.clarke@intel.com
+Cc: hpa@zytor.com
+Cc: jeffrey.t.kirsher@intel.com
+Cc: netdev@vger.kernel.org
+Reviewed-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Christopher S. Hall <christopher.s.hall@intel.com>
+[jstultz: Tweaked to fix build issue, also reworked math for
+64bit division on 32bit systems, as well as !CONFIG_CPU_FREQ build
+fixes]
+Signed-off-by: John Stultz <john.stultz@linaro.org>
+
+(cherry picked from commit f9677e0f83080bb4186865868c359e72e1fac1ea)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/include/asm/cpufeature.h |  2 +-
+ arch/x86/include/asm/tsc.h        |  2 ++
+ arch/x86/kernel/tsc.c             | 59 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/cpufeature.h b/arch/x86/include/asm/cpufeature.h
+index f7ba9fb..b940fa1 100644
+--- a/arch/x86/include/asm/cpufeature.h
++++ b/arch/x86/include/asm/cpufeature.h
+@@ -85,7 +85,7 @@
+ #define X86_FEATURE_P4		( 3*32+ 7) /* "" P4 */
+ #define X86_FEATURE_CONSTANT_TSC ( 3*32+ 8) /* TSC ticks at a constant rate */
+ #define X86_FEATURE_UP		( 3*32+ 9) /* smp kernel running on up */
+-/* free, was #define X86_FEATURE_FXSAVE_LEAK ( 3*32+10) * "" FXSAVE leaks FOP/FIP/FOP */
++#define X86_FEATURE_ART		(3*32+10) /* Platform has always running timer (ART) */
+ #define X86_FEATURE_ARCH_PERFMON ( 3*32+11) /* Intel Architectural PerfMon */
+ #define X86_FEATURE_PEBS	( 3*32+12) /* Precise-Event Based Sampling */
+ #define X86_FEATURE_BTS		( 3*32+13) /* Branch Trace Store */
+diff --git a/arch/x86/include/asm/tsc.h b/arch/x86/include/asm/tsc.h
+index 6d7c547..174c421 100644
+--- a/arch/x86/include/asm/tsc.h
++++ b/arch/x86/include/asm/tsc.h
+@@ -29,6 +29,8 @@ static inline cycles_t get_cycles(void)
+ 	return rdtsc();
+ }
+ 
++extern struct system_counterval_t convert_art_to_tsc(cycle_t art);
++
+ extern void tsc_init(void);
+ extern void mark_tsc_unstable(char *reason);
+ extern int unsynchronized_tsc(void);
+diff --git a/arch/x86/kernel/tsc.c b/arch/x86/kernel/tsc.c
+index c7c4d9c..343a32a 100644
+--- a/arch/x86/kernel/tsc.c
++++ b/arch/x86/kernel/tsc.c
+@@ -43,6 +43,11 @@ static DEFINE_STATIC_KEY_FALSE(__use_tsc);
+ 
+ int tsc_clocksource_reliable;
+ 
++static u32 art_to_tsc_numerator;
++static u32 art_to_tsc_denominator;
++static u64 art_to_tsc_offset;
++struct clocksource *art_related_clocksource;
++
+ /*
+  * Use a ring-buffer like data structure, where a writer advances the head by
+  * writing a new data entry and a reader advances the tail when it observes a
+@@ -964,6 +969,37 @@ core_initcall(cpufreq_tsc);
+ 
+ #endif /* CONFIG_CPU_FREQ */
+ 
++#define ART_CPUID_LEAF (0x15)
++#define ART_MIN_DENOMINATOR (1)
++
++
++/*
++ * If ART is present detect the numerator:denominator to convert to TSC
++ */
++static void detect_art(void)
++{
++	unsigned int unused[2];
++
++	if (boot_cpu_data.cpuid_level < ART_CPUID_LEAF)
++		return;
++
++	cpuid(ART_CPUID_LEAF, &art_to_tsc_denominator,
++	      &art_to_tsc_numerator, unused, unused+1);
++
++	/* Don't enable ART in a VM, non-stop TSC required */
++	if (boot_cpu_has(X86_FEATURE_HYPERVISOR) ||
++	    !boot_cpu_has(X86_FEATURE_NONSTOP_TSC) ||
++	    art_to_tsc_denominator < ART_MIN_DENOMINATOR)
++		return;
++
++	if (rdmsrl_safe(MSR_IA32_TSC_ADJUST, &art_to_tsc_offset))
++		return;
++
++	/* Make this sticky over multiple CPU init calls */
++	setup_force_cpu_cap(X86_FEATURE_ART);
++}
++
++
+ /* clocksource code */
+ 
+ static struct clocksource clocksource_tsc;
+@@ -1071,6 +1107,25 @@ int unsynchronized_tsc(void)
+ 	return 0;
+ }
+ 
++/*
++ * Convert ART to TSC given numerator/denominator found in detect_art()
++ */
++struct system_counterval_t convert_art_to_tsc(cycle_t art)
++{
++	u64 tmp, res, rem;
++
++	rem = do_div(art, art_to_tsc_denominator);
++
++	res = art * art_to_tsc_numerator;
++	tmp = rem * art_to_tsc_numerator;
++
++	do_div(tmp, art_to_tsc_denominator);
++	res += tmp + art_to_tsc_offset;
++
++	return (struct system_counterval_t) {.cs = art_related_clocksource,
++			.cycles = res};
++}
++EXPORT_SYMBOL(convert_art_to_tsc);
+ 
+ static void tsc_refine_calibration_work(struct work_struct *work);
+ static DECLARE_DELAYED_WORK(tsc_irqwork, tsc_refine_calibration_work);
+@@ -1142,6 +1197,8 @@ static void tsc_refine_calibration_work(struct work_struct *work)
+ 		(unsigned long)tsc_khz % 1000);
+ 
+ out:
++	if (boot_cpu_has(X86_FEATURE_ART))
++		art_related_clocksource = &clocksource_tsc;
+ 	clocksource_register_khz(&clocksource_tsc, tsc_khz);
+ }
+ 
+@@ -1237,6 +1294,8 @@ void __init tsc_init(void)
+ 		mark_tsc_unstable("TSCs unsynchronized");
+ 
+ 	check_system_tsc_reliable();
++
++	detect_art();
+ }
+ 
+ #ifdef CONFIG_SMP
+-- 
+1.9.3
+

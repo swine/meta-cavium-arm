@@ -1,0 +1,36 @@
+From bfd5c4a381c73ccadb3908b11fcd6dbe15d0b9c3 Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Mon, 26 Oct 2015 14:38:40 -0700
+Subject: [PATCH 0304/1767] fm10k: bump driver version
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+We haven't bumped the driver version in a while despite many fixes being
+pulled in from the out-of-tree Sourceforge driver. Update the version to
+match.
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Tested-by: Krishneil Singh <Krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit e3b6e95d070cbca5e82279fea99e2dba8e38f960)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_main.c b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+index 1c17b62..df43362 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_main.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+@@ -28,7 +28,7 @@
+ 
+ #include "fm10k.h"
+ 
+-#define DRV_VERSION	"0.15.2-k"
++#define DRV_VERSION	"0.19.3-k"
+ const char fm10k_driver_version[] = DRV_VERSION;
+ char fm10k_driver_name[] = "fm10k";
+ static const char fm10k_driver_string[] =
+-- 
+1.9.3
+

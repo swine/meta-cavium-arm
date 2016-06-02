@@ -1,0 +1,143 @@
+From 3e82bb160c94d48881750262519a9771c16e610d Mon Sep 17 00:00:00 2001
+From: Keith Busch <keith.busch@intel.com>
+Date: Thu, 3 Dec 2015 09:32:21 -0700
+Subject: [PATCH 0412/1767] blk-integrity: empty implementation when disabled
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+This patch moves the blk_integrity_payload definition outside the
+CONFIG_BLK_DEV_INTERITY dependency and provides empty function
+implementations when the kernel configuration disables integrity
+extensions. This simplifies drivers that make use of these to map user
+data so they don't need to repeat the same configuration checks.
+
+Signed-off-by: Keith Busch <keith.busch@intel.com>
+
+Updated by Jens to pass an error pointer return from
+bio_integrity_alloc(), otherwise if CONFIG_BLK_DEV_INTEGRITY isn't
+set, we return a weird ENOMEM from __nvme_submit_user_cmd()
+if a meta buffer is set.
+
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 06c1e3902aa74b7432a7e82bb4a5aca233a42839)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ block/bio-integrity.c               |  4 ++--
+ drivers/nvme/host/core.c            |  4 ++--
+ drivers/target/target_core_iblock.c |  4 ++--
+ include/linux/bio.h                 | 32 ++++++++++++++++++++++----------
+ 4 files changed, 28 insertions(+), 16 deletions(-)
+
+diff --git a/block/bio-integrity.c b/block/bio-integrity.c
+index f6325d5..e6ba501 100644
+--- a/block/bio-integrity.c
++++ b/block/bio-integrity.c
+@@ -66,7 +66,7 @@ struct bio_integrity_payload *bio_integrity_alloc(struct bio *bio,
+ 	}
+ 
+ 	if (unlikely(!bip))
+-		return NULL;
++		return ERR_PTR(-ENOMEM);
+ 
+ 	memset(bip, 0, sizeof(*bip));
+ 
+@@ -89,7 +89,7 @@ struct bio_integrity_payload *bio_integrity_alloc(struct bio *bio,
+ 	return bip;
+ err:
+ 	mempool_free(bip, bs->bio_integrity_pool);
+-	return NULL;
++	return ERR_PTR(-ENOMEM);
+ }
+ EXPORT_SYMBOL(bio_integrity_alloc);
+ 
+diff --git a/drivers/nvme/host/core.c b/drivers/nvme/host/core.c
+index c61bde9..f9c4e80 100644
+--- a/drivers/nvme/host/core.c
++++ b/drivers/nvme/host/core.c
+@@ -190,8 +190,8 @@ int __nvme_submit_user_cmd(struct request_queue *q, struct nvme_command *cmd,
+ 			}
+ 
+ 			bip = bio_integrity_alloc(bio, GFP_KERNEL, 1);
+-			if (!bip) {
+-				ret = -ENOMEM;
++			if (IS_ERR(bip)) {
++				ret = PTR_ERR(bip);
+ 				goto out_free_meta;
+ 			}
+ 
+diff --git a/drivers/target/target_core_iblock.c b/drivers/target/target_core_iblock.c
+index f29c691..d5891b6 100644
+--- a/drivers/target/target_core_iblock.c
++++ b/drivers/target/target_core_iblock.c
+@@ -613,9 +613,9 @@ iblock_alloc_bip(struct se_cmd *cmd, struct bio *bio)
+ 	}
+ 
+ 	bip = bio_integrity_alloc(bio, GFP_NOIO, cmd->t_prot_nents);
+-	if (!bip) {
++	if (IS_ERR(bip)) {
+ 		pr_err("Unable to allocate bio_integrity_payload\n");
+-		return -ENOMEM;
++		return PTR_ERR(bip);
+ 	}
+ 
+ 	bip->bip_iter.bi_size = (cmd->data_length / dev->dev_attrib.block_size) *
+diff --git a/include/linux/bio.h b/include/linux/bio.h
+index b9b6e04..5349e68 100644
+--- a/include/linux/bio.h
++++ b/include/linux/bio.h
+@@ -318,16 +318,6 @@ enum bip_flags {
+ 	BIP_IP_CHECKSUM		= 1 << 4, /* IP checksum */
+ };
+ 
+-#if defined(CONFIG_BLK_DEV_INTEGRITY)
+-
+-static inline struct bio_integrity_payload *bio_integrity(struct bio *bio)
+-{
+-	if (bio->bi_rw & REQ_INTEGRITY)
+-		return bio->bi_integrity;
+-
+-	return NULL;
+-}
+-
+ /*
+  * bio integrity payload
+  */
+@@ -349,6 +339,16 @@ struct bio_integrity_payload {
+ 	struct bio_vec		bip_inline_vecs[0];/* embedded bvec array */
+ };
+ 
++#if defined(CONFIG_BLK_DEV_INTEGRITY)
++
++static inline struct bio_integrity_payload *bio_integrity(struct bio *bio)
++{
++	if (bio->bi_rw & REQ_INTEGRITY)
++		return bio->bi_integrity;
++
++	return NULL;
++}
++
+ static inline bool bio_integrity_flagged(struct bio *bio, enum bip_flags flag)
+ {
+ 	struct bio_integrity_payload *bip = bio_integrity(bio);
+@@ -795,6 +795,18 @@ static inline bool bio_integrity_flagged(struct bio *bio, enum bip_flags flag)
+ 	return false;
+ }
+ 
++static inline void *bio_integrity_alloc(struct bio * bio, gfp_t gfp,
++								unsigned int nr)
++{
++	return ERR_PTR(-EINVAL);
++}
++
++static inline int bio_integrity_add_page(struct bio *bio, struct page *page,
++					unsigned int len, unsigned int offset)
++{
++	return 0;
++}
++
+ #endif /* CONFIG_BLK_DEV_INTEGRITY */
+ 
+ #endif /* CONFIG_BLOCK */
+-- 
+1.9.3
+

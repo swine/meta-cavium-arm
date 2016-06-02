@@ -1,0 +1,56 @@
+From 46c1c8e53a455d1e74d083da43f40a9c7cdc7357 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@shadowen.org>
+Date: Wed, 15 Feb 2012 08:47:05 -0700
+Subject: [PATCH 0073/1767] UBUNTU: SAUCE: allow IRQs to be irq-threaded by
+ default via config
+
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ kernel/irq/Kconfig  | 4 ++++
+ kernel/irq/manage.c | 8 +++++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/irq/Kconfig b/kernel/irq/Kconfig
+index 3b48dab..e1dc670 100644
+--- a/kernel/irq/Kconfig
++++ b/kernel/irq/Kconfig
+@@ -91,6 +91,10 @@ config IRQ_DOMAIN_DEBUG
+ config IRQ_FORCED_THREADING
+        bool
+ 
++config IRQ_FORCED_THREADING_DEFAULT
++	bool "Use IRQ threading by default"
++	depends on IRQ_FORCED_THREADING
++
+ config SPARSE_IRQ
+ 	bool "Support sparse irq numbering" if MAY_HAVE_SPARSE_IRQ
+ 	---help---
+diff --git a/kernel/irq/manage.c b/kernel/irq/manage.c
+index 6ead200..d11bdef 100644
+--- a/kernel/irq/manage.c
++++ b/kernel/irq/manage.c
+@@ -22,14 +22,20 @@
+ #include "internals.h"
+ 
+ #ifdef CONFIG_IRQ_FORCED_THREADING
+-__read_mostly bool force_irqthreads;
++__read_mostly bool force_irqthreads = IS_ENABLED(CONFIG_IRQ_FORCED_THREADING_DEFAULT);
+ 
+ static int __init setup_forced_irqthreads(char *arg)
+ {
+ 	force_irqthreads = true;
+ 	return 0;
+ }
++static int __init setup_no_irqthreads(char *arg)
++{
++	force_irqthreads = false;
++	return 0;
++}
+ early_param("threadirqs", setup_forced_irqthreads);
++early_param("nothreadirqs", setup_no_irqthreads);
+ #endif
+ 
+ static void __synchronize_hardirq(struct irq_desc *desc)
+-- 
+1.9.3
+

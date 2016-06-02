@@ -1,0 +1,39 @@
+From d058902ff74c29b9fbaef39ac10f2218c79e1ef0 Mon Sep 17 00:00:00 2001
+From: Ben Collins <ben.c@servergy.com>
+Date: Wed, 10 Jul 2013 16:42:45 -0400
+Subject: [PATCH 0070/1767] UBUNTU: SAUCE: Revert "phy: vitesse make
+ vsc824x_add_skew static"
+
+This is needed by p4080.
+
+This reverts commit baec126cf6a864e0191cf51ac1940f3c4c211617.
+
+Signed-off-by: Ben Collins <ben.c@servergy.com>
+---
+ drivers/net/phy/vitesse.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/phy/vitesse.c b/drivers/net/phy/vitesse.c
+index dd295db..0878cfa 100644
+--- a/drivers/net/phy/vitesse.c
++++ b/drivers/net/phy/vitesse.c
+@@ -75,7 +75,7 @@ MODULE_DESCRIPTION("Vitesse PHY driver");
+ MODULE_AUTHOR("Kriston Carson");
+ MODULE_LICENSE("GPL");
+ 
+-static int vsc824x_add_skew(struct phy_device *phydev)
++int vsc824x_add_skew(struct phy_device *phydev)
+ {
+ 	int err;
+ 	int extcon;
+@@ -95,6 +95,7 @@ static int vsc824x_add_skew(struct phy_device *phydev)
+ 
+ 	return err;
+ }
++EXPORT_SYMBOL(vsc824x_add_skew);
+ 
+ static int vsc824x_config_init(struct phy_device *phydev)
+ {
+-- 
+1.9.3
+

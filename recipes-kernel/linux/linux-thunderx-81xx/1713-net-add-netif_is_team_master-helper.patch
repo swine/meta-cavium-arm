@@ -1,0 +1,74 @@
+From 1a52b5692980146ebf97b762474c53b0dd51ea57 Mon Sep 17 00:00:00 2001
+From: Jiri Pirko <jiri@mellanox.com>
+Date: Thu, 3 Dec 2015 12:12:06 +0100
+Subject: [PATCH 1713/1767] net: add netif_is_team_master helper
+
+BugLink: http://bugs.launchpad.net/bugs/1562310
+
+Similar to other helpers, caller can use this to find out if device is
+team master.
+
+Signed-off-by: Jiri Pirko <jiri@mellanox.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit c981e4213e9d2d4ec79501bd607722ec712742a2)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/team/team.c   | 1 +
+ include/linux/netdevice.h | 8 ++++++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/drivers/net/team/team.c b/drivers/net/team/team.c
+index 59fefca..c37b353 100644
+--- a/drivers/net/team/team.c
++++ b/drivers/net/team/team.c
+@@ -2054,6 +2054,7 @@ static void team_setup(struct net_device *dev)
+ 	dev->flags |= IFF_MULTICAST;
+ 	dev->priv_flags &= ~(IFF_XMIT_DST_RELEASE | IFF_TX_SKB_SHARING);
+ 	dev->priv_flags |= IFF_NO_QUEUE;
++	dev->priv_flags |= IFF_TEAM;
+ 
+ 	/*
+ 	 * Indicate we support unicast address filtering. That way core won't
+diff --git a/include/linux/netdevice.h b/include/linux/netdevice.h
+index 33af579..06093ae 100644
+--- a/include/linux/netdevice.h
++++ b/include/linux/netdevice.h
+@@ -1289,6 +1289,7 @@ struct net_device_ops {
+  * @IFF_NO_QUEUE: device can run without qdisc attached
+  * @IFF_OPENVSWITCH: device is a Open vSwitch master
+  * @IFF_L3MDEV_SLAVE: device is enslaved to an L3 master device
++ * @IFF_TEAM: device is a team device
+  */
+ enum netdev_priv_flags {
+ 	IFF_802_1Q_VLAN			= 1<<0,
+@@ -1315,6 +1316,7 @@ enum netdev_priv_flags {
+ 	IFF_NO_QUEUE			= 1<<21,
+ 	IFF_OPENVSWITCH			= 1<<22,
+ 	IFF_L3MDEV_SLAVE		= 1<<23,
++	IFF_TEAM			= 1<<24,
+ };
+ 
+ #define IFF_802_1Q_VLAN			IFF_802_1Q_VLAN
+@@ -1341,6 +1343,7 @@ enum netdev_priv_flags {
+ #define IFF_NO_QUEUE			IFF_NO_QUEUE
+ #define IFF_OPENVSWITCH			IFF_OPENVSWITCH
+ #define IFF_L3MDEV_SLAVE		IFF_L3MDEV_SLAVE
++#define IFF_TEAM			IFF_TEAM
+ 
+ /**
+  *	struct net_device - The DEVICE structure.
+@@ -3886,6 +3889,11 @@ static inline bool netif_is_ovs_master(const struct net_device *dev)
+ 	return dev->priv_flags & IFF_OPENVSWITCH;
+ }
+ 
++static inline bool netif_is_team_master(struct net_device *dev)
++{
++	return dev->priv_flags & IFF_TEAM;
++}
++
+ /* This device needs to keep skb dst for qdisc enqueue or ndo_start_xmit() */
+ static inline void netif_keep_dst(struct net_device *dev)
+ {
+-- 
+1.9.3
+

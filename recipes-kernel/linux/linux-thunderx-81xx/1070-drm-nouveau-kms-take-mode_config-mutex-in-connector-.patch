@@ -1,0 +1,41 @@
+From 3fb6f0242a8e1a28af9e2c94492baba8f3671db2 Mon Sep 17 00:00:00 2001
+From: Ben Skeggs <bskeggs@redhat.com>
+Date: Fri, 8 Jan 2016 08:56:51 +1000
+Subject: [PATCH 1070/1767] drm/nouveau/kms: take mode_config mutex in
+ connector hotplug path
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 0a882cadbc63fd2da3994af7115b4ada2fcbd638 upstream.
+
+fdo#93634
+
+Signed-off-by: Ben Skeggs <bskeggs@redhat.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/nouveau/nouveau_connector.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_connector.c b/drivers/gpu/drm/nouveau/nouveau_connector.c
+index 2e7cbe9..2a5ed74 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_connector.c
++++ b/drivers/gpu/drm/nouveau/nouveau_connector.c
+@@ -969,10 +969,13 @@ nouveau_connector_hotplug(struct nvif_notify *notify)
+ 
+ 		NV_DEBUG(drm, "%splugged %s\n", plugged ? "" : "un", name);
+ 
++		mutex_lock(&drm->dev->mode_config.mutex);
+ 		if (plugged)
+ 			drm_helper_connector_dpms(connector, DRM_MODE_DPMS_ON);
+ 		else
+ 			drm_helper_connector_dpms(connector, DRM_MODE_DPMS_OFF);
++		mutex_unlock(&drm->dev->mode_config.mutex);
++
+ 		drm_helper_hpd_irq_event(connector->dev);
+ 	}
+ 
+-- 
+1.9.3
+

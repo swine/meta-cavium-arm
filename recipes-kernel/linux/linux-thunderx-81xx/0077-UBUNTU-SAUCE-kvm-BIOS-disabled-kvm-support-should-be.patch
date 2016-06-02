@@ -1,0 +1,28 @@
+From d5abe651a84f5b8473a11e7fb236485ce1532db3 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Mon, 31 Mar 2014 16:53:36 +0100
+Subject: [PATCH 0077/1767] UBUNTU: SAUCE: kvm: BIOS disabled kvm support
+ should be a warning
+
+BugLink: http://bugs.launchpad.net/bugs/1300247
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ arch/x86/kvm/x86.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 9a2ed89..c26e699 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5776,7 +5776,7 @@ int kvm_arch_init(void *opaque)
+ 		goto out;
+ 	}
+ 	if (ops->disabled_by_bios()) {
+-		printk(KERN_ERR "kvm: disabled by bios\n");
++		printk(KERN_WARNING "kvm: disabled by bios\n");
+ 		r = -EOPNOTSUPP;
+ 		goto out;
+ 	}
+-- 
+1.9.3
+

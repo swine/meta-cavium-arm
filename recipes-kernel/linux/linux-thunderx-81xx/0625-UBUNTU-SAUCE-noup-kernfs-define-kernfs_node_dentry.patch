@@ -1,0 +1,123 @@
+From 28f5dee92785fe6547302da02f3752b488875f14 Mon Sep 17 00:00:00 2001
+From: Aditya Kali <adityakali@google.com>
+Date: Mon, 13 Oct 2014 10:31:48 -0700
+Subject: [PATCH 0625/1767] UBUNTU: SAUCE: (noup) kernfs: define
+ kernfs_node_dentry
+
+BugLink: http://bugs.launchpad.net/bugs/1546775
+
+Add a new kernfs api is added to lookup the dentry for a particular
+kernfs path.
+
+Signed-off-by: Aditya Kali <adityakali@google.com>
+Signed-off-by: Serge E. Hallyn <serge.hallyn@canonical.com>
+Acked-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/kernfs/mount.c      | 69 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/linux/kernfs.h |  2 ++
+ 2 files changed, 71 insertions(+)
+
+diff --git a/fs/kernfs/mount.c b/fs/kernfs/mount.c
+index 8eaf417..074bb8b 100644
+--- a/fs/kernfs/mount.c
++++ b/fs/kernfs/mount.c
+@@ -14,6 +14,7 @@
+ #include <linux/magic.h>
+ #include <linux/slab.h>
+ #include <linux/pagemap.h>
++#include <linux/namei.h>
+ 
+ #include "kernfs-internal.h"
+ 
+@@ -62,6 +63,74 @@ struct kernfs_root *kernfs_root_from_sb(struct super_block *sb)
+ 	return NULL;
+ }
+ 
++/*
++ * find the next ancestor in the path down to @child, where @parent was the
++ * ancestor whose descendant we want to find.
++ *
++ * Say the path is /a/b/c/d.  @child is d, @parent is NULL.  We return the root
++ * node.  If @parent is b, then we return the node for c.
++ * Passing in d as @parent is not ok.
++ */
++static struct kernfs_node *
++find_next_ancestor(struct kernfs_node *child, struct kernfs_node *parent)
++{
++	if (child == parent) {
++		pr_crit_once("BUG in find_next_ancestor: called with parent == child");
++		return NULL;
++	}
++
++	while (child->parent != parent) {
++		if (!child->parent)
++			return NULL;
++		child = child->parent;
++	}
++
++	return child;
++}
++
++/**
++ * kernfs_node_dentry - get a dentry for the given kernfs_node
++ * @kn: kernfs_node for which a dentry is needed
++ * @sb: the kernfs super_block
++ */
++struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
++				  struct super_block *sb)
++{
++	struct dentry *dentry;
++	struct kernfs_node *knparent = NULL;
++
++	BUG_ON(sb->s_op != &kernfs_sops);
++
++	dentry = dget(sb->s_root);
++
++	/* Check if this is the root kernfs_node */
++	if (!kn->parent)
++		return dentry;
++
++	knparent = find_next_ancestor(kn, NULL);
++	if (WARN_ON(!knparent))
++		return ERR_PTR(-EINVAL);
++
++	do {
++		struct dentry *dtmp;
++		struct kernfs_node *kntmp;
++
++		if (kn == knparent)
++			return dentry;
++		kntmp = find_next_ancestor(kn, knparent);
++		if (WARN_ON(!kntmp))
++			return ERR_PTR(-EINVAL);
++		mutex_lock(&d_inode(dentry)->i_mutex);
++		dtmp = lookup_one_len(kntmp->name, dentry, strlen(kntmp->name));
++		mutex_unlock(&d_inode(dentry)->i_mutex);
++		dput(dentry);
++		if (IS_ERR(dtmp))
++			return dtmp;
++		knparent = kntmp;
++		dentry = dtmp;
++	} while (1);
++}
++
+ static int kernfs_fill_super(struct super_block *sb, unsigned long magic)
+ {
+ 	struct kernfs_super_info *info = kernfs_info(sb);
+diff --git a/include/linux/kernfs.h b/include/linux/kernfs.h
+index c6530ed..307e1a6 100644
+--- a/include/linux/kernfs.h
++++ b/include/linux/kernfs.h
+@@ -282,6 +282,8 @@ struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry);
+ struct kernfs_root *kernfs_root_from_sb(struct super_block *sb);
+ struct inode *kernfs_get_inode(struct super_block *sb, struct kernfs_node *kn);
+ 
++struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
++				  struct super_block *sb);
+ struct kernfs_root *kernfs_create_root(struct kernfs_syscall_ops *scops,
+ 				       unsigned int flags, void *priv);
+ void kernfs_destroy_root(struct kernfs_root *root);
+-- 
+1.9.3
+

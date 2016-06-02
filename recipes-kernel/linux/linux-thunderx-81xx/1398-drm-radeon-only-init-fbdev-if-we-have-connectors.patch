@@ -1,0 +1,46 @@
+From af78867c7d2eaafe141b091ba7b96d3b41b5d15f Mon Sep 17 00:00:00 2001
+From: Rob Clark <robdclark@gmail.com>
+Date: Mon, 25 Jan 2016 18:06:48 -0500
+Subject: [PATCH 1398/1767] drm/radeon: only init fbdev if we have connectors
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+This fixes an issue that was noticed on an optimus/prime laptop with
+a kernel that was old enough to not support the integrated intel gfx
+(which was driving all the outputs), but did have support for the
+discrete radeon gpu.  The end result was not falling back to VESA and
+leaving the user with a black screen.
+
+(Plus it is kind of silly to create an framebuffer device if there
+are no outputs hooked up to the gpu.)
+
+Signed-off-by: Rob Clark <robdclark@gmail.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit f95429eccc570dc45d589c327bfcfddcdc3e8228)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/radeon/radeon_display.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/radeon/radeon_display.c b/drivers/gpu/drm/radeon/radeon_display.c
+index 13767d2..805bae8 100644
+--- a/drivers/gpu/drm/radeon/radeon_display.c
++++ b/drivers/gpu/drm/radeon/radeon_display.c
+@@ -1683,8 +1683,10 @@ int radeon_modeset_init(struct radeon_device *rdev)
+ 	/* setup afmt */
+ 	radeon_afmt_init(rdev);
+ 
+-	radeon_fbdev_init(rdev);
+-	drm_kms_helper_poll_init(rdev->ddev);
++	if (!list_empty(&rdev->ddev->mode_config.connector_list)) {
++		radeon_fbdev_init(rdev);
++		drm_kms_helper_poll_init(rdev->ddev);
++	}
+ 
+ 	/* do pm late init */
+ 	ret = radeon_pm_late_init(rdev);
+-- 
+1.9.3
+

@@ -1,0 +1,40 @@
+From 2014ba821a922d0ab9966679414dee24f9950e3a Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Sun, 8 May 2016 11:00:21 +0530
+Subject: [PATCH 17/39] net: thunderx: Fixed setting olmac's lane to serdes
+ value
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index d255eac..0726e3d 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -878,7 +878,7 @@ static void bgx_set_lmac_config(struct bgx *bgx, u8 idx)
+ 		olmac->use_training =
+ 		bgx_reg_read(bgx, idx - 1, BGX_SPUX_BR_PMD_CRTL) &
+ 			SPU_PMD_CRTL_TRAIN_EN;
+-		lmac_set_lane2sds(lmac);
++		lmac_set_lane2sds(olmac);
+ 	}
+ }
+ 
+@@ -915,8 +915,10 @@ static void bgx_get_qlm_mode(struct bgx *bgx)
+ 		return;
+ 	}
+ 
+-	bgx_print_qlm_mode(bgx, 1);
+-	bgx_print_qlm_mode(bgx, 3);
++	if (bgx->lmac_count) {
++		bgx_print_qlm_mode(bgx, 1);
++		bgx_print_qlm_mode(bgx, 3);
++	}
+ 
+ 	/* If DLM0 is not in BGX mode then LMAC0/1 have
+ 	 * to be configured with serdes lanes of DLM1
+-- 
+1.9.1
+

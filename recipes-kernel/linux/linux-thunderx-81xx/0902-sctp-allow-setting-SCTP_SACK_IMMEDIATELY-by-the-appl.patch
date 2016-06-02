@@ -1,0 +1,53 @@
+From 5ed7df6f539208accab72521b8630435a8758e82 Mon Sep 17 00:00:00 2001
+From: Marcelo Ricardo Leitner <marcelo.leitner@gmail.com>
+Date: Fri, 22 Jan 2016 18:29:49 -0200
+Subject: [PATCH 0902/1767] sctp: allow setting SCTP_SACK_IMMEDIATELY by the
+ application
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+[ Upstream commit 27f7ed2b11d42ab6d796e96533c2076ec220affc ]
+
+This patch extends commit b93d6471748d ("sctp: implement the sender side
+for SACK-IMMEDIATELY extension") as it didn't white list
+SCTP_SACK_IMMEDIATELY on sctp_msghdr_parse(), causing it to be
+understood as an invalid flag and returning -EINVAL to the application.
+
+Note that the actual handling of the flag is already there in
+sctp_datamsg_from_user().
+
+https://tools.ietf.org/html/rfc7053#section-7
+
+Fixes: b93d6471748d ("sctp: implement the sender side for SACK-IMMEDIATELY extension")
+Signed-off-by: Marcelo Ricardo Leitner <marcelo.leitner@gmail.com>
+Acked-by: Vlad Yasevich <vyasevich@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/sctp/socket.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/net/sctp/socket.c b/net/sctp/socket.c
+index ef1d90f..06a9cfb 100644
+--- a/net/sctp/socket.c
++++ b/net/sctp/socket.c
+@@ -6640,6 +6640,7 @@ static int sctp_msghdr_parse(const struct msghdr *msg, sctp_cmsgs_t *cmsgs)
+ 
+ 			if (cmsgs->srinfo->sinfo_flags &
+ 			    ~(SCTP_UNORDERED | SCTP_ADDR_OVER |
++			      SCTP_SACK_IMMEDIATELY |
+ 			      SCTP_ABORT | SCTP_EOF))
+ 				return -EINVAL;
+ 			break;
+@@ -6663,6 +6664,7 @@ static int sctp_msghdr_parse(const struct msghdr *msg, sctp_cmsgs_t *cmsgs)
+ 
+ 			if (cmsgs->sinfo->snd_flags &
+ 			    ~(SCTP_UNORDERED | SCTP_ADDR_OVER |
++			      SCTP_SACK_IMMEDIATELY |
+ 			      SCTP_ABORT | SCTP_EOF))
+ 				return -EINVAL;
+ 			break;
+-- 
+1.9.3
+

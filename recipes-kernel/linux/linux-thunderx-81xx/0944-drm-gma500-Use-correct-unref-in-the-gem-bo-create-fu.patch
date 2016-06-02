@@ -1,0 +1,43 @@
+From 3d18203826ccef65d747287ed5089d67bd362877 Mon Sep 17 00:00:00 2001
+From: Daniel Vetter <daniel.vetter@ffwll.ch>
+Date: Mon, 23 Nov 2015 10:32:49 +0100
+Subject: [PATCH 0944/1767] drm/gma500: Use correct unref in the gem bo create
+ function
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit d3e376f52d095103ca51dbda4d6ff8aaf488f98f upstream.
+
+This is called without dev->struct_mutex held, we need to use the
+_unlocked variant.
+
+Never caught in the wild since you'd need an evil userspace which
+races a gem_close ioctl call with the in-progress open.
+
+Cc: Patrik Jakobsson <patrik.r.jakobsson@gmail.com>
+Acked-by: Patrik Jakobsson <patrik.r.jakobsson@gmail.com>
+Signed-off-by: Daniel Vetter <daniel.vetter@ffwll.ch>
+Link: http://patchwork.freedesktop.org/patch/msgid/1448271183-20523-17-git-send-email-daniel.vetter@ffwll.ch
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/gma500/gem.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/gma500/gem.c b/drivers/gpu/drm/gma500/gem.c
+index c707fa6..e3bdc8b 100644
+--- a/drivers/gpu/drm/gma500/gem.c
++++ b/drivers/gpu/drm/gma500/gem.c
+@@ -130,7 +130,7 @@ int psb_gem_create(struct drm_file *file, struct drm_device *dev, u64 size,
+ 		return ret;
+ 	}
+ 	/* We have the initial and handle reference but need only one now */
+-	drm_gem_object_unreference(&r->gem);
++	drm_gem_object_unreference_unlocked(&r->gem);
+ 	*handlep = handle;
+ 	return 0;
+ }
+-- 
+1.9.3
+

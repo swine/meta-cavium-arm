@@ -1,0 +1,41 @@
+From f6b726b068d8bdf55481686920feae0e92a0e5c8 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Mon, 4 Apr 2016 15:27:01 -0600
+Subject: [PATCH 1754/1767] UBUNTU: SAUCE: [PATCH v5 01/14] i2c: octeon:
+ Increase retry default and use fixed timeout value
+
+Convert the adapter timeout to 2 ms independently of depending on CONFIG_HZ.
+CONFIG_HZ is 100 for MIPS Cavium-Octeon so the timeout value is not changed.
+
+Also set retries to 5 to improve robustness.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/i2c/busses/i2c-octeon.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/i2c/busses/i2c-octeon.c b/drivers/i2c/busses/i2c-octeon.c
+index 46fb6c4..c4abf16 100644
+--- a/drivers/i2c/busses/i2c-octeon.c
++++ b/drivers/i2c/busses/i2c-octeon.c
+@@ -426,7 +426,6 @@ static struct i2c_adapter octeon_i2c_ops = {
+ 	.owner = THIS_MODULE,
+ 	.name = "OCTEON adapter",
+ 	.algo = &octeon_i2c_algo,
+-	.timeout = HZ / 50,
+ };
+ 
+ /* calculate and set clock divisors */
+@@ -553,6 +552,8 @@ static int octeon_i2c_probe(struct platform_device *pdev)
+ 	octeon_i2c_set_clock(i2c);
+ 
+ 	i2c->adap = octeon_i2c_ops;
++	i2c->adap.timeout = msecs_to_jiffies(2);
++	i2c->adap.retries = 5;
+ 	i2c->adap.dev.parent = &pdev->dev;
+ 	i2c->adap.dev.of_node = node;
+ 	i2c_set_adapdata(&i2c->adap, i2c);
+-- 
+1.9.3
+

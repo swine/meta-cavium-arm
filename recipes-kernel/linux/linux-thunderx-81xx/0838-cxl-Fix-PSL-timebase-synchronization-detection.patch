@@ -1,0 +1,46 @@
+From 658cbef58348b1207a21c16fa78d70882dbf1020 Mon Sep 17 00:00:00 2001
+From: Frederic Barrat <fbarrat@linux.vnet.ibm.com>
+Date: Wed, 24 Feb 2016 18:27:51 +0100
+Subject: [PATCH 0838/1767] cxl: Fix PSL timebase synchronization detection
+
+BugLink: http://bugs.launchpad.net/bugs/1532914
+
+The PSL timebase synchronization is seemingly failing for
+configuration not including VIRT_CPU_ACCOUNTING_NATIVE. The driver
+shows the following trace in dmesg:
+PSL: Timebase sync: giving up!
+
+The PSL timebase register is actually syncing correctly, but the cxl
+driver is not detecting it. Fix is to use the proper timebase-to-time
+conversion.
+
+Signed-off-by: Frederic Barrat <fbarrat@linux.vnet.ibm.com>
+Cc: <stable@vger.kernel.org> # 4.3+
+Acked-by: Michael Neuling <mikey@neuling.org>
+Reviewed-by: Matthew R. Ochs <mrochs@linux.vnet.ibm.com>
+Acked-by: Ian Munsie <imunsie@au1.ibm.com>
+Reviewed-by: Andrew Donnellan <andrew.donnellan@au1.ibm.com>
+Reviewed-by: Vaibhav Jain <vaibhav@linux.vnet.ibm.com>
+Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+(cherry picked from git://git.kernel.org/pub/scm/linux/kernel/git/powerpc/linux.git commit 923adb1646d5ba739d2a1e63ee20d60574d9da8e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/misc/cxl/pci.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/misc/cxl/pci.c b/drivers/misc/cxl/pci.c
+index 4c1903f..0c6c17a1 100644
+--- a/drivers/misc/cxl/pci.c
++++ b/drivers/misc/cxl/pci.c
+@@ -415,7 +415,7 @@ static int cxl_setup_psl_timebase(struct cxl *adapter, struct pci_dev *dev)
+ 		delta = mftb() - psl_tb;
+ 		if (delta < 0)
+ 			delta = -delta;
+-	} while (cputime_to_usecs(delta) > 16);
++	} while (tb_to_ns(delta) > 16000);
+ 
+ 	return 0;
+ }
+-- 
+1.9.3
+

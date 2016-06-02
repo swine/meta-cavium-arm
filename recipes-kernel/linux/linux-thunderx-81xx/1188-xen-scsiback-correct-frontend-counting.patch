@@ -1,0 +1,49 @@
+From c857e1d676693d73d7d21b0742f2beb91cb91855 Mon Sep 17 00:00:00 2001
+From: Juergen Gross <jgross@suse.com>
+Date: Mon, 8 Feb 2016 15:30:18 +0100
+Subject: [PATCH 1188/1767] xen/scsiback: correct frontend counting
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit f285aa8db7cc4432c1a03f8b55ff34fe96317c11 upstream.
+
+When adding a new frontend to xen-scsiback don't decrement the number
+of active frontends in case of no error. Doing so results in a failure
+when trying to remove the xen-pvscsi nexus even if no domain is using
+it.
+
+Signed-off-by: Juergen Gross <jgross@suse.com>
+Reviewed-by: Boris Ostrovsky <boris.ostrovsky@oracle.com>
+Signed-off-by: David Vrabel <david.vrabel@citrix.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/xen/xen-scsiback.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/xen/xen-scsiback.c b/drivers/xen/xen-scsiback.c
+index ad4eb10..51387d7 100644
+--- a/drivers/xen/xen-scsiback.c
++++ b/drivers/xen/xen-scsiback.c
+@@ -939,12 +939,12 @@ out:
+ 	spin_unlock_irqrestore(&info->v2p_lock, flags);
+ 
+ out_free:
+-	mutex_lock(&tpg->tv_tpg_mutex);
+-	tpg->tv_tpg_fe_count--;
+-	mutex_unlock(&tpg->tv_tpg_mutex);
+-
+-	if (err)
++	if (err) {
++		mutex_lock(&tpg->tv_tpg_mutex);
++		tpg->tv_tpg_fe_count--;
++		mutex_unlock(&tpg->tv_tpg_mutex);
+ 		kfree(new);
++	}
+ 
+ 	return err;
+ }
+-- 
+1.9.3
+

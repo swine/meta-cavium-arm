@@ -1,0 +1,48 @@
+From c79082c7f209a6d4711ecad86cfc1f01c685116f Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:45 -0700
+Subject: [PATCH 1615/1767] Revert "UBUNTU: SAUCE: apparmor: Fix: add required
+ locking of __aa_update_replacedby on merge path"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit c6a6d05f05cea01eece5d29f0bb9537c401315d1.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 2c4175b..4c7fb19 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1123,13 +1123,9 @@ struct aa_label *aa_label_merge(struct aa_label *a, struct aa_label *b,
+ 		}
+ 		/* only label update will set replacedby so ns lock is enough */
+ 		new->replacedby = r;
+-
+-		mutex_lock(&labels_ns(a)->lock);
+ 		write_lock_irqsave(&ls->lock, flags);
+ 		label = __label_merge_insert(ls, new, a, b);
+ 		write_unlock_irqrestore(&ls->lock, flags);
+-		mutex_unlock(&labels_ns(a)->lock);
+-
+ 		if (label != new) {
+ 			/* new may not be fully setup so no put_label */
+ 			aa_label_free(new);
+@@ -1171,11 +1167,9 @@ struct aa_label *aa_label_vec_merge(struct aa_profile **vec, int len,
+ 	for (i = 0; i < len; i++) {
+ 		new->ent[i] = aa_get_profile(vec[i]);
+ 	}
+-	mutex_lock(&labels_ns(new)->lock);
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	label = __aa_label_insert(ls, new, false);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+-	mutex_unlock(&labels_ns(new)->lock);
+ 	if (label != new)
+ 		/* not fully constructed don't put */
+ 		aa_label_free(new);
+-- 
+1.9.3
+

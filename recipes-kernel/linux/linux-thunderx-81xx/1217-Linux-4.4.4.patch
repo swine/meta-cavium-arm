@@ -1,0 +1,27 @@
+From f84f66723f39bb10f4a4a95d447d1147ec051115 Mon Sep 17 00:00:00 2001
+From: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date: Thu, 3 Mar 2016 15:10:04 -0800
+Subject: [PATCH 1217/1767] Linux 4.4.4
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Makefile b/Makefile
+index d7a4b1b..c125abb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,6 +1,6 @@
+ VERSION = 4
+ PATCHLEVEL = 4
+-SUBLEVEL = 3
++SUBLEVEL = 4
+ EXTRAVERSION =
+ NAME = Blurry Fish Butt
+ 
+-- 
+1.9.3
+

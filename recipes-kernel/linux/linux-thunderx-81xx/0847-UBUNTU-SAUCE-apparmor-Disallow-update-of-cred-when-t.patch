@@ -1,0 +1,31 @@
+From 1efc64b843248f3d1311ce10fd55bcf3fffa65a8 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Sun, 17 May 2015 02:32:13 -0700
+Subject: [PATCH 0847/1767] UBUNTU: SAUCE: apparmor: Disallow update of cred
+ when then subjective != the objective cred
+
+BugLink: http://bugs.launchpad.net/bugs/1430546
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/context.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/security/apparmor/context.c b/security/apparmor/context.c
+index 475682c..e17150b 100644
+--- a/security/apparmor/context.c
++++ b/security/apparmor/context.c
+@@ -100,6 +100,9 @@ int aa_replace_current_label(struct aa_label *label)
+ 	if (cxt->label == label)
+ 		return 0;
+ 
++	if (current_cred() != current_real_cred())
++		return -EBUSY;
++
+ 	new  = prepare_creds();
+ 	if (!new)
+ 		return -ENOMEM;
+-- 
+1.9.3
+

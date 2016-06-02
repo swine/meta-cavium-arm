@@ -1,0 +1,58 @@
+From 0fba88cdfc56f085c0761b5958fec5ae0736f6a0 Mon Sep 17 00:00:00 2001
+From: Tyrel Datwyler <tyreld@linux.vnet.ibm.com>
+Date: Wed, 10 Feb 2016 19:32:27 -0600
+Subject: [PATCH 0659/1767] ibmvscsi: Add endian conversions to sysfs attribute
+ show functions
+
+BugLink: http://bugs.launchpad.net/bugs/1547153
+
+The values returned by the show functions for the host os_type,
+mad_version, and partition_number attributes get their values directly
+from the madapter_info struct whose associated fields are __be32
+typed. Added endian conversion to ensure these values are sane on LE
+platforms.
+
+Signed-off-by: Tyrel Datwyler <tyreld@linux.vnet.ibm.com>
+Reviewed-by: Johannes Thumshirn <jthumshirn@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from linux-next commit f9e3de0d6053ae89828188291a405c64d8d95a0e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/ibmvscsi/ibmvscsi.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/scsi/ibmvscsi/ibmvscsi.c b/drivers/scsi/ibmvscsi/ibmvscsi.c
+index adfef9d..1dbd5c9 100644
+--- a/drivers/scsi/ibmvscsi/ibmvscsi.c
++++ b/drivers/scsi/ibmvscsi/ibmvscsi.c
+@@ -2041,7 +2041,7 @@ static ssize_t show_host_partition_number(struct device *dev,
+ 	int len;
+ 
+ 	len = snprintf(buf, PAGE_SIZE, "%d\n",
+-		       hostdata->madapter_info.partition_number);
++		       be32_to_cpu(hostdata->madapter_info.partition_number));
+ 	return len;
+ }
+ 
+@@ -2061,7 +2061,7 @@ static ssize_t show_host_mad_version(struct device *dev,
+ 	int len;
+ 
+ 	len = snprintf(buf, PAGE_SIZE, "%d\n",
+-		       hostdata->madapter_info.mad_version);
++		       be32_to_cpu(hostdata->madapter_info.mad_version));
+ 	return len;
+ }
+ 
+@@ -2080,7 +2080,8 @@ static ssize_t show_host_os_type(struct device *dev,
+ 	struct ibmvscsi_host_data *hostdata = shost_priv(shost);
+ 	int len;
+ 
+-	len = snprintf(buf, PAGE_SIZE, "%d\n", hostdata->madapter_info.os_type);
++	len = snprintf(buf, PAGE_SIZE, "%d\n",
++		       be32_to_cpu(hostdata->madapter_info.os_type));
+ 	return len;
+ }
+ 
+-- 
+1.9.3
+

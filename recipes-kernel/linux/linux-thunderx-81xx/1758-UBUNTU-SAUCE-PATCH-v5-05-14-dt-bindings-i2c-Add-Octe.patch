@@ -1,0 +1,41 @@
+From fa81b278a8ece689739f1e491951575784797b69 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Mon, 4 Apr 2016 15:30:03 -0600
+Subject: [PATCH 1758/1767] UBUNTU: SAUCE: [PATCH v5 05/14] dt-bindings: i2c:
+ Add Octeon cn78xx TWSI
+
+Add compatible string for Cavium Octeon cn78XX SOCs TWSI.
+
+Cc: Rob Herring <robh+dt@kernel.org>
+Cc: Pawel Moll <pawel.moll@arm.com>
+Cc: Mark Rutland <mark.rutland@arm.com>
+Cc: Ian Campbell <ijc+devicetree@hellion.org.uk>
+Cc: Kumar Gala <galak@codeaurora.org>
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Acked-by: David Daney <ddaney@caviumnetworks.com>
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ Documentation/devicetree/bindings/i2c/i2c-octeon.txt | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/i2c/i2c-octeon.txt b/Documentation/devicetree/bindings/i2c/i2c-octeon.txt
+index dced82e..872d485 100644
+--- a/Documentation/devicetree/bindings/i2c/i2c-octeon.txt
++++ b/Documentation/devicetree/bindings/i2c/i2c-octeon.txt
+@@ -4,6 +4,12 @@
+ 
+   Compatibility with all cn3XXX, cn5XXX and cn6XXX SOCs.
+ 
++  or
++
++  compatible: "cavium,octeon-7890-twsi"
++
++  Compatibility with cn78XX SOCs.
++
+ - reg: The base address of the TWSI/I2C bus controller register bank.
+ 
+ - #address-cells: Must be <1>.
+-- 
+1.9.3
+

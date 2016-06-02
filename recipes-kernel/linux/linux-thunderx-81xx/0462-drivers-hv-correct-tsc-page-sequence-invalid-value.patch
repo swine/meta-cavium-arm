@@ -1,0 +1,89 @@
+From b42f7a200d0b44e1ae818ee1f1e51087021d8cc9 Mon Sep 17 00:00:00 2001
+From: Andrey Smetanin <asmetanin@virtuozzo.com>
+Date: Mon, 14 Dec 2015 16:01:55 -0800
+Subject: [PATCH 0462/1767] drivers/hv: correct tsc page sequence invalid value
+
+Hypervisor Top Level Functional Specification v3/4 says
+that TSC page sequence value = -1(0xFFFFFFFF) is used to
+indicate that TSC page no longer reliable source of reference
+timer. Unfortunately, we found that Windows Hyper-V guest
+side implementation uses sequence value = 0 to indicate
+that Tsc page no longer valid. This is clearly visible
+inside Windows 2012R2 ntoskrnl.exe HvlGetReferenceTime()
+function dissassembly:
+
+HvlGetReferenceTime proc near
+                 xchg    ax, ax
+loc_1401C3132:
+                 mov     rax, cs:HvlpReferenceTscPage
+                 mov     r9d, [rax]
+                 test    r9d, r9d
+                 jz      short loc_1401C3176
+                 rdtsc
+                 mov     rcx, cs:HvlpReferenceTscPage
+                 shl     rdx, 20h
+                 or      rdx, rax
+                 mov     rax, [rcx+8]
+                 mov     rcx, cs:HvlpReferenceTscPage
+                 mov     r8, [rcx+10h]
+                 mul     rdx
+                 mov     rax, cs:HvlpReferenceTscPage
+                 add     rdx, r8
+                 mov     ecx, [rax]
+                 cmp     ecx, r9d
+                 jnz     short loc_1401C3132
+                 jmp     short loc_1401C3184
+loc_1401C3176:
+                 mov     ecx, 40000020h
+                 rdmsr
+                 shl     rdx, 20h
+                 or      rdx, rax
+loc_1401C3184:
+                 mov     rax, rdx
+                 retn
+HvlGetReferenceTime endp
+
+This patch aligns Tsc page invalid sequence value with
+Windows Hyper-V guest implementation which is more
+compatible with both Hyper-V hypervisor and KVM hypervisor.
+
+Signed-off-by: Andrey Smetanin <asmetanin@virtuozzo.com>
+Signed-off-by: Denis V. Lunev <den@openvz.org>
+CC: "K. Y. Srinivasan" <kys@microsoft.com>
+CC: Haiyang Zhang <haiyangz@microsoft.com>
+CC: Vitaly Kuznetsov <vkuznets@redhat.com>
+
+Signed-off-by: Denis V. Lunev <den@openvz.org>
+Signed-off-by: K. Y. Srinivasan <kys@microsoft.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+(cherry picked from commit c35b82ef0294ae5052120615f5cfcef17c5a6bf7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/hv/hv.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/hv/hv.c b/drivers/hv/hv.c
+index 26fde4a..49994d4 100644
+--- a/drivers/hv/hv.c
++++ b/drivers/hv/hv.c
+@@ -148,7 +148,7 @@ static cycle_t read_hv_clock_tsc(struct clocksource *arg)
+ 	cycle_t current_tick;
+ 	struct ms_hyperv_tsc_page *tsc_pg = hv_context.tsc_page;
+ 
+-	if (tsc_pg->tsc_sequence != -1) {
++	if (tsc_pg->tsc_sequence != 0) {
+ 		/*
+ 		 * Use the tsc page to compute the value.
+ 		 */
+@@ -170,7 +170,7 @@ static cycle_t read_hv_clock_tsc(struct clocksource *arg)
+ 			if (tsc_pg->tsc_sequence == sequence)
+ 				return current_tick;
+ 
+-			if (tsc_pg->tsc_sequence != -1)
++			if (tsc_pg->tsc_sequence != 0)
+ 				continue;
+ 			/*
+ 			 * Fallback using MSR method.
+-- 
+1.9.3
+

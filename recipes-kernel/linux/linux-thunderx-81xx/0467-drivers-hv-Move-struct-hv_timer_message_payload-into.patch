@@ -1,0 +1,67 @@
+From b7d7689b590f81bb9a722128e32f915df87e5b7d Mon Sep 17 00:00:00 2001
+From: Andrey Smetanin <asmetanin@virtuozzo.com>
+Date: Mon, 30 Nov 2015 19:22:16 +0300
+Subject: [PATCH 0467/1767] drivers/hv: Move struct hv_timer_message_payload
+ into UAPI Hyper-V x86 header
+
+This struct is required for Hyper-V SynIC timers implementation inside KVM
+and for upcoming Hyper-V VMBus support by userspace(QEMU). So place it into
+Hyper-V UAPI header.
+
+Signed-off-by: Andrey Smetanin <asmetanin@virtuozzo.com>
+CC: Gleb Natapov <gleb@kernel.org>
+CC: Paolo Bonzini <pbonzini@redhat.com>
+CC: "K. Y. Srinivasan" <kys@microsoft.com>
+CC: Haiyang Zhang <haiyangz@microsoft.com>
+CC: Vitaly Kuznetsov <vkuznets@redhat.com>
+CC: Roman Kagan <rkagan@virtuozzo.com>
+CC: Denis V. Lunev <den@openvz.org>
+CC: qemu-devel@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit c71acc4c74dddebbbbeede69fdd4f0b1a124f9df)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/include/uapi/asm/hyperv.h | 8 ++++++++
+ drivers/hv/hyperv_vmbus.h          | 9 ---------
+ 2 files changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/include/uapi/asm/hyperv.h b/arch/x86/include/uapi/asm/hyperv.h
+index a41cdee..2a5629e 100644
+--- a/arch/x86/include/uapi/asm/hyperv.h
++++ b/arch/x86/include/uapi/asm/hyperv.h
+@@ -347,4 +347,12 @@ struct hv_message_page {
+ 	struct hv_message sint_message[HV_SYNIC_SINT_COUNT];
+ };
+ 
++/* Define timer message payload structure. */
++struct hv_timer_message_payload {
++	__u32 timer_index;
++	__u32 reserved;
++	__u64 expiration_time;	/* When the timer expired */
++	__u64 delivery_time;	/* When the message was delivered */
++};
++
+ #endif
+diff --git a/drivers/hv/hyperv_vmbus.h b/drivers/hv/hyperv_vmbus.h
+index 3a1f951..8d9a81e 100644
+--- a/drivers/hv/hyperv_vmbus.h
++++ b/drivers/hv/hyperv_vmbus.h
+@@ -136,15 +136,6 @@ union hv_timer_config {
+ 	};
+ };
+ 
+-
+-/* Define timer message payload structure. */
+-struct hv_timer_message_payload {
+-	u32 timer_index;
+-	u32 reserved;
+-	u64 expiration_time;	/* When the timer expired */
+-	u64 delivery_time;	/* When the message was delivered */
+-};
+-
+ /* Define the number of message buffers associated with each port. */
+ #define HV_PORT_MESSAGE_BUFFER_COUNT	(16)
+ 
+-- 
+1.9.3
+

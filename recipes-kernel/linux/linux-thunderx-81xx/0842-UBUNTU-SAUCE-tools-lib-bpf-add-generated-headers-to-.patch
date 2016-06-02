@@ -1,0 +1,27 @@
+From b5f75fdf3c5c4f5e5843d3bf68a75cf568b6d2f4 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Sat, 27 Feb 2016 13:57:33 +0000
+Subject: [PATCH 0842/1767] UBUNTU: SAUCE: tools: lib/bpf -- add generated
+ headers to search path
+
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ tools/lib/bpf/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/lib/bpf/Makefile b/tools/lib/bpf/Makefile
+index a3caaf3..8082472 100644
+--- a/tools/lib/bpf/Makefile
++++ b/tools/lib/bpf/Makefile
+@@ -68,7 +68,7 @@ FEATURE_USER = .libbpf
+ FEATURE_TESTS = libelf libelf-getphdrnum libelf-mmap bpf
+ FEATURE_DISPLAY = libelf bpf
+ 
+-INCLUDES = -I. -I$(srctree)/tools/include -I$(srctree)/arch/$(ARCH)/include/uapi -I$(srctree)/include/uapi
++INCLUDES = -I. -I$(srctree)/tools/include -I$(srctree)/arch/$(ARCH)/include/uapi -I$(srctree)/arch/$(ARCH)/include/generated/uapi -I$(srctree)/include/uapi -I$(srctree)/include/generated/uapi
+ FEATURE_CHECK_CFLAGS-bpf = $(INCLUDES)
+ 
+ include $(srctree)/tools/build/Makefile.feature
+-- 
+1.9.3
+

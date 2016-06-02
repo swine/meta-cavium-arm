@@ -1,0 +1,69 @@
+From fbb1eb8a329bdc4b6dcc293302e02aa34248f383 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Fri, 16 Oct 2015 07:58:39 +0200
+Subject: [PATCH 0399/1767] nvme: move nvme_error_status to common code
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+And mark it inline so that we don't slow down the completion path by
+having to turn it into a forced out of line call.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 15a190f7f57a2e46717490c35ac09882042a200b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/nvme.h | 12 ++++++++++++
+ drivers/nvme/host/pci.c  | 12 ------------
+ 2 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/nvme/host/nvme.h b/drivers/nvme/host/nvme.h
+index f7aacd0..c558b87 100644
+--- a/drivers/nvme/host/nvme.h
++++ b/drivers/nvme/host/nvme.h
+@@ -85,6 +85,18 @@ static inline u64 nvme_block_nr(struct nvme_ns *ns, sector_t sector)
+ 	return (sector >> (ns->lba_shift - 9));
+ }
+ 
++static inline int nvme_error_status(u16 status)
++{
++	switch (status & 0x7ff) {
++	case NVME_SC_SUCCESS:
++		return 0;
++	case NVME_SC_CAP_EXCEEDED:
++		return -ENOSPC;
++	default:
++		return -EIO;
++	}
++}
++
+ int nvme_submit_sync_cmd(struct request_queue *q, struct nvme_command *cmd,
+ 		void *buf, unsigned bufflen);
+ int __nvme_submit_sync_cmd(struct request_queue *q, struct nvme_command *cmd,
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index edc5939..f7ddb71 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -547,18 +547,6 @@ static void nvme_free_iod(struct nvme_dev *dev, struct nvme_iod *iod)
+ 		kfree(iod);
+ }
+ 
+-static int nvme_error_status(u16 status)
+-{
+-	switch (status & 0x7ff) {
+-	case NVME_SC_SUCCESS:
+-		return 0;
+-	case NVME_SC_CAP_EXCEEDED:
+-		return -ENOSPC;
+-	default:
+-		return -EIO;
+-	}
+-}
+-
+ #ifdef CONFIG_BLK_DEV_INTEGRITY
+ static void nvme_dif_prep(u32 p, u32 v, struct t10_pi_tuple *pi)
+ {
+-- 
+1.9.3
+

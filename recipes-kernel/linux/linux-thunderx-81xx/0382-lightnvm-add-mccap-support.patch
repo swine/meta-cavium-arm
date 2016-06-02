@@ -1,0 +1,64 @@
+From 53151a9c255ddda3841aadf8260d1ba86f43d455 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:34 +0100
+Subject: [PATCH 0382/1767] lightnvm: add mccap support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Some flash media has extended capabilities, such as programming SLC
+pages on MLC/TLC flash, erase/program suspend, scramble and encryption.
+MCCAP is introduced to detect support for these capabilities in the
+command set.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit f9a9995072904f2d67d649545f17f81e00f4985e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c  | 1 +
+ include/linux/lightnvm.h | 7 +++++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index e5e3963..5199c12 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -376,6 +376,7 @@ static int nvm_core_init(struct nvm_dev *dev)
+ 	dev->sec_size = grp->csecs;
+ 	dev->oob_size = grp->sos;
+ 	dev->sec_per_pg = grp->fpg_sz / grp->csecs;
++	dev->mccap = grp->mccap;
+ 	memcpy(&dev->ppaf, &id->ppaf, sizeof(struct nvm_addr_format));
+ 
+ 	dev->plane_mode = NVM_PLANE_SINGLE;
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index aa35907..b90d283 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -61,6 +61,12 @@ enum {
+ 	NVM_BLK_T_GRWN_BAD	= 0x2,
+ 	NVM_BLK_T_DEV		= 0x4,
+ 	NVM_BLK_T_HOST		= 0x8,
++
++	/* Memory capabilities */
++	NVM_ID_CAP_SLC		= 0x1,
++	NVM_ID_CAP_CMD_SUSPEND	= 0x2,
++	NVM_ID_CAP_SCRAMBLE	= 0x4,
++	NVM_ID_CAP_ENCRYPT	= 0x8,
+ };
+ 
+ struct nvm_id_group {
+@@ -278,6 +284,7 @@ struct nvm_dev {
+ 	int blks_per_lun;
+ 	int sec_size;
+ 	int oob_size;
++	int mccap;
+ 	struct nvm_addr_format ppaf;
+ 
+ 	/* Calculated/Cached values. These do not reflect the actual usable
+-- 
+1.9.3
+

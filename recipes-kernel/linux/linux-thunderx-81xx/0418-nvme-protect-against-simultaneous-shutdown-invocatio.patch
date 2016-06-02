@@ -1,0 +1,66 @@
+From 5300a523203302fb5c3e350dce139264965da164 Mon Sep 17 00:00:00 2001
+From: Keith Busch <keith.busch@intel.com>
+Date: Thu, 26 Nov 2015 12:21:29 +0100
+Subject: [PATCH 0418/1767] nvme: protect against simultaneous shutdown
+ invocations
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Signed-off-by: Keith Busch <keith.busch@intel.com>
+[hch: split from a larger patch]
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+
+(cherry picked from commit 77bf25ea70200cddf083f74b7f617e5f07fac8bd)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/pci.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index f8f5cb6..4993181 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -31,6 +31,7 @@
+ #include <linux/mm.h>
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
++#include <linux/mutex.h>
+ #include <linux/pci.h>
+ #include <linux/poison.h>
+ #include <linux/ptrace.h>
+@@ -113,6 +114,7 @@ struct nvme_dev {
+ 	struct work_struct reset_work;
+ 	struct work_struct probe_work;
+ 	struct work_struct scan_work;
++	struct mutex shutdown_lock;
+ 	bool subsystem;
+ 	void __iomem *cmb;
+ 	dma_addr_t cmb_dma_addr;
+@@ -2085,6 +2087,7 @@ static void nvme_dev_shutdown(struct nvme_dev *dev)
+ 
+ 	nvme_dev_list_remove(dev);
+ 
++	mutex_lock(&dev->shutdown_lock);
+ 	if (dev->bar) {
+ 		nvme_freeze_queues(dev);
+ 		csts = readl(dev->bar + NVME_REG_CSTS);
+@@ -2103,6 +2106,7 @@ static void nvme_dev_shutdown(struct nvme_dev *dev)
+ 
+ 	for (i = dev->queue_count - 1; i >= 0; i--)
+ 		nvme_clear_queue(dev->queues[i]);
++	mutex_unlock(&dev->shutdown_lock);
+ }
+ 
+ static int nvme_setup_prp_pools(struct nvme_dev *dev)
+@@ -2345,6 +2349,7 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 	INIT_WORK(&dev->scan_work, nvme_dev_scan);
+ 	INIT_WORK(&dev->probe_work, nvme_probe_work);
+ 	INIT_WORK(&dev->reset_work, nvme_reset_work);
++	mutex_init(&dev->shutdown_lock);
+ 
+ 	result = nvme_setup_prp_pools(dev);
+ 	if (result)
+-- 
+1.9.3
+

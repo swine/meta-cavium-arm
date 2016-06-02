@@ -1,0 +1,52 @@
+From 42e60d1f5769807550cca09b504b5c5ba3cf2fad Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Christian=20K=C3=B6nig?= <christian.koenig@amd.com>
+Date: Mon, 11 Jan 2016 15:35:18 +0100
+Subject: [PATCH 1380/1767] drm/ttm: fix adding foreign BOs to the LRU during
+ init v2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+If we import a BO with an external reservation object we don't
+reserve/unreserve it. So we never add it to the LRU causing a possible
+denial of service.
+
+v2: fix typo in commit message
+
+Reviewed-by: Thomas Hellstrom <thellstrom@vmware.com>
+Signed-off-by: Christian König <christian.koenig@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 33d48cf8256f2b72e4082a7996c04bf1e78fce81)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/ttm/ttm_bo.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/ttm/ttm_bo.c b/drivers/gpu/drm/ttm/ttm_bo.c
+index 745e996..a98a5d5 100644
+--- a/drivers/gpu/drm/ttm/ttm_bo.c
++++ b/drivers/gpu/drm/ttm/ttm_bo.c
+@@ -1170,9 +1170,15 @@ int ttm_bo_init(struct ttm_bo_device *bdev,
+ 	if (likely(!ret))
+ 		ret = ttm_bo_validate(bo, placement, interruptible, false);
+ 
+-	if (!resv)
++	if (!resv) {
+ 		ttm_bo_unreserve(bo);
+ 
++	} else if (!(bo->mem.placement & TTM_PL_FLAG_NO_EVICT)) {
++		spin_lock(&bo->glob->lru_lock);
++		ttm_bo_add_to_lru(bo);
++		spin_unlock(&bo->glob->lru_lock);
++	}
++
+ 	if (unlikely(ret))
+ 		ttm_bo_unref(&bo);
+ 
+-- 
+1.9.3
+

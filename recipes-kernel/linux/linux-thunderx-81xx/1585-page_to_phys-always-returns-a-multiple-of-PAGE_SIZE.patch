@@ -1,0 +1,33 @@
+From 46799a584fd6a360d69129dfe9cf00b6968ef100 Mon Sep 17 00:00:00 2001
+From: Al Viro <viro@zeniv.linux.org.uk>
+Date: Sat, 9 Jan 2016 02:16:04 -0500
+Subject: [PATCH 1585/1767] page_to_phys() always returns a multiple of
+ PAGE_SIZE
+
+BugLink: http://bugs.launchpad.net/bugs/1558624
+
+Acked-by: Martin Schwidefsky <schwidefsky@de.ibm.com>
+Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+(cherry picked from commit bdb97e91e0140230bda9a83f6dbaa29b0c2e0522)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/s390/pci/pci_dma.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/arch/s390/pci/pci_dma.c b/arch/s390/pci/pci_dma.c
+index d348f2c..32da0a6 100644
+--- a/arch/s390/pci/pci_dma.c
++++ b/arch/s390/pci/pci_dma.c
+@@ -366,8 +366,7 @@ static void *s390_dma_alloc(struct device *dev, size_t size,
+ 	pa = page_to_phys(page);
+ 	memset((void *) pa, 0, size);
+ 
+-	map = s390_dma_map_pages(dev, page, pa % PAGE_SIZE,
+-				 size, DMA_BIDIRECTIONAL, NULL);
++	map = s390_dma_map_pages(dev, page, 0, size, DMA_BIDIRECTIONAL, NULL);
+ 	if (dma_mapping_error(dev, map)) {
+ 		free_pages(pa, get_order(size));
+ 		return NULL;
+-- 
+1.9.3
+

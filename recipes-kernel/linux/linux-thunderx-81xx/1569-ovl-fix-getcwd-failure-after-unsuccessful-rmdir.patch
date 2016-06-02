@@ -1,0 +1,42 @@
+From 34c753657ac83c570bc579d815ff3aebc83f8bd7 Mon Sep 17 00:00:00 2001
+From: Rui Wang <rui.y.wang@intel.com>
+Date: Fri, 8 Jan 2016 23:09:59 +0800
+Subject: [PATCH 1569/1767] ovl: fix getcwd() failure after unsuccessful rmdir
+
+BugLink: http://bugs.launchpad.net/bugs/1558330
+
+commit ce9113bbcbf45a57c082d6603b9a9f342be3ef74 upstream.
+
+ovl_remove_upper() should do d_drop() only after it successfully
+removes the dir, otherwise a subsequent getcwd() system call will
+fail, breaking userspace programs.
+
+This is to fix: https://bugzilla.kernel.org/show_bug.cgi?id=110491
+
+Signed-off-by: Rui Wang <rui.y.wang@intel.com>
+Reviewed-by: Konstantin Khlebnikov <koct9i@gmail.com>
+Signed-off-by: Miklos Szeredi <miklos@szeredi.hu>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/overlayfs/dir.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/fs/overlayfs/dir.c b/fs/overlayfs/dir.c
+index f260721..25b9e02 100644
+--- a/fs/overlayfs/dir.c
++++ b/fs/overlayfs/dir.c
+@@ -650,7 +650,8 @@ static int ovl_remove_upper(struct dentry *dentry, bool is_dir)
+ 	 * sole user of this dentry.  Too tricky...  Just unhash for
+ 	 * now.
+ 	 */
+-	d_drop(dentry);
++	if (!err)
++		d_drop(dentry);
+ 	mutex_unlock(&dir->i_mutex);
+ 
+ 	return err;
+-- 
+1.9.3
+

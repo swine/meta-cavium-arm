@@ -1,0 +1,89 @@
+From a268dc8c3eff121d57078816922766a2bb8e4223 Mon Sep 17 00:00:00 2001
+From: Mark Rutland <mark.rutland@arm.com>
+Date: Wed, 28 Oct 2015 12:32:17 +0000
+Subject: [PATCH 1644/1767] drivers/perf: kill armpmu_register
+
+BugLink: http://bugs.launchpad.net/bugs/1559350
+
+Nothing outside of drivers/perf/arm_pmu.c should call armpmu_register
+any more, so it no longer needs to be in include/linux/perf/arm_pmu.h.
+Additionally, by folding it in to arm_pmu_device_probe we can allow
+drivers to override struct pmu fields without getting blatted by the
+armpmu code.
+
+This patch folds armpmu_register into arm_pmu_device_probe. The logging
+to the console is moved to after the PMU is successfully registered with
+the core perf code.
+
+Signed-off-by: Mark Rutland <mark.rutland@arm.com>
+Suggested-by: Will Deacon <will.deacon@arm.com>
+Cc: Drew Richardson <drew.richardson@arm.com>
+Cc: Pawel Moll <pawel.moll@arm.com>
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+(cherry picked from commit 86cb273b601488fb02d5706c61a09ee267474aad)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/perf/arm_pmu.c       | 15 ++++++---------
+ include/linux/perf/arm_pmu.h |  2 --
+ 2 files changed, 6 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/perf/arm_pmu.c b/drivers/perf/arm_pmu.c
+index be3755c..166637f 100644
+--- a/drivers/perf/arm_pmu.c
++++ b/drivers/perf/arm_pmu.c
+@@ -551,14 +551,6 @@ static void armpmu_init(struct arm_pmu *armpmu)
+ 	};
+ }
+ 
+-int armpmu_register(struct arm_pmu *armpmu, int type)
+-{
+-	armpmu_init(armpmu);
+-	pr_info("enabled with %s PMU driver, %d counters available\n",
+-			armpmu->name, armpmu->num_events);
+-	return perf_pmu_register(&armpmu->pmu, armpmu->name, type);
+-}
+-
+ /* Set at runtime when we know what CPU type we are. */
+ static struct arm_pmu *__oprofile_cpu_pmu;
+ 
+@@ -887,6 +879,8 @@ int arm_pmu_device_probe(struct platform_device *pdev,
+ 		return -ENOMEM;
+ 	}
+ 
++	armpmu_init(pmu);
++
+ 	if (!__oprofile_cpu_pmu)
+ 		__oprofile_cpu_pmu = pmu;
+ 
+@@ -912,10 +906,13 @@ int arm_pmu_device_probe(struct platform_device *pdev,
+ 	if (ret)
+ 		goto out_free;
+ 
+-	ret = armpmu_register(pmu, -1);
++	ret = perf_pmu_register(&pmu->pmu, pmu->name, -1);
+ 	if (ret)
+ 		goto out_destroy;
+ 
++	pr_info("enabled with %s PMU driver, %d counters available\n",
++			pmu->name, pmu->num_events);
++
+ 	return 0;
+ 
+ out_destroy:
+diff --git a/include/linux/perf/arm_pmu.h b/include/linux/perf/arm_pmu.h
+index bfa673b..83b5e34 100644
+--- a/include/linux/perf/arm_pmu.h
++++ b/include/linux/perf/arm_pmu.h
+@@ -111,8 +111,6 @@ struct arm_pmu {
+ 
+ #define to_arm_pmu(p) (container_of(p, struct arm_pmu, pmu))
+ 
+-int armpmu_register(struct arm_pmu *armpmu, int type);
+-
+ u64 armpmu_event_update(struct perf_event *event);
+ 
+ int armpmu_event_set_period(struct perf_event *event);
+-- 
+1.9.3
+

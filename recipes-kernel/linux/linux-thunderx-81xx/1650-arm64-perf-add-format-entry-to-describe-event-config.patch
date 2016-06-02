@@ -1,0 +1,67 @@
+From 87a5c1a2bbaf1b332d8491e0a5de4b63d6457c56 Mon Sep 17 00:00:00 2001
+From: Will Deacon <will.deacon@arm.com>
+Date: Tue, 22 Dec 2015 14:42:57 +0000
+Subject: [PATCH 1650/1767] arm64: perf: add format entry to describe event ->
+ config mapping
+
+BugLink: http://bugs.launchpad.net/bugs/1559350
+
+It's all very well providing an events directory to userspace that
+details our events in terms of "event=0xNN", but if we don't define how
+to encode the "event" field in the perf attr.config, then it's a waste
+of time.
+
+This patch adds a single format entry to describe that the event field
+occupies the bottom 10 bits of our config field on ARMv8 (PMUv3).
+
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+(cherry picked from commit 57d74123954dfe70fad12724d19f743ed14cec90)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/arm64/kernel/perf_event.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/kernel/perf_event.c b/arch/arm64/kernel/perf_event.c
+index f0356a8..6fdcfb6 100644
+--- a/arch/arm64/kernel/perf_event.c
++++ b/arch/arm64/kernel/perf_event.c
+@@ -297,7 +297,7 @@ static struct attribute *armv8_pmuv3_event_attrs[] = {
+ 	&armv8_event_attr_l21_tlb_refill.attr.attr,
+ 	&armv8_event_attr_l2d_tlb.attr.attr,
+ 	&armv8_event_attr_l21_tlb.attr.attr,
+-	NULL
++	NULL,
+ };
+ 
+ static struct attribute_group armv8_pmuv3_events_attr_group = {
+@@ -305,11 +305,25 @@ static struct attribute_group armv8_pmuv3_events_attr_group = {
+ 	.attrs = armv8_pmuv3_event_attrs,
+ };
+ 
++PMU_FORMAT_ATTR(event, "config:0-9");
++
++static struct attribute *armv8_pmuv3_format_attrs[] = {
++	&format_attr_event.attr,
++	NULL,
++};
++
++static struct attribute_group armv8_pmuv3_format_attr_group = {
++	.name = "format",
++	.attrs = armv8_pmuv3_format_attrs,
++};
++
+ static const struct attribute_group *armv8_pmuv3_attr_groups[] = {
+ 	&armv8_pmuv3_events_attr_group,
+-	NULL
++	&armv8_pmuv3_format_attr_group,
++	NULL,
+ };
+ 
++
+ /*
+  * Perf Events' indices
+  */
+-- 
+1.9.3
+

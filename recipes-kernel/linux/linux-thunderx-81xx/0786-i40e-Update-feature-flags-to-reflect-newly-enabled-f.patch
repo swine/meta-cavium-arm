@@ -1,0 +1,59 @@
+From 3d7fd0ad188d7ab92a1625d1e2d3017e1b766c47 Mon Sep 17 00:00:00 2001
+From: Alexander Duyck <aduyck@mirantis.com>
+Date: Sun, 24 Jan 2016 21:17:50 -0800
+Subject: [PATCH 0786/1767] i40e: Update feature flags to reflect newly enabled
+ features
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+Recent changes should have enabled support for IPv6 based tunnels and
+support for TSO with outer UDP checksums.  As such we can update the
+feature flags to reflect that.
+
+In addition we can clean-up the flags that aren't needed such as SCTP and
+RXCSUM since having the bits there doesn't add any value.
+
+Signed-off-by: Alexander Duyck <aduyck@mirantis.com>
+Tested-by: Andrew Bowers <andrewx.bowers@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit bc5d252b363cca63b7ddc1e20dd8b8b242631006)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/i40e/i40e_main.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_main.c b/drivers/net/ethernet/intel/i40e/i40e_main.c
+index c3b0949..92753f4 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_main.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_main.c
+@@ -9023,10 +9023,14 @@ static int i40e_config_netdev(struct i40e_vsi *vsi)
+ 	np = netdev_priv(netdev);
+ 	np->vsi = vsi;
+ 
+-	netdev->hw_enc_features |= NETIF_F_IP_CSUM	  |
+-				   NETIF_F_GSO_UDP_TUNNEL |
+-				   NETIF_F_GSO_GRE	  |
+-				   NETIF_F_TSO		  |
++	netdev->hw_enc_features |= NETIF_F_IP_CSUM	       |
++				   NETIF_F_IPV6_CSUM	       |
++				   NETIF_F_TSO		       |
++				   NETIF_F_TSO6		       |
++				   NETIF_F_TSO_ECN	       |
++				   NETIF_F_GSO_GRE	       |
++				   NETIF_F_GSO_UDP_TUNNEL      |
++				   NETIF_F_GSO_UDP_TUNNEL_CSUM |
+ 				   0;
+ 
+ 	netdev->features = NETIF_F_SG		       |
+@@ -9048,6 +9052,8 @@ static int i40e_config_netdev(struct i40e_vsi *vsi)
+ 
+ 	if (!(pf->flags & I40E_FLAG_MFP_ENABLED))
+ 		netdev->features |= NETIF_F_NTUPLE;
++	if (pf->flags & I40E_FLAG_OUTER_UDP_CSUM_CAPABLE)
++		netdev->features |= NETIF_F_GSO_UDP_TUNNEL_CSUM;
+ 
+ 	/* copy netdev features into list of user selectable features */
+ 	netdev->hw_features |= netdev->features;
+-- 
+1.9.3
+

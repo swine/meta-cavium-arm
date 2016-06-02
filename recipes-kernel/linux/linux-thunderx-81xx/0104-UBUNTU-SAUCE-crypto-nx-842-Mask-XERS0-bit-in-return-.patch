@@ -1,0 +1,69 @@
+From dab9a7f95fb39f90740f1c6fe06da35de1424d8d Mon Sep 17 00:00:00 2001
+From: Haren Myneni <haren@linux.vnet.ibm.com>
+Date: Sun, 13 Dec 2015 03:30:41 -0800
+Subject: [PATCH 0104/1767] UBUNTU: SAUCE: crypto: nx-842 - Mask XERS0 bit in
+ return value
+
+BugLink: http://bugs.launchpad.net/bugs/1529666
+
+NX842 coprocessor sets 3rd bit in CR register with XER[S0] which is
+nothing to do with NX request. Since this bit can be set with other
+valuable return status, mast this bit.
+
+One of other bits (INITIATED, BUSY or REJECTED) will be returned for
+any given NX request.
+
+Signed-off-by: Haren Myneni <haren@us.ibm.com>
+Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+(cherry picked from linux-next commit 6333ed8f26cf77311088d2e2b7cf16d8480bcbb2)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/powerpc/include/asm/icswx.h   |  1 +
+ drivers/crypto/nx/nx-842-powernv.c | 12 ++++++++----
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/arch/powerpc/include/asm/icswx.h b/arch/powerpc/include/asm/icswx.h
+index 9f8402b..27e588f 100644
+--- a/arch/powerpc/include/asm/icswx.h
++++ b/arch/powerpc/include/asm/icswx.h
+@@ -164,6 +164,7 @@ struct coprocessor_request_block {
+ #define ICSWX_INITIATED		(0x8)
+ #define ICSWX_BUSY		(0x4)
+ #define ICSWX_REJECTED		(0x2)
++#define ICSWX_XERS0		(0x1)	/* undefined or set from XERSO. */
+ 
+ static inline int icswx(__be32 ccw, struct coprocessor_request_block *crb)
+ {
+diff --git a/drivers/crypto/nx/nx-842-powernv.c b/drivers/crypto/nx/nx-842-powernv.c
+index 3750e13..f069ba7 100644
+--- a/drivers/crypto/nx/nx-842-powernv.c
++++ b/drivers/crypto/nx/nx-842-powernv.c
+@@ -442,6 +442,14 @@ static int nx842_powernv_function(const unsigned char *in, unsigned int inlen,
+ 			     (unsigned int)ccw,
+ 			     (unsigned int)be32_to_cpu(crb->ccw));
+ 
++	/*
++	 * NX842 coprocessor sets 3rd bit in CR register with XER[S0].
++	 * XER[S0] is the integer summary overflow bit which is nothing
++	 * to do NX. Since this bit can be set with other return values,
++	 * mask this bit.
++	 */
++	ret &= ~ICSWX_XERS0;
++
+ 	switch (ret) {
+ 	case ICSWX_INITIATED:
+ 		ret = wait_for_csb(wmem, csb);
+@@ -454,10 +462,6 @@ static int nx842_powernv_function(const unsigned char *in, unsigned int inlen,
+ 		pr_err_ratelimited("ICSWX rejected\n");
+ 		ret = -EPROTO;
+ 		break;
+-	default:
+-		pr_err_ratelimited("Invalid ICSWX return code %x\n", ret);
+-		ret = -EPROTO;
+-		break;
+ 	}
+ 
+ 	if (!ret)
+-- 
+1.9.3
+

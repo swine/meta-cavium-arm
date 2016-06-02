@@ -1,0 +1,50 @@
+From 17bba59fdea075b3dee6e4d0d7371ea758060ba9 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Fri, 16 Oct 2015 07:58:46 +0200
+Subject: [PATCH 0408/1767] nvme: move the call to nvme_init_identify earlier
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+We want to record the identify and CAP values even if no I/O queue
+is available.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit ce4541f40a949cd9a9c9f308b1a6a86914ce6e1a)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/pci.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index f858374..468febb 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -1939,12 +1939,6 @@ static void nvme_dev_scan(struct work_struct *work)
+  */
+ static int nvme_dev_add(struct nvme_dev *dev)
+ {
+-	int res;
+-
+-	res = nvme_init_identify(&dev->ctrl);
+-	if (res)
+-		return res;
+-
+ 	if (!dev->tagset.tags) {
+ 		dev->tagset.ops = &nvme_mq_ops;
+ 		dev->tagset.nr_hw_queues = dev->online_queues - 1;
+@@ -2461,6 +2455,10 @@ static void nvme_probe_work(struct work_struct *work)
+ 	if (result)
+ 		goto disable;
+ 
++	result = nvme_init_identify(&dev->ctrl);
++	if (result)
++		goto free_tags;
++
+ 	result = nvme_setup_io_queues(dev);
+ 	if (result)
+ 		goto free_tags;
+-- 
+1.9.3
+

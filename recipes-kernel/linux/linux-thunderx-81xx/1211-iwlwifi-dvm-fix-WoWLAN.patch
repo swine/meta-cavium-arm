@@ -1,0 +1,51 @@
+From a158fe60be8b08617537d68885e3866d9e296f7e Mon Sep 17 00:00:00 2001
+From: Emmanuel Grumbach <emmanuel.grumbach@intel.com>
+Date: Sun, 20 Dec 2015 08:45:40 +0200
+Subject: [PATCH 1211/1767] iwlwifi: dvm: fix WoWLAN
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit a1cdb1c59c8c203de2731fc6910598ed19c97e41 upstream.
+
+My commit below introduced a mutex in the transport to
+prevent concurrent operations. To do so, it added a flag
+(is_down) to make sure the transport is in the right state.
+This uncoverred an bug that didn't cause any harm until
+now: iwldvm calls stop_device and then starts the firmware
+without calling start_hw in between. While this flow is
+fine from the device configuration point of view (register,
+etc...), it is now forbidden by the new is_down flag.
+This led to this error to appear:
+iwlwifi 0000:05:00.0: Can't start_fw since the HW hasn't been started
+and the suspend would fail.
+
+This fixes:
+https://bugzilla.kernel.org/show_bug.cgi?id=109591
+
+Reported-by: Bogdan Bogush <bogdan.s.bogush@gmail.com>
+Fixes=fa9f3281cbb1 ("iwlwifi: pcie: lock start_hw / start_fw / stop_device")
+Signed-off-by: Emmanuel Grumbach <emmanuel.grumbach@intel.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/wireless/iwlwifi/dvm/lib.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/net/wireless/iwlwifi/dvm/lib.c b/drivers/net/wireless/iwlwifi/dvm/lib.c
+index e18629a..0961f33 100644
+--- a/drivers/net/wireless/iwlwifi/dvm/lib.c
++++ b/drivers/net/wireless/iwlwifi/dvm/lib.c
+@@ -1154,6 +1154,9 @@ int iwlagn_suspend(struct iwl_priv *priv, struct cfg80211_wowlan *wowlan)
+ 
+ 	priv->ucode_loaded = false;
+ 	iwl_trans_stop_device(priv->trans);
++	ret = iwl_trans_start_hw(priv->trans);
++	if (ret)
++		goto out;
+ 
+ 	priv->wowlan = true;
+ 
+-- 
+1.9.3
+

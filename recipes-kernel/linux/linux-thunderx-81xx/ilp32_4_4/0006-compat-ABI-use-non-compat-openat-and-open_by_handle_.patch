@@ -1,0 +1,35 @@
+From 703e0e164e248df9f4a6d197f938424fe9153381 Mon Sep 17 00:00:00 2001
+From: Yury Norov <ynorov@caviumnetworks.com>
+Date: Tue, 24 May 2016 03:04:35 +0300
+Subject: [PATCH 06/24] compat ABI: use non-compat openat and open_by_handle_at
+ variants
+
+The only difference is that non-compat version forces O_LARGEFILE,
+and it should be the default behaviour for all architectures, as
+we don't support 32-bit off_t. The only exception is tile32, that
+continues with compat version of syscalls.
+
+Signed-off-by: Yury Norov <ynorov@caviumnetworks.com>
+Acked-by: Arnd Bergmann <arnd@arndb.de>
+Acked-by: Chris Metcalf <cmetcalf@ezchip.com> [for tile]
+---
+ arch/tile/kernel/compat.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/tile/kernel/compat.c b/arch/tile/kernel/compat.c
+index 4912084..489ae19 100644
+--- a/arch/tile/kernel/compat.c
++++ b/arch/tile/kernel/compat.c
+@@ -94,6 +94,9 @@ COMPAT_SYSCALL_DEFINE5(llseek, unsigned int, fd, unsigned int, offset_high,
+ #define compat_sys_readahead sys32_readahead
+ #define sys_llseek compat_sys_llseek
+ 
++#define sys_openat		compat_sys_openat
++#define sys_open_by_handle_at	compat_sys_open_by_handle_at
++
+ /* Call the assembly trampolines where necessary. */
+ #define compat_sys_rt_sigreturn _compat_sys_rt_sigreturn
+ #define sys_clone _sys_clone
+-- 
+1.9.1
+

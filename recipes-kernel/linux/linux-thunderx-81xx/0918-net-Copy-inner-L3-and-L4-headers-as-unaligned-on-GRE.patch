@@ -1,0 +1,45 @@
+From 9fa4e95de001eb7b2ca07a24275f602189af44db Mon Sep 17 00:00:00 2001
+From: Alexander Duyck <aduyck@mirantis.com>
+Date: Tue, 9 Feb 2016 06:14:43 -0800
+Subject: [PATCH 0918/1767] net: Copy inner L3 and L4 headers as unaligned on
+ GRE TEB
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+[ Upstream commit 78565208d73ca9b654fb9a6b142214d52eeedfd1 ]
+
+This patch corrects the unaligned accesses seen on GRE TEB tunnels when
+generating hash keys.  Specifically what this patch does is make it so that
+we force the use of skb_copy_bits when the GRE inner headers will be
+unaligned due to NET_IP_ALIGNED being a non-zero value.
+
+Signed-off-by: Alexander Duyck <aduyck@mirantis.com>
+Acked-by: Tom Herbert <tom@herbertland.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/core/flow_dissector.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/net/core/flow_dissector.c b/net/core/flow_dissector.c
+index d79699c..b258f45 100644
+--- a/net/core/flow_dissector.c
++++ b/net/core/flow_dissector.c
+@@ -396,6 +396,13 @@ ip_proto_again:
+ 				goto out_bad;
+ 			proto = eth->h_proto;
+ 			nhoff += sizeof(*eth);
++
++			/* Cap headers that we access via pointers at the
++			 * end of the Ethernet header as our maximum alignment
++			 * at that point is only 2 bytes.
++			 */
++			if (NET_IP_ALIGN)
++				hlen = nhoff;
+ 		}
+ 
+ 		key_control->flags |= FLOW_DIS_ENCAPSULATION;
+-- 
+1.9.3
+

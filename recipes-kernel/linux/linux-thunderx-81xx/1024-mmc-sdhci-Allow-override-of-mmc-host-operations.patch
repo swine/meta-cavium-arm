@@ -1,0 +1,65 @@
+From ccd58bc826220f67aca1cf191fcc3bd3bedf2b0b Mon Sep 17 00:00:00 2001
+From: Adrian Hunter <adrian.hunter@intel.com>
+Date: Tue, 9 Feb 2016 16:12:35 +0200
+Subject: [PATCH 1024/1767] mmc: sdhci: Allow override of mmc host operations
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit bf60e592a1af4d6f65dd54593250183f14360eed upstream.
+
+In the past, fixes for specific hardware devices were implemented
+in sdhci using quirks.  That approach is no longer accepted because
+the growing number of quirks was starting to make the code difficult
+to understand and maintain.
+
+One alternative to quirks, is to allow drivers to override the default
+mmc host operations.  This patch makes it easy to do that, and it is
+needed for a subsequent bug fix, for which separate patches are
+provided.
+
+Signed-off-by: Adrian Hunter <adrian.hunter@intel.com>
+Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/mmc/host/sdhci.c | 3 ++-
+ drivers/mmc/host/sdhci.h | 1 +
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/mmc/host/sdhci.c b/drivers/mmc/host/sdhci.c
+index 50088ea..9156d68 100644
+--- a/drivers/mmc/host/sdhci.c
++++ b/drivers/mmc/host/sdhci.c
+@@ -2864,6 +2864,8 @@ struct sdhci_host *sdhci_alloc_host(struct device *dev,
+ 
+ 	host = mmc_priv(mmc);
+ 	host->mmc = mmc;
++	host->mmc_host_ops = sdhci_ops;
++	mmc->ops = &host->mmc_host_ops;
+ 
+ 	return host;
+ }
+@@ -3053,7 +3055,6 @@ int sdhci_add_host(struct sdhci_host *host)
+ 	/*
+ 	 * Set host parameters.
+ 	 */
+-	mmc->ops = &sdhci_ops;
+ 	max_clk = host->max_clk;
+ 
+ 	if (host->ops->get_min_clock)
+diff --git a/drivers/mmc/host/sdhci.h b/drivers/mmc/host/sdhci.h
+index 7654ae5..0115e99 100644
+--- a/drivers/mmc/host/sdhci.h
++++ b/drivers/mmc/host/sdhci.h
+@@ -430,6 +430,7 @@ struct sdhci_host {
+ 
+ 	/* Internal data */
+ 	struct mmc_host *mmc;	/* MMC structure */
++	struct mmc_host_ops mmc_host_ops;	/* MMC host ops */
+ 	u64 dma_mask;		/* custom DMA mask */
+ 
+ #if defined(CONFIG_LEDS_CLASS) || defined(CONFIG_LEDS_CLASS_MODULE)
+-- 
+1.9.3
+

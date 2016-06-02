@@ -1,0 +1,1006 @@
+From a0896b32dae0d3b7ddeee903d8257d5107452ba8 Mon Sep 17 00:00:00 2001
+From: Rusty Russell <rusty@rustcorp.com.au>
+Date: Thu, 26 Nov 2015 09:44:08 +1030
+Subject: [PATCH 0654/1767] module: use a structure to encapsulate layout.
+
+Makes it easier to handle init vs core cleanly, though the change is
+fairly invasive across random architectures.
+
+It simplifies the rbtree code immediately, however, while keeping the
+core data together in the same cachline (now iff the rbtree code is
+enabled).
+
+Acked-by: Peter Zijlstra <peterz@infradead.org>
+Reviewed-by: Josh Poimboeuf <jpoimboe@redhat.com>
+Signed-off-by: Rusty Russell <rusty@rustcorp.com.au>
+Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+(cherry picked from commit 7523e4dc5057e157212b4741abd6256e03404cf1)
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/alpha/kernel/module.c      |   2 +-
+ arch/arc/kernel/unwind.c        |   4 +-
+ arch/arm/kernel/module-plts.c   |   2 +-
+ arch/avr32/kernel/module.c      |  12 +--
+ arch/ia64/kernel/module.c       |  14 +--
+ arch/metag/kernel/module.c      |   4 +-
+ arch/mips/kernel/vpe.c          |   6 +-
+ arch/parisc/kernel/module.c     |  32 +++----
+ arch/powerpc/kernel/module_32.c |   6 +-
+ arch/s390/kernel/module.c       |  22 ++---
+ arch/x86/kernel/livepatch.c     |   6 +-
+ include/linux/module.h          |  64 ++++++-------
+ kernel/debug/kdb/kdb_main.c     |   4 +-
+ kernel/module.c                 | 199 +++++++++++++++++++---------------------
+ 14 files changed, 178 insertions(+), 199 deletions(-)
+
+diff --git a/arch/alpha/kernel/module.c b/arch/alpha/kernel/module.c
+index 2fd00b7..936bc8f 100644
+--- a/arch/alpha/kernel/module.c
++++ b/arch/alpha/kernel/module.c
+@@ -160,7 +160,7 @@ apply_relocate_add(Elf64_Shdr *sechdrs, const char *strtab,
+ 
+ 	/* The small sections were sorted to the end of the segment.
+ 	   The following should definitely cover them.  */
+-	gp = (u64)me->module_core + me->core_size - 0x8000;
++	gp = (u64)me->core_layout.base + me->core_layout.size - 0x8000;
+ 	got = sechdrs[me->arch.gotsecindex].sh_addr;
+ 
+ 	for (i = 0; i < n; i++) {
+diff --git a/arch/arc/kernel/unwind.c b/arch/arc/kernel/unwind.c
+index 5eb7076..0587bf1 100644
+--- a/arch/arc/kernel/unwind.c
++++ b/arch/arc/kernel/unwind.c
+@@ -385,8 +385,8 @@ void *unwind_add_table(struct module *module, const void *table_start,
+ 		return NULL;
+ 
+ 	init_unwind_table(table, module->name,
+-			  module->module_core, module->core_size,
+-			  module->module_init, module->init_size,
++			  module->core_layout.base, module->core_layout.size,
++			  module->init_layout.base, module->init_layout.size,
+ 			  table_start, table_size,
+ 			  NULL, 0);
+ 
+diff --git a/arch/arm/kernel/module-plts.c b/arch/arm/kernel/module-plts.c
+index 097e2e2..0c7efc3 100644
+--- a/arch/arm/kernel/module-plts.c
++++ b/arch/arm/kernel/module-plts.c
+@@ -32,7 +32,7 @@ struct plt_entries {
+ 
+ static bool in_init(const struct module *mod, u32 addr)
+ {
+-	return addr - (u32)mod->module_init < mod->init_size;
++	return addr - (u32)mod->init_layout.base < mod->init_layout.size;
+ }
+ 
+ u32 get_module_plt(struct module *mod, unsigned long loc, Elf32_Addr val)
+diff --git a/arch/avr32/kernel/module.c b/arch/avr32/kernel/module.c
+index 164efa0..2b4c54c 100644
+--- a/arch/avr32/kernel/module.c
++++ b/arch/avr32/kernel/module.c
+@@ -118,9 +118,9 @@ int module_frob_arch_sections(Elf_Ehdr *hdr, Elf_Shdr *sechdrs,
+ 	 * Increase core size to make room for GOT and set start
+ 	 * offset for GOT.
+ 	 */
+-	module->core_size = ALIGN(module->core_size, 4);
+-	module->arch.got_offset = module->core_size;
+-	module->core_size += module->arch.got_size;
++	module->core_layout.size = ALIGN(module->core_layout.size, 4);
++	module->arch.got_offset = module->core_layout.size;
++	module->core_layout.size += module->arch.got_size;
+ 
+ 	return 0;
+ 
+@@ -177,7 +177,7 @@ int apply_relocate_add(Elf32_Shdr *sechdrs, const char *strtab,
+ 			if (!info->got_initialized) {
+ 				Elf32_Addr *gotent;
+ 
+-				gotent = (module->module_core
++				gotent = (module->core_layout.base
+ 					  + module->arch.got_offset
+ 					  + info->got_offset);
+ 				*gotent = relocation;
+@@ -255,8 +255,8 @@ int apply_relocate_add(Elf32_Shdr *sechdrs, const char *strtab,
+ 			 */
+ 			pr_debug("GOTPC: PC=0x%x, got_offset=0x%lx, core=0x%p\n",
+ 				 relocation, module->arch.got_offset,
+-				 module->module_core);
+-			relocation -= ((unsigned long)module->module_core
++				 module->core_layout.base);
++			relocation -= ((unsigned long)module->core_layout.base
+ 				       + module->arch.got_offset);
+ 			*location = relocation;
+ 			break;
+diff --git a/arch/ia64/kernel/module.c b/arch/ia64/kernel/module.c
+index b15933c..6ab0ae7 100644
+--- a/arch/ia64/kernel/module.c
++++ b/arch/ia64/kernel/module.c
+@@ -486,13 +486,13 @@ module_frob_arch_sections (Elf_Ehdr *ehdr, Elf_Shdr *sechdrs, char *secstrings,
+ static inline int
+ in_init (const struct module *mod, uint64_t addr)
+ {
+-	return addr - (uint64_t) mod->module_init < mod->init_size;
++	return addr - (uint64_t) mod->init_layout.base < mod->init_layout.size;
+ }
+ 
+ static inline int
+ in_core (const struct module *mod, uint64_t addr)
+ {
+-	return addr - (uint64_t) mod->module_core < mod->core_size;
++	return addr - (uint64_t) mod->core_layout.base < mod->core_layout.size;
+ }
+ 
+ static inline int
+@@ -675,7 +675,7 @@ do_reloc (struct module *mod, uint8_t r_type, Elf64_Sym *sym, uint64_t addend,
+ 		break;
+ 
+ 	      case RV_BDREL:
+-		val -= (uint64_t) (in_init(mod, val) ? mod->module_init : mod->module_core);
++		val -= (uint64_t) (in_init(mod, val) ? mod->init_layout.base : mod->core_layout.base);
+ 		break;
+ 
+ 	      case RV_LTV:
+@@ -810,15 +810,15 @@ apply_relocate_add (Elf64_Shdr *sechdrs, const char *strtab, unsigned int symind
+ 		 *     addresses have been selected...
+ 		 */
+ 		uint64_t gp;
+-		if (mod->core_size > MAX_LTOFF)
++		if (mod->core_layout.size > MAX_LTOFF)
+ 			/*
+ 			 * This takes advantage of fact that SHF_ARCH_SMALL gets allocated
+ 			 * at the end of the module.
+ 			 */
+-			gp = mod->core_size - MAX_LTOFF / 2;
++			gp = mod->core_layout.size - MAX_LTOFF / 2;
+ 		else
+-			gp = mod->core_size / 2;
+-		gp = (uint64_t) mod->module_core + ((gp + 7) & -8);
++			gp = mod->core_layout.size / 2;
++		gp = (uint64_t) mod->core_layout.base + ((gp + 7) & -8);
+ 		mod->arch.gp = gp;
+ 		DEBUGP("%s: placing gp at 0x%lx\n", __func__, gp);
+ 	}
+diff --git a/arch/metag/kernel/module.c b/arch/metag/kernel/module.c
+index 986331c..bb8dfba 100644
+--- a/arch/metag/kernel/module.c
++++ b/arch/metag/kernel/module.c
+@@ -176,8 +176,8 @@ static uint32_t do_plt_call(void *location, Elf32_Addr val,
+ 	tramp[1] = 0xac000001 | ((val & 0x0000ffff) << 3);
+ 
+ 	/* Init, or core PLT? */
+-	if (location >= mod->module_core
+-	    && location < mod->module_core + mod->core_size)
++	if (location >= mod->core_layout.base
++	    && location < mod->core_layout.base + mod->core_layout.size)
+ 		entry = (void *)sechdrs[mod->arch.core_plt_section].sh_addr;
+ 	else
+ 		entry = (void *)sechdrs[mod->arch.init_plt_section].sh_addr;
+diff --git a/arch/mips/kernel/vpe.c b/arch/mips/kernel/vpe.c
+index 9067b65..544ea21 100644
+--- a/arch/mips/kernel/vpe.c
++++ b/arch/mips/kernel/vpe.c
+@@ -205,11 +205,11 @@ static void layout_sections(struct module *mod, const Elf_Ehdr *hdr,
+ 			    || s->sh_entsize != ~0UL)
+ 				continue;
+ 			s->sh_entsize =
+-				get_offset((unsigned long *)&mod->core_size, s);
++				get_offset((unsigned long *)&mod->core_layout.size, s);
+ 		}
+ 
+ 		if (m == 0)
+-			mod->core_text_size = mod->core_size;
++			mod->core_layout.text_size = mod->core_layout.size;
+ 
+ 	}
+ }
+@@ -641,7 +641,7 @@ static int vpe_elfload(struct vpe *v)
+ 		layout_sections(&mod, hdr, sechdrs, secstrings);
+ 	}
+ 
+-	v->load_addr = alloc_progmem(mod.core_size);
++	v->load_addr = alloc_progmem(mod.core_layout.size);
+ 	if (!v->load_addr)
+ 		return -ENOMEM;
+ 
+diff --git a/arch/parisc/kernel/module.c b/arch/parisc/kernel/module.c
+index 3c63a82..b9d75d9 100644
+--- a/arch/parisc/kernel/module.c
++++ b/arch/parisc/kernel/module.c
+@@ -42,9 +42,9 @@
+  *      We are not doing SEGREL32 handling correctly. According to the ABI, we
+  *      should do a value offset, like this:
+  *			if (in_init(me, (void *)val))
+- *				val -= (uint32_t)me->module_init;
++ *				val -= (uint32_t)me->init_layout.base;
+  *			else
+- *				val -= (uint32_t)me->module_core;
++ *				val -= (uint32_t)me->core_layout.base;
+  *	However, SEGREL32 is used only for PARISC unwind entries, and we want
+  *	those entries to have an absolute address, and not just an offset.
+  *
+@@ -100,14 +100,14 @@
+  * or init pieces the location is */
+ static inline int in_init(struct module *me, void *loc)
+ {
+-	return (loc >= me->module_init &&
+-		loc <= (me->module_init + me->init_size));
++	return (loc >= me->init_layout.base &&
++		loc <= (me->init_layout.base + me->init_layout.size));
+ }
+ 
+ static inline int in_core(struct module *me, void *loc)
+ {
+-	return (loc >= me->module_core &&
+-		loc <= (me->module_core + me->core_size));
++	return (loc >= me->core_layout.base &&
++		loc <= (me->core_layout.base + me->core_layout.size));
+ }
+ 
+ static inline int in_local(struct module *me, void *loc)
+@@ -367,13 +367,13 @@ int module_frob_arch_sections(CONST Elf_Ehdr *hdr,
+ 	}
+ 
+ 	/* align things a bit */
+-	me->core_size = ALIGN(me->core_size, 16);
+-	me->arch.got_offset = me->core_size;
+-	me->core_size += gots * sizeof(struct got_entry);
++	me->core_layout.size = ALIGN(me->core_layout.size, 16);
++	me->arch.got_offset = me->core_layout.size;
++	me->core_layout.size += gots * sizeof(struct got_entry);
+ 
+-	me->core_size = ALIGN(me->core_size, 16);
+-	me->arch.fdesc_offset = me->core_size;
+-	me->core_size += fdescs * sizeof(Elf_Fdesc);
++	me->core_layout.size = ALIGN(me->core_layout.size, 16);
++	me->arch.fdesc_offset = me->core_layout.size;
++	me->core_layout.size += fdescs * sizeof(Elf_Fdesc);
+ 
+ 	me->arch.got_max = gots;
+ 	me->arch.fdesc_max = fdescs;
+@@ -391,7 +391,7 @@ static Elf64_Word get_got(struct module *me, unsigned long value, long addend)
+ 
+ 	BUG_ON(value == 0);
+ 
+-	got = me->module_core + me->arch.got_offset;
++	got = me->core_layout.base + me->arch.got_offset;
+ 	for (i = 0; got[i].addr; i++)
+ 		if (got[i].addr == value)
+ 			goto out;
+@@ -409,7 +409,7 @@ static Elf64_Word get_got(struct module *me, unsigned long value, long addend)
+ #ifdef CONFIG_64BIT
+ static Elf_Addr get_fdesc(struct module *me, unsigned long value)
+ {
+-	Elf_Fdesc *fdesc = me->module_core + me->arch.fdesc_offset;
++	Elf_Fdesc *fdesc = me->core_layout.base + me->arch.fdesc_offset;
+ 
+ 	if (!value) {
+ 		printk(KERN_ERR "%s: zero OPD requested!\n", me->name);
+@@ -427,7 +427,7 @@ static Elf_Addr get_fdesc(struct module *me, unsigned long value)
+ 
+ 	/* Create new one */
+ 	fdesc->addr = value;
+-	fdesc->gp = (Elf_Addr)me->module_core + me->arch.got_offset;
++	fdesc->gp = (Elf_Addr)me->core_layout.base + me->arch.got_offset;
+ 	return (Elf_Addr)fdesc;
+ }
+ #endif /* CONFIG_64BIT */
+@@ -839,7 +839,7 @@ register_unwind_table(struct module *me,
+ 
+ 	table = (unsigned char *)sechdrs[me->arch.unwind_section].sh_addr;
+ 	end = table + sechdrs[me->arch.unwind_section].sh_size;
+-	gp = (Elf_Addr)me->module_core + me->arch.got_offset;
++	gp = (Elf_Addr)me->core_layout.base + me->arch.got_offset;
+ 
+ 	DEBUGP("register_unwind_table(), sect = %d at 0x%p - 0x%p (gp=0x%lx)\n",
+ 	       me->arch.unwind_section, table, end, gp);
+diff --git a/arch/powerpc/kernel/module_32.c b/arch/powerpc/kernel/module_32.c
+index c94d2e0..2c01665 100644
+--- a/arch/powerpc/kernel/module_32.c
++++ b/arch/powerpc/kernel/module_32.c
+@@ -188,8 +188,8 @@ static uint32_t do_plt_call(void *location,
+ 
+ 	pr_debug("Doing plt for call to 0x%x at 0x%x\n", val, (unsigned int)location);
+ 	/* Init, or core PLT? */
+-	if (location >= mod->module_core
+-	    && location < mod->module_core + mod->core_size)
++	if (location >= mod->core_layout.base
++	    && location < mod->core_layout.base + mod->core_layout.size)
+ 		entry = (void *)sechdrs[mod->arch.core_plt_section].sh_addr;
+ 	else
+ 		entry = (void *)sechdrs[mod->arch.init_plt_section].sh_addr;
+@@ -296,7 +296,7 @@ int apply_relocate_add(Elf32_Shdr *sechdrs,
+ 	}
+ #ifdef CONFIG_DYNAMIC_FTRACE
+ 	module->arch.tramp =
+-		do_plt_call(module->module_core,
++		do_plt_call(module->core_layout.base,
+ 			    (unsigned long)ftrace_caller,
+ 			    sechdrs, module);
+ #endif
+diff --git a/arch/s390/kernel/module.c b/arch/s390/kernel/module.c
+index 0c1a679..7873e17 100644
+--- a/arch/s390/kernel/module.c
++++ b/arch/s390/kernel/module.c
+@@ -159,11 +159,11 @@ int module_frob_arch_sections(Elf_Ehdr *hdr, Elf_Shdr *sechdrs,
+ 
+ 	/* Increase core size by size of got & plt and set start
+ 	   offsets for got and plt. */
+-	me->core_size = ALIGN(me->core_size, 4);
+-	me->arch.got_offset = me->core_size;
+-	me->core_size += me->arch.got_size;
+-	me->arch.plt_offset = me->core_size;
+-	me->core_size += me->arch.plt_size;
++	me->core_layout.size = ALIGN(me->core_layout.size, 4);
++	me->arch.got_offset = me->core_layout.size;
++	me->core_layout.size += me->arch.got_size;
++	me->arch.plt_offset = me->core_layout.size;
++	me->core_layout.size += me->arch.plt_size;
+ 	return 0;
+ }
+ 
+@@ -279,7 +279,7 @@ static int apply_rela(Elf_Rela *rela, Elf_Addr base, Elf_Sym *symtab,
+ 		if (info->got_initialized == 0) {
+ 			Elf_Addr *gotent;
+ 
+-			gotent = me->module_core + me->arch.got_offset +
++			gotent = me->core_layout.base + me->arch.got_offset +
+ 				info->got_offset;
+ 			*gotent = val;
+ 			info->got_initialized = 1;
+@@ -302,7 +302,7 @@ static int apply_rela(Elf_Rela *rela, Elf_Addr base, Elf_Sym *symtab,
+ 			rc = apply_rela_bits(loc, val, 0, 64, 0);
+ 		else if (r_type == R_390_GOTENT ||
+ 			 r_type == R_390_GOTPLTENT) {
+-			val += (Elf_Addr) me->module_core - loc;
++			val += (Elf_Addr) me->core_layout.base - loc;
+ 			rc = apply_rela_bits(loc, val, 1, 32, 1);
+ 		}
+ 		break;
+@@ -315,7 +315,7 @@ static int apply_rela(Elf_Rela *rela, Elf_Addr base, Elf_Sym *symtab,
+ 	case R_390_PLTOFF64:	/* 16 bit offset from GOT to PLT. */
+ 		if (info->plt_initialized == 0) {
+ 			unsigned int *ip;
+-			ip = me->module_core + me->arch.plt_offset +
++			ip = me->core_layout.base + me->arch.plt_offset +
+ 				info->plt_offset;
+ 			ip[0] = 0x0d10e310; /* basr 1,0; lg 1,10(1); br 1 */
+ 			ip[1] = 0x100a0004;
+@@ -334,7 +334,7 @@ static int apply_rela(Elf_Rela *rela, Elf_Addr base, Elf_Sym *symtab,
+ 			       val - loc + 0xffffUL < 0x1ffffeUL) ||
+ 			      (r_type == R_390_PLT32DBL &&
+ 			       val - loc + 0xffffffffULL < 0x1fffffffeULL)))
+-				val = (Elf_Addr) me->module_core +
++				val = (Elf_Addr) me->core_layout.base +
+ 					me->arch.plt_offset +
+ 					info->plt_offset;
+ 			val += rela->r_addend - loc;
+@@ -356,7 +356,7 @@ static int apply_rela(Elf_Rela *rela, Elf_Addr base, Elf_Sym *symtab,
+ 	case R_390_GOTOFF32:	/* 32 bit offset to GOT.  */
+ 	case R_390_GOTOFF64:	/* 64 bit offset to GOT. */
+ 		val = val + rela->r_addend -
+-			((Elf_Addr) me->module_core + me->arch.got_offset);
++			((Elf_Addr) me->core_layout.base + me->arch.got_offset);
+ 		if (r_type == R_390_GOTOFF16)
+ 			rc = apply_rela_bits(loc, val, 0, 16, 0);
+ 		else if (r_type == R_390_GOTOFF32)
+@@ -366,7 +366,7 @@ static int apply_rela(Elf_Rela *rela, Elf_Addr base, Elf_Sym *symtab,
+ 		break;
+ 	case R_390_GOTPC:	/* 32 bit PC relative offset to GOT. */
+ 	case R_390_GOTPCDBL:	/* 32 bit PC rel. off. to GOT shifted by 1. */
+-		val = (Elf_Addr) me->module_core + me->arch.got_offset +
++		val = (Elf_Addr) me->core_layout.base + me->arch.got_offset +
+ 			rela->r_addend - loc;
+ 		if (r_type == R_390_GOTPC)
+ 			rc = apply_rela_bits(loc, val, 1, 32, 0);
+diff --git a/arch/x86/kernel/livepatch.c b/arch/x86/kernel/livepatch.c
+index d1d35cc..bcc06e8 100644
+--- a/arch/x86/kernel/livepatch.c
++++ b/arch/x86/kernel/livepatch.c
+@@ -41,8 +41,8 @@ int klp_write_module_reloc(struct module *mod, unsigned long type,
+ 	int ret, numpages, size = 4;
+ 	bool readonly;
+ 	unsigned long val;
+-	unsigned long core = (unsigned long)mod->module_core;
+-	unsigned long core_size = mod->core_size;
++	unsigned long core = (unsigned long)mod->core_layout.base;
++	unsigned long core_size = mod->core_layout.size;
+ 
+ 	switch (type) {
+ 	case R_X86_64_NONE:
+@@ -72,7 +72,7 @@ int klp_write_module_reloc(struct module *mod, unsigned long type,
+ 	readonly = false;
+ 
+ #ifdef CONFIG_DEBUG_SET_MODULE_RONX
+-	if (loc < core + mod->core_ro_size)
++	if (loc < core + mod->core_layout.ro_size)
+ 		readonly = true;
+ #endif
+ 
+diff --git a/include/linux/module.h b/include/linux/module.h
+index 3a19c79..6e68e8c 100644
+--- a/include/linux/module.h
++++ b/include/linux/module.h
+@@ -302,6 +302,28 @@ struct mod_tree_node {
+ 	struct latch_tree_node node;
+ };
+ 
++struct module_layout {
++	/* The actual code + data. */
++	void *base;
++	/* Total size. */
++	unsigned int size;
++	/* The size of the executable code.  */
++	unsigned int text_size;
++	/* Size of RO section of the module (text+rodata) */
++	unsigned int ro_size;
++
++#ifdef CONFIG_MODULES_TREE_LOOKUP
++	struct mod_tree_node mtn;
++#endif
++};
++
++#ifdef CONFIG_MODULES_TREE_LOOKUP
++/* Only touch one cacheline for common rbtree-for-core-layout case. */
++#define __module_layout_align ____cacheline_aligned
++#else
++#define __module_layout_align
++#endif
++
+ struct module {
+ 	enum module_state state;
+ 
+@@ -366,37 +388,9 @@ struct module {
+ 	/* Startup function. */
+ 	int (*init)(void);
+ 
+-	/*
+-	 * If this is non-NULL, vfree() after init() returns.
+-	 *
+-	 * Cacheline align here, such that:
+-	 *   module_init, module_core, init_size, core_size,
+-	 *   init_text_size, core_text_size and mtn_core::{mod,node[0]}
+-	 * are on the same cacheline.
+-	 */
+-	void *module_init	____cacheline_aligned;
+-
+-	/* Here is the actual code + data, vfree'd on unload. */
+-	void *module_core;
+-
+-	/* Here are the sizes of the init and core sections */
+-	unsigned int init_size, core_size;
+-
+-	/* The size of the executable code in each section.  */
+-	unsigned int init_text_size, core_text_size;
+-
+-#ifdef CONFIG_MODULES_TREE_LOOKUP
+-	/*
+-	 * We want mtn_core::{mod,node[0]} to be in the same cacheline as the
+-	 * above entries such that a regular lookup will only touch one
+-	 * cacheline.
+-	 */
+-	struct mod_tree_node	mtn_core;
+-	struct mod_tree_node	mtn_init;
+-#endif
+-
+-	/* Size of RO sections of the module (text+rodata) */
+-	unsigned int init_ro_size, core_ro_size;
++	/* Core layout: rbtree is accessed frequently, so keep together. */
++	struct module_layout core_layout __module_layout_align;
++	struct module_layout init_layout;
+ 
+ 	/* Arch-specific module values */
+ 	struct mod_arch_specific arch;
+@@ -505,15 +499,15 @@ bool is_module_text_address(unsigned long addr);
+ static inline bool within_module_core(unsigned long addr,
+ 				      const struct module *mod)
+ {
+-	return (unsigned long)mod->module_core <= addr &&
+-	       addr < (unsigned long)mod->module_core + mod->core_size;
++	return (unsigned long)mod->core_layout.base <= addr &&
++	       addr < (unsigned long)mod->core_layout.base + mod->core_layout.size;
+ }
+ 
+ static inline bool within_module_init(unsigned long addr,
+ 				      const struct module *mod)
+ {
+-	return (unsigned long)mod->module_init <= addr &&
+-	       addr < (unsigned long)mod->module_init + mod->init_size;
++	return (unsigned long)mod->init_layout.base <= addr &&
++	       addr < (unsigned long)mod->init_layout.base + mod->init_layout.size;
+ }
+ 
+ static inline bool within_module(unsigned long addr, const struct module *mod)
+diff --git a/kernel/debug/kdb/kdb_main.c b/kernel/debug/kdb/kdb_main.c
+index 4121345..2a20c0d 100644
+--- a/kernel/debug/kdb/kdb_main.c
++++ b/kernel/debug/kdb/kdb_main.c
+@@ -2021,7 +2021,7 @@ static int kdb_lsmod(int argc, const char **argv)
+ 			continue;
+ 
+ 		kdb_printf("%-20s%8u  0x%p ", mod->name,
+-			   mod->core_size, (void *)mod);
++			   mod->core_layout.size, (void *)mod);
+ #ifdef CONFIG_MODULE_UNLOAD
+ 		kdb_printf("%4d ", module_refcount(mod));
+ #endif
+@@ -2031,7 +2031,7 @@ static int kdb_lsmod(int argc, const char **argv)
+ 			kdb_printf(" (Loading)");
+ 		else
+ 			kdb_printf(" (Live)");
+-		kdb_printf(" 0x%p", mod->module_core);
++		kdb_printf(" 0x%p", mod->core_layout.base);
+ 
+ #ifdef CONFIG_MODULE_UNLOAD
+ 		{
+diff --git a/kernel/module.c b/kernel/module.c
+index 0ca6c9a..1a16e48 100644
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -108,13 +108,6 @@ static LIST_HEAD(modules);
+  * Use a latched RB-tree for __module_address(); this allows us to use
+  * RCU-sched lookups of the address from any context.
+  *
+- * Because modules have two address ranges: init and core, we need two
+- * latch_tree_nodes entries. Therefore we need the back-pointer from
+- * mod_tree_node.
+- *
+- * Because init ranges are short lived we mark them unlikely and have placed
+- * them outside the critical cacheline in struct module.
+- *
+  * This is conditional on PERF_EVENTS || TRACING because those can really hit
+  * __module_address() hard by doing a lot of stack unwinding; potentially from
+  * NMI context.
+@@ -122,24 +115,16 @@ static LIST_HEAD(modules);
+ 
+ static __always_inline unsigned long __mod_tree_val(struct latch_tree_node *n)
+ {
+-	struct mod_tree_node *mtn = container_of(n, struct mod_tree_node, node);
+-	struct module *mod = mtn->mod;
++	struct module_layout *layout = container_of(n, struct module_layout, mtn.node);
+ 
+-	if (unlikely(mtn == &mod->mtn_init))
+-		return (unsigned long)mod->module_init;
+-
+-	return (unsigned long)mod->module_core;
++	return (unsigned long)layout->base;
+ }
+ 
+ static __always_inline unsigned long __mod_tree_size(struct latch_tree_node *n)
+ {
+-	struct mod_tree_node *mtn = container_of(n, struct mod_tree_node, node);
+-	struct module *mod = mtn->mod;
+-
+-	if (unlikely(mtn == &mod->mtn_init))
+-		return (unsigned long)mod->init_size;
++	struct module_layout *layout = container_of(n, struct module_layout, mtn.node);
+ 
+-	return (unsigned long)mod->core_size;
++	return (unsigned long)layout->size;
+ }
+ 
+ static __always_inline bool
+@@ -197,23 +182,23 @@ static void __mod_tree_remove(struct mod_tree_node *node)
+  */
+ static void mod_tree_insert(struct module *mod)
+ {
+-	mod->mtn_core.mod = mod;
+-	mod->mtn_init.mod = mod;
++	mod->core_layout.mtn.mod = mod;
++	mod->init_layout.mtn.mod = mod;
+ 
+-	__mod_tree_insert(&mod->mtn_core);
+-	if (mod->init_size)
+-		__mod_tree_insert(&mod->mtn_init);
++	__mod_tree_insert(&mod->core_layout.mtn);
++	if (mod->init_layout.size)
++		__mod_tree_insert(&mod->init_layout.mtn);
+ }
+ 
+ static void mod_tree_remove_init(struct module *mod)
+ {
+-	if (mod->init_size)
+-		__mod_tree_remove(&mod->mtn_init);
++	if (mod->init_layout.size)
++		__mod_tree_remove(&mod->init_layout.mtn);
+ }
+ 
+ static void mod_tree_remove(struct module *mod)
+ {
+-	__mod_tree_remove(&mod->mtn_core);
++	__mod_tree_remove(&mod->core_layout.mtn);
+ 	mod_tree_remove_init(mod);
+ }
+ 
+@@ -267,9 +252,9 @@ static void __mod_update_bounds(void *base, unsigned int size)
+ 
+ static void mod_update_bounds(struct module *mod)
+ {
+-	__mod_update_bounds(mod->module_core, mod->core_size);
+-	if (mod->init_size)
+-		__mod_update_bounds(mod->module_init, mod->init_size);
++	__mod_update_bounds(mod->core_layout.base, mod->core_layout.size);
++	if (mod->init_layout.size)
++		__mod_update_bounds(mod->init_layout.base, mod->init_layout.size);
+ }
+ 
+ #ifdef CONFIG_KGDB_KDB
+@@ -1214,7 +1199,7 @@ struct module_attribute module_uevent =
+ static ssize_t show_coresize(struct module_attribute *mattr,
+ 			     struct module_kobject *mk, char *buffer)
+ {
+-	return sprintf(buffer, "%u\n", mk->mod->core_size);
++	return sprintf(buffer, "%u\n", mk->mod->core_layout.size);
+ }
+ 
+ static struct module_attribute modinfo_coresize =
+@@ -1223,7 +1208,7 @@ static struct module_attribute modinfo_coresize =
+ static ssize_t show_initsize(struct module_attribute *mattr,
+ 			     struct module_kobject *mk, char *buffer)
+ {
+-	return sprintf(buffer, "%u\n", mk->mod->init_size);
++	return sprintf(buffer, "%u\n", mk->mod->init_layout.size);
+ }
+ 
+ static struct module_attribute modinfo_initsize =
+@@ -1917,29 +1902,29 @@ static void set_section_ro_nx(void *base,
+ 
+ static void set_module_core_ro_nx(struct module *mod)
+ {
+-	set_section_ro_nx(mod->module_core, mod->core_text_size,
+-			  mod->core_ro_size, mod->core_size,
++	set_section_ro_nx(mod->core_layout.base, mod->core_layout.text_size,
++			  mod->core_layout.ro_size, mod->core_layout.size,
+ 			  set_memory_ro, set_memory_nx);
+ }
+ 
+ static void unset_module_core_ro_nx(struct module *mod)
+ {
+-	set_section_ro_nx(mod->module_core, mod->core_text_size,
+-			  mod->core_ro_size, mod->core_size,
++	set_section_ro_nx(mod->core_layout.base, mod->core_layout.text_size,
++			  mod->core_layout.ro_size, mod->core_layout.size,
+ 			  set_memory_rw, set_memory_x);
+ }
+ 
+ static void set_module_init_ro_nx(struct module *mod)
+ {
+-	set_section_ro_nx(mod->module_init, mod->init_text_size,
+-			  mod->init_ro_size, mod->init_size,
++	set_section_ro_nx(mod->init_layout.base, mod->init_layout.text_size,
++			  mod->init_layout.ro_size, mod->init_layout.size,
+ 			  set_memory_ro, set_memory_nx);
+ }
+ 
+ static void unset_module_init_ro_nx(struct module *mod)
+ {
+-	set_section_ro_nx(mod->module_init, mod->init_text_size,
+-			  mod->init_ro_size, mod->init_size,
++	set_section_ro_nx(mod->init_layout.base, mod->init_layout.text_size,
++			  mod->init_layout.ro_size, mod->init_layout.size,
+ 			  set_memory_rw, set_memory_x);
+ }
+ 
+@@ -1952,14 +1937,14 @@ void set_all_modules_text_rw(void)
+ 	list_for_each_entry_rcu(mod, &modules, list) {
+ 		if (mod->state == MODULE_STATE_UNFORMED)
+ 			continue;
+-		if ((mod->module_core) && (mod->core_text_size)) {
+-			set_page_attributes(mod->module_core,
+-						mod->module_core + mod->core_text_size,
++		if ((mod->core_layout.base) && (mod->core_layout.text_size)) {
++			set_page_attributes(mod->core_layout.base,
++						mod->core_layout.base + mod->core_layout.text_size,
+ 						set_memory_rw);
+ 		}
+-		if ((mod->module_init) && (mod->init_text_size)) {
+-			set_page_attributes(mod->module_init,
+-						mod->module_init + mod->init_text_size,
++		if ((mod->init_layout.base) && (mod->init_layout.text_size)) {
++			set_page_attributes(mod->init_layout.base,
++						mod->init_layout.base + mod->init_layout.text_size,
+ 						set_memory_rw);
+ 		}
+ 	}
+@@ -1975,14 +1960,14 @@ void set_all_modules_text_ro(void)
+ 	list_for_each_entry_rcu(mod, &modules, list) {
+ 		if (mod->state == MODULE_STATE_UNFORMED)
+ 			continue;
+-		if ((mod->module_core) && (mod->core_text_size)) {
+-			set_page_attributes(mod->module_core,
+-						mod->module_core + mod->core_text_size,
++		if ((mod->core_layout.base) && (mod->core_layout.text_size)) {
++			set_page_attributes(mod->core_layout.base,
++						mod->core_layout.base + mod->core_layout.text_size,
+ 						set_memory_ro);
+ 		}
+-		if ((mod->module_init) && (mod->init_text_size)) {
+-			set_page_attributes(mod->module_init,
+-						mod->module_init + mod->init_text_size,
++		if ((mod->init_layout.base) && (mod->init_layout.text_size)) {
++			set_page_attributes(mod->init_layout.base,
++						mod->init_layout.base + mod->init_layout.text_size,
+ 						set_memory_ro);
+ 		}
+ 	}
+@@ -2047,16 +2032,16 @@ static void free_module(struct module *mod)
+ 	/* This may be NULL, but that's OK */
+ 	unset_module_init_ro_nx(mod);
+ 	module_arch_freeing_init(mod);
+-	module_memfree(mod->module_init);
++	module_memfree(mod->init_layout.base);
+ 	kfree(mod->args);
+ 	percpu_modfree(mod);
+ 
+ 	/* Free lock-classes; relies on the preceding sync_rcu(). */
+-	lockdep_free_key_range(mod->module_core, mod->core_size);
++	lockdep_free_key_range(mod->core_layout.base, mod->core_layout.size);
+ 
+ 	/* Finally, free the core (containing the module structure) */
+ 	unset_module_core_ro_nx(mod);
+-	module_memfree(mod->module_core);
++	module_memfree(mod->core_layout.base);
+ 
+ #ifdef CONFIG_MPU
+ 	update_protections(current->mm);
+@@ -2259,20 +2244,20 @@ static void layout_sections(struct module *mod, struct load_info *info)
+ 			    || s->sh_entsize != ~0UL
+ 			    || strstarts(sname, ".init"))
+ 				continue;
+-			s->sh_entsize = get_offset(mod, &mod->core_size, s, i);
++			s->sh_entsize = get_offset(mod, &mod->core_layout.size, s, i);
+ 			pr_debug("\t%s\n", sname);
+ 		}
+ 		switch (m) {
+ 		case 0: /* executable */
+-			mod->core_size = debug_align(mod->core_size);
+-			mod->core_text_size = mod->core_size;
++			mod->core_layout.size = debug_align(mod->core_layout.size);
++			mod->core_layout.text_size = mod->core_layout.size;
+ 			break;
+ 		case 1: /* RO: text and ro-data */
+-			mod->core_size = debug_align(mod->core_size);
+-			mod->core_ro_size = mod->core_size;
++			mod->core_layout.size = debug_align(mod->core_layout.size);
++			mod->core_layout.ro_size = mod->core_layout.size;
+ 			break;
+ 		case 3: /* whole core */
+-			mod->core_size = debug_align(mod->core_size);
++			mod->core_layout.size = debug_align(mod->core_layout.size);
+ 			break;
+ 		}
+ 	}
+@@ -2288,21 +2273,21 @@ static void layout_sections(struct module *mod, struct load_info *info)
+ 			    || s->sh_entsize != ~0UL
+ 			    || !strstarts(sname, ".init"))
+ 				continue;
+-			s->sh_entsize = (get_offset(mod, &mod->init_size, s, i)
++			s->sh_entsize = (get_offset(mod, &mod->init_layout.size, s, i)
+ 					 | INIT_OFFSET_MASK);
+ 			pr_debug("\t%s\n", sname);
+ 		}
+ 		switch (m) {
+ 		case 0: /* executable */
+-			mod->init_size = debug_align(mod->init_size);
+-			mod->init_text_size = mod->init_size;
++			mod->init_layout.size = debug_align(mod->init_layout.size);
++			mod->init_layout.text_size = mod->init_layout.size;
+ 			break;
+ 		case 1: /* RO: text and ro-data */
+-			mod->init_size = debug_align(mod->init_size);
+-			mod->init_ro_size = mod->init_size;
++			mod->init_layout.size = debug_align(mod->init_layout.size);
++			mod->init_layout.ro_size = mod->init_layout.size;
+ 			break;
+ 		case 3: /* whole init */
+-			mod->init_size = debug_align(mod->init_size);
++			mod->init_layout.size = debug_align(mod->init_layout.size);
+ 			break;
+ 		}
+ 	}
+@@ -2477,7 +2462,7 @@ static void layout_symtab(struct module *mod, struct load_info *info)
+ 
+ 	/* Put symbol section at end of init part of module. */
+ 	symsect->sh_flags |= SHF_ALLOC;
+-	symsect->sh_entsize = get_offset(mod, &mod->init_size, symsect,
++	symsect->sh_entsize = get_offset(mod, &mod->init_layout.size, symsect,
+ 					 info->index.sym) | INIT_OFFSET_MASK;
+ 	pr_debug("\t%s\n", info->secstrings + symsect->sh_name);
+ 
+@@ -2494,16 +2479,16 @@ static void layout_symtab(struct module *mod, struct load_info *info)
+ 	}
+ 
+ 	/* Append room for core symbols at end of core part. */
+-	info->symoffs = ALIGN(mod->core_size, symsect->sh_addralign ?: 1);
+-	info->stroffs = mod->core_size = info->symoffs + ndst * sizeof(Elf_Sym);
+-	mod->core_size += strtab_size;
+-	mod->core_size = debug_align(mod->core_size);
++	info->symoffs = ALIGN(mod->core_layout.size, symsect->sh_addralign ?: 1);
++	info->stroffs = mod->core_layout.size = info->symoffs + ndst * sizeof(Elf_Sym);
++	mod->core_layout.size += strtab_size;
++	mod->core_layout.size = debug_align(mod->core_layout.size);
+ 
+ 	/* Put string table section at end of init part of module. */
+ 	strsect->sh_flags |= SHF_ALLOC;
+-	strsect->sh_entsize = get_offset(mod, &mod->init_size, strsect,
++	strsect->sh_entsize = get_offset(mod, &mod->init_layout.size, strsect,
+ 					 info->index.str) | INIT_OFFSET_MASK;
+-	mod->init_size = debug_align(mod->init_size);
++	mod->init_layout.size = debug_align(mod->init_layout.size);
+ 	pr_debug("\t%s\n", info->secstrings + strsect->sh_name);
+ }
+ 
+@@ -2524,8 +2509,8 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
+ 	for (i = 0; i < mod->num_symtab; i++)
+ 		mod->symtab[i].st_info = elf_type(&mod->symtab[i], info);
+ 
+-	mod->core_symtab = dst = mod->module_core + info->symoffs;
+-	mod->core_strtab = s = mod->module_core + info->stroffs;
++	mod->core_symtab = dst = mod->core_layout.base + info->symoffs;
++	mod->core_strtab = s = mod->core_layout.base + info->stroffs;
+ 	src = mod->symtab;
+ 	for (ndst = i = 0; i < mod->num_symtab; i++) {
+ 		if (i == 0 ||
+@@ -2975,7 +2960,7 @@ static int move_module(struct module *mod, struct load_info *info)
+ 	void *ptr;
+ 
+ 	/* Do the allocs. */
+-	ptr = module_alloc(mod->core_size);
++	ptr = module_alloc(mod->core_layout.size);
+ 	/*
+ 	 * The pointer to this block is stored in the module structure
+ 	 * which is inside the block. Just mark it as not being a
+@@ -2985,11 +2970,11 @@ static int move_module(struct module *mod, struct load_info *info)
+ 	if (!ptr)
+ 		return -ENOMEM;
+ 
+-	memset(ptr, 0, mod->core_size);
+-	mod->module_core = ptr;
++	memset(ptr, 0, mod->core_layout.size);
++	mod->core_layout.base = ptr;
+ 
+-	if (mod->init_size) {
+-		ptr = module_alloc(mod->init_size);
++	if (mod->init_layout.size) {
++		ptr = module_alloc(mod->init_layout.size);
+ 		/*
+ 		 * The pointer to this block is stored in the module structure
+ 		 * which is inside the block. This block doesn't need to be
+@@ -2998,13 +2983,13 @@ static int move_module(struct module *mod, struct load_info *info)
+ 		 */
+ 		kmemleak_ignore(ptr);
+ 		if (!ptr) {
+-			module_memfree(mod->module_core);
++			module_memfree(mod->core_layout.base);
+ 			return -ENOMEM;
+ 		}
+-		memset(ptr, 0, mod->init_size);
+-		mod->module_init = ptr;
++		memset(ptr, 0, mod->init_layout.size);
++		mod->init_layout.base = ptr;
+ 	} else
+-		mod->module_init = NULL;
++		mod->init_layout.base = NULL;
+ 
+ 	/* Transfer each section which specifies SHF_ALLOC */
+ 	pr_debug("final section addresses:\n");
+@@ -3016,10 +3001,10 @@ static int move_module(struct module *mod, struct load_info *info)
+ 			continue;
+ 
+ 		if (shdr->sh_entsize & INIT_OFFSET_MASK)
+-			dest = mod->module_init
++			dest = mod->init_layout.base
+ 				+ (shdr->sh_entsize & ~INIT_OFFSET_MASK);
+ 		else
+-			dest = mod->module_core + shdr->sh_entsize;
++			dest = mod->core_layout.base + shdr->sh_entsize;
+ 
+ 		if (shdr->sh_type != SHT_NOBITS)
+ 			memcpy(dest, (void *)shdr->sh_addr, shdr->sh_size);
+@@ -3081,12 +3066,12 @@ static void flush_module_icache(const struct module *mod)
+ 	 * Do it before processing of module parameters, so the module
+ 	 * can provide parameter accessor functions of its own.
+ 	 */
+-	if (mod->module_init)
+-		flush_icache_range((unsigned long)mod->module_init,
+-				   (unsigned long)mod->module_init
+-				   + mod->init_size);
+-	flush_icache_range((unsigned long)mod->module_core,
+-			   (unsigned long)mod->module_core + mod->core_size);
++	if (mod->init_layout.base)
++		flush_icache_range((unsigned long)mod->init_layout.base,
++				   (unsigned long)mod->init_layout.base
++				   + mod->init_layout.size);
++	flush_icache_range((unsigned long)mod->core_layout.base,
++			   (unsigned long)mod->core_layout.base + mod->core_layout.size);
+ 
+ 	set_fs(old_fs);
+ }
+@@ -3144,8 +3129,8 @@ static void module_deallocate(struct module *mod, struct load_info *info)
+ {
+ 	percpu_modfree(mod);
+ 	module_arch_freeing_init(mod);
+-	module_memfree(mod->module_init);
+-	module_memfree(mod->module_core);
++	module_memfree(mod->init_layout.base);
++	module_memfree(mod->core_layout.base);
+ }
+ 
+ int __weak module_finalize(const Elf_Ehdr *hdr,
+@@ -3232,7 +3217,7 @@ static noinline int do_init_module(struct module *mod)
+ 		ret = -ENOMEM;
+ 		goto fail;
+ 	}
+-	freeinit->module_init = mod->module_init;
++	freeinit->module_init = mod->init_layout.base;
+ 
+ 	/*
+ 	 * We want to find out whether @mod uses async during init.  Clear
+@@ -3292,10 +3277,10 @@ static noinline int do_init_module(struct module *mod)
+ 	mod_tree_remove_init(mod);
+ 	unset_module_init_ro_nx(mod);
+ 	module_arch_freeing_init(mod);
+-	mod->module_init = NULL;
+-	mod->init_size = 0;
+-	mod->init_ro_size = 0;
+-	mod->init_text_size = 0;
++	mod->init_layout.base = NULL;
++	mod->init_layout.size = 0;
++	mod->init_layout.ro_size = 0;
++	mod->init_layout.text_size = 0;
+ 	/*
+ 	 * We want to free module_init, but be aware that kallsyms may be
+ 	 * walking this with preempt disabled.  In all the failure paths, we
+@@ -3581,7 +3566,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
+ 	 */
+ 	ftrace_release_mod(mod);
+ 	/* Free lock-classes; relies on the preceding sync_rcu() */
+-	lockdep_free_key_range(mod->module_core, mod->core_size);
++	lockdep_free_key_range(mod->core_layout.base, mod->core_layout.size);
+ 
+ 	module_deallocate(mod, info);
+  free_copy:
+@@ -3664,9 +3649,9 @@ static const char *get_ksymbol(struct module *mod,
+ 
+ 	/* At worse, next value is at end of module */
+ 	if (within_module_init(addr, mod))
+-		nextval = (unsigned long)mod->module_init+mod->init_text_size;
++		nextval = (unsigned long)mod->init_layout.base+mod->init_layout.text_size;
+ 	else
+-		nextval = (unsigned long)mod->module_core+mod->core_text_size;
++		nextval = (unsigned long)mod->core_layout.base+mod->core_layout.text_size;
+ 
+ 	/* Scan for closest preceding symbol, and next symbol. (ELF
+ 	   starts real symbols at 1). */
+@@ -3912,7 +3897,7 @@ static int m_show(struct seq_file *m, void *p)
+ 		return 0;
+ 
+ 	seq_printf(m, "%s %u",
+-		   mod->name, mod->init_size + mod->core_size);
++		   mod->name, mod->init_layout.size + mod->core_layout.size);
+ 	print_unload_info(m, mod);
+ 
+ 	/* Informative for users. */
+@@ -3921,7 +3906,7 @@ static int m_show(struct seq_file *m, void *p)
+ 		   mod->state == MODULE_STATE_COMING ? "Loading" :
+ 		   "Live");
+ 	/* Used by oprofile and other similar tools. */
+-	seq_printf(m, " 0x%pK", mod->module_core);
++	seq_printf(m, " 0x%pK", mod->core_layout.base);
+ 
+ 	/* Taints info */
+ 	if (mod->taints)
+@@ -4064,8 +4049,8 @@ struct module *__module_text_address(unsigned long addr)
+ 	struct module *mod = __module_address(addr);
+ 	if (mod) {
+ 		/* Make sure it's within the text section. */
+-		if (!within(addr, mod->module_init, mod->init_text_size)
+-		    && !within(addr, mod->module_core, mod->core_text_size))
++		if (!within(addr, mod->init_layout.base, mod->init_layout.text_size)
++		    && !within(addr, mod->core_layout.base, mod->core_layout.text_size))
+ 			mod = NULL;
+ 	}
+ 	return mod;
+-- 
+1.9.3
+

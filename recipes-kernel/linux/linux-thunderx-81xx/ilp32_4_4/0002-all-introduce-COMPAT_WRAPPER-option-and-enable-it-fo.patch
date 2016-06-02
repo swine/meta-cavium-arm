@@ -1,0 +1,42 @@
+From 60e20cceb8833d62ee1609980809f089997555bb Mon Sep 17 00:00:00 2001
+From: Yury Norov <ynorov@caviumnetworks.com>
+Date: Tue, 24 May 2016 03:04:31 +0300
+Subject: [PATCH 02/24] all: introduce COMPAT_WRAPPER option and enable it for
+ s390
+
+Signed-off-by: Yury Norov <ynorov@caviumnetworks.com>
+---
+ arch/Kconfig      | 4 ++++
+ arch/s390/Kconfig | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/arch/Kconfig b/arch/Kconfig
+index 4e949e5..ab7692e 100644
+--- a/arch/Kconfig
++++ b/arch/Kconfig
+@@ -518,6 +518,10 @@ config HAVE_COPY_THREAD_TLS
+ 	  normal C parameter passing, rather than extracting the syscall
+ 	  argument from pt_regs.
+ 
++config COMPAT_WRAPPER
++	bool
++	depends on COMPAT
++
+ #
+ # ABI hall of shame
+ #
+diff --git a/arch/s390/Kconfig b/arch/s390/Kconfig
+index 3a55f49..88f48b0 100644
+--- a/arch/s390/Kconfig
++++ b/arch/s390/Kconfig
+@@ -336,6 +336,7 @@ config COMPAT
+ 	select COMPAT_BINFMT_ELF if BINFMT_ELF
+ 	select ARCH_WANT_OLD_COMPAT_IPC
+ 	select COMPAT_OLD_SIGACTION
++	select COMPAT_WRAPPER
+ 	depends on MULTIUSER
+ 	help
+ 	  Select this option if you want to enable your system kernel to
+-- 
+1.9.1
+

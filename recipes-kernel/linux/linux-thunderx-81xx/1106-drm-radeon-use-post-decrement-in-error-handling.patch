@@ -1,0 +1,42 @@
+From 9830f928b327f71434950f40523e82251c800967 Mon Sep 17 00:00:00 2001
+From: Rasmus Villemoes <linux@rasmusvillemoes.dk>
+Date: Mon, 15 Feb 2016 19:41:47 +0100
+Subject: [PATCH 1106/1767] drm/radeon: use post-decrement in error handling
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit bc3f5d8c4ca01555820617eb3b6c0857e4df710d upstream.
+
+We need to use post-decrement to get the pci_map_page undone also for
+i==0, and to avoid some very unpleasant behaviour if pci_map_page
+failed already at i==0.
+
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Signed-off-by: Rasmus Villemoes <linux@rasmusvillemoes.dk>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/radeon/radeon_ttm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/radeon/radeon_ttm.c b/drivers/gpu/drm/radeon/radeon_ttm.c
+index e343074..e06ac54 100644
+--- a/drivers/gpu/drm/radeon/radeon_ttm.c
++++ b/drivers/gpu/drm/radeon/radeon_ttm.c
+@@ -758,7 +758,7 @@ static int radeon_ttm_tt_populate(struct ttm_tt *ttm)
+ 						       0, PAGE_SIZE,
+ 						       PCI_DMA_BIDIRECTIONAL);
+ 		if (pci_dma_mapping_error(rdev->pdev, gtt->ttm.dma_address[i])) {
+-			while (--i) {
++			while (i--) {
+ 				pci_unmap_page(rdev->pdev, gtt->ttm.dma_address[i],
+ 					       PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
+ 				gtt->ttm.dma_address[i] = 0;
+-- 
+1.9.3
+

@@ -1,0 +1,40 @@
+From c404ab335e3331bb481912d357d23f2caade1037 Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Tue, 2 Feb 2016 18:22:24 -0500
+Subject: [PATCH 1408/1767] drm/amdgpu: disable uvd and vce clockgating on Fiji
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Doesn't work properly yet.
+
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Reviewed-by: Sonny Jiang <sonny.jiang@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 6357b75a5c356a9d8f91c614ab72ac5264a5932c)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/vi.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/vi.c b/drivers/gpu/drm/amd/amdgpu/vi.c
+index dcb5530..085d1ef 100644
+--- a/drivers/gpu/drm/amd/amdgpu/vi.c
++++ b/drivers/gpu/drm/amd/amdgpu/vi.c
+@@ -1443,8 +1443,7 @@ static int vi_common_early_init(void *handle)
+ 		break;
+ 	case CHIP_FIJI:
+ 		adev->has_uvd = true;
+-		adev->cg_flags = AMDGPU_CG_SUPPORT_UVD_MGCG |
+-				AMDGPU_CG_SUPPORT_VCE_MGCG;
++		adev->cg_flags = 0;
+ 		adev->pg_flags = 0;
+ 		adev->external_rev_id = adev->rev_id + 0x3c;
+ 		break;
+-- 
+1.9.3
+

@@ -1,0 +1,35 @@
+From 3495ca447231de46a6b35233e6ce338c217f371f Mon Sep 17 00:00:00 2001
+From: Ching Huang <ching2048@areca.com.tw>
+Date: Wed, 25 Nov 2015 19:52:15 +0800
+Subject: [PATCH 1660/1767] arcmsr: changes driver version number
+
+BugLink: http://bugs.launchpad.net/bugs/1559609
+
+Changes driver version number.
+
+Signed-off-by: Ching Huang <ching2048@areca.com.tw>
+Reviewed-by: Johannes Thumshirn <jthumshirn@suse.de>
+Reviewed-by: Hannes Reinicke <hare@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit d15dd55d049ccae9a1061e08ad377f9c799b8a3a)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/arcmsr/arcmsr.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/scsi/arcmsr/arcmsr.h b/drivers/scsi/arcmsr/arcmsr.h
+index 9c5a2a8..2356777 100644
+--- a/drivers/scsi/arcmsr/arcmsr.h
++++ b/drivers/scsi/arcmsr/arcmsr.h
+@@ -52,7 +52,7 @@ struct device_attribute;
+ 	#define ARCMSR_MAX_FREECCB_NUM	320
+ #define ARCMSR_MAX_OUTSTANDING_CMD	255
+ #endif
+-#define ARCMSR_DRIVER_VERSION		"v1.30.00.04-20140919"
++#define ARCMSR_DRIVER_VERSION		"v1.30.00.21-20151019"
+ #define ARCMSR_SCSI_INITIATOR_ID						255
+ #define ARCMSR_MAX_XFER_SECTORS							512
+ #define ARCMSR_MAX_XFER_SECTORS_B						4096
+-- 
+1.9.3
+

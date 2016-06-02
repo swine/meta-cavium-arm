@@ -1,0 +1,40 @@
+From 377477b7cc225cc5b1b764df84a78dd2b5811621 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 2 Dec 2015 03:33:02 -0800
+Subject: [PATCH 0871/1767] UBUNTU: SAUCE: apparmor: fix log of apparmor audit
+ message when kern_path() fails
+
+BugLink: http://bugs.launchpad.net/bugs/1482943
+
+apparmor use kern_path() to lookup the path of the dev_name, and when
+this fails apparmor emits a DENIED log message. However for bind and
+move mounts the underlying code does a call to kern_path() regardless
+of apparmor being present and so has the same failure.
+
+In these cases when kern_path() fails apparmor is not responsible for
+the mount failure as the kernel will fail the mount regarless of
+apparmor's presence, so just return the error and don't log an apparmor
+audit message.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/mount.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index 3239b3a..c9794fe 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -472,7 +472,7 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 			     buffer, &name, &info,
+ 			     labels_profile(label)->disconnected);
+ 	if (error)
+-		goto error;
++		goto out;
+ 
+ 	error = aa_path_name(&old_path, path_flags(labels_profile(label),
+ 						   &old_path),
+-- 
+1.9.3
+

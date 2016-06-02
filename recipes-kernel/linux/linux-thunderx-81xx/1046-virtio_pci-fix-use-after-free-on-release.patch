@@ -1,0 +1,51 @@
+From 2b9cf5ba052d7174832d514218f3a0951b4cd57c Mon Sep 17 00:00:00 2001
+From: "Michael S. Tsirkin" <mst@redhat.com>
+Date: Thu, 14 Jan 2016 16:00:41 +0200
+Subject: [PATCH 1046/1767] virtio_pci: fix use after free on release
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 2989be09a8a9d62a785137586ad941f916e08f83 upstream.
+
+KASan detected a use-after-free error in virtio-pci remove code. In
+virtio_pci_remove(), vp_dev is still used after being freed in
+unregister_virtio_device() (in virtio_pci_release_dev() more
+precisely).
+
+To fix, keep a reference until cleanup is done.
+
+Fixes: 63bd62a08ca4 ("virtio_pci: defer kfree until release callback")
+Reported-by: Jerome Marchand <jmarchan@redhat.com>
+Cc: Sasha Levin <sasha.levin@oracle.com>
+Signed-off-by: Michael S. Tsirkin <mst@redhat.com>
+Tested-by: Jerome Marchand <jmarchan@redhat.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/virtio/virtio_pci_common.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/virtio/virtio_pci_common.c b/drivers/virtio/virtio_pci_common.c
+index 78f804a..2046a68 100644
+--- a/drivers/virtio/virtio_pci_common.c
++++ b/drivers/virtio/virtio_pci_common.c
+@@ -545,6 +545,7 @@ err_enable_device:
+ static void virtio_pci_remove(struct pci_dev *pci_dev)
+ {
+ 	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
++	struct device *dev = get_device(&vp_dev->vdev.dev);
+ 
+ 	unregister_virtio_device(&vp_dev->vdev);
+ 
+@@ -554,6 +555,7 @@ static void virtio_pci_remove(struct pci_dev *pci_dev)
+ 		virtio_pci_modern_remove(vp_dev);
+ 
+ 	pci_disable_device(pci_dev);
++	put_device(dev);
+ }
+ 
+ static struct pci_driver virtio_pci_driver = {
+-- 
+1.9.3
+

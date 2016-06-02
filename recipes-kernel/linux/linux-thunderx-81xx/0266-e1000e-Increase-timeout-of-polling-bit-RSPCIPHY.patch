@@ -1,0 +1,33 @@
+From f3acde2a24552ec6d481999ea98183d46bfb5446 Mon Sep 17 00:00:00 2001
+From: Raanan Avargil <raanan.avargil@intel.com>
+Date: Thu, 15 Oct 2015 15:59:49 +0300
+Subject: [PATCH 0266/1767] e1000e: Increase timeout of polling bit RSPCIPHY
+
+Due to timing changes to the ME firmware in Skylake, this timer
+needs to be increased to 300ms.
+
+Signed-off-by: Raanan Avargil <raanan.avargil@intel.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit d17c7868b2f8e329dcee4ecd2f5d16cfc9b26ac8)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/e1000e/ich8lan.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/e1000e/ich8lan.c b/drivers/net/ethernet/intel/e1000e/ich8lan.c
+index 91a5a0a..64c1f36 100644
+--- a/drivers/net/ethernet/intel/e1000e/ich8lan.c
++++ b/drivers/net/ethernet/intel/e1000e/ich8lan.c
+@@ -1984,7 +1984,7 @@ static s32 e1000_check_reset_block_ich8lan(struct e1000_hw *hw)
+ 	int i = 0;
+ 
+ 	while ((blocked = !(er32(FWSM) & E1000_ICH_FWSM_RSPCIPHY)) &&
+-	       (i++ < 10))
++	       (i++ < 30))
+ 		usleep_range(10000, 20000);
+ 	return blocked ? E1000_BLK_PHY_RESET : 0;
+ }
+-- 
+1.9.3
+

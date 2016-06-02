@@ -1,0 +1,37 @@
+From 17d623ccace82ffcd32e1c20a9bbabf11bd1e2b9 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Wed, 28 Nov 2012 12:09:30 -0700
+Subject: [PATCH 0050/1767] UBUNTU: SAUCE: (no-up) Revert "VFS: don't do
+ protected {sym,hard}links by default"
+
+This reverts commit 561ec64ae67ef25cac8d72bb9c4bfc955edfd415.
+
+BugLink: http://bugs.launchpad.net/bugs/1084192
+
+Reverting this in the kernel as opposed to adding a sysctl
+to the procps package guarentees that this regression will be
+propagated to the Raring LTS kernel.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/namei.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/fs/namei.c b/fs/namei.c
+index 0c3974c..d17138f 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -865,8 +865,8 @@ static inline void put_link(struct nameidata *nd)
+ 		path_put(&last->link);
+ }
+ 
+-int sysctl_protected_symlinks __read_mostly = 0;
+-int sysctl_protected_hardlinks __read_mostly = 0;
++int sysctl_protected_symlinks __read_mostly = 1;
++int sysctl_protected_hardlinks __read_mostly = 1;
+ 
+ /**
+  * may_follow_link - Check symlink following for unsafe situations
+-- 
+1.9.3
+

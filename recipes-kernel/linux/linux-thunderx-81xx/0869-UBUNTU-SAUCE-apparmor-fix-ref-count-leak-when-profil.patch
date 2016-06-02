@@ -1,0 +1,27 @@
+From c2264e13f459c6c3d3fe6a887c0fe64ed373af74 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 18 Nov 2015 11:41:05 -0800
+Subject: [PATCH 0869/1767] UBUNTU: SAUCE: apparmor: fix: ref count leak when
+ profile sha1 hash is read
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index c5292a0..eba0807 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -490,6 +490,7 @@ static int aa_fs_seq_hash_show(struct seq_file *seq, void *v)
+ 			seq_printf(seq, "%.2x", profile->hash[i]);
+ 		seq_puts(seq, "\n");
+ 	}
++	aa_put_label(label);
+ 
+ 	return 0;
+ }
+-- 
+1.9.3
+

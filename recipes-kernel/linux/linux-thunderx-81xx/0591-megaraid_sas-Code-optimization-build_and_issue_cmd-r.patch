@@ -1,0 +1,73 @@
+From 9f80f37e09f4f6e8878107cff5e13a68ccd44d60 Mon Sep 17 00:00:00 2001
+From: Sumit Saxena <sumit.saxena@avagotech.com>
+Date: Thu, 28 Jan 2016 21:04:29 +0530
+Subject: [PATCH 0591/1767] megaraid_sas: Code optimization build_and_issue_cmd
+ return-type
+
+BugLink: http://bugs.launchpad.net/bugs/1544679
+
+build_and_issue_cmd should return SCSI_MLQUEUE_HOST_BUSY for a few error
+cases instead of returning 1.
+
+Signed-off-by: Sumit Saxena <sumit.saxena@avagotech.com>
+Reviewed-by: Tomas Henzl <thenzl@redhat.com>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from linux-next commit 6af29f582aae28bd3098cc1f6f037a8c4d49d5b9)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/megaraid/megaraid_sas_base.c   | 9 ++-------
+ drivers/scsi/megaraid/megaraid_sas_fusion.c | 4 ++--
+ 2 files changed, 4 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/scsi/megaraid/megaraid_sas_base.c b/drivers/scsi/megaraid/megaraid_sas_base.c
+index 8df58c2..edf8911 100644
+--- a/drivers/scsi/megaraid/megaraid_sas_base.c
++++ b/drivers/scsi/megaraid/megaraid_sas_base.c
+@@ -1636,7 +1636,7 @@ megasas_build_and_issue_cmd(struct megasas_instance *instance,
+ 	return 0;
+ out_return_cmd:
+ 	megasas_return_cmd(instance, cmd);
+-	return 1;
++	return SCSI_MLQUEUE_HOST_BUSY;
+ }
+ 
+ 
+@@ -1728,12 +1728,7 @@ megasas_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
+ 		break;
+ 	}
+ 
+-	if (instance->instancet->build_and_issue_cmd(instance, scmd)) {
+-		dev_err(&instance->pdev->dev, "Err returned from build_and_issue_cmd\n");
+-		return SCSI_MLQUEUE_HOST_BUSY;
+-	}
+-
+-	return 0;
++	return instance->instancet->build_and_issue_cmd(instance, scmd);
+ 
+  out_done:
+ 	scmd->scsi_done(scmd);
+diff --git a/drivers/scsi/megaraid/megaraid_sas_fusion.c b/drivers/scsi/megaraid/megaraid_sas_fusion.c
+index 1351cae..f553830 100644
+--- a/drivers/scsi/megaraid/megaraid_sas_fusion.c
++++ b/drivers/scsi/megaraid/megaraid_sas_fusion.c
+@@ -2125,7 +2125,7 @@ megasas_build_and_issue_cmd_fusion(struct megasas_instance *instance,
+ 
+ 	req_desc = megasas_get_request_descriptor(instance, index-1);
+ 	if (!req_desc)
+-		return 1;
++		return SCSI_MLQUEUE_HOST_BUSY;
+ 
+ 	req_desc->Words = 0;
+ 	cmd->request_desc = req_desc;
+@@ -2134,7 +2134,7 @@ megasas_build_and_issue_cmd_fusion(struct megasas_instance *instance,
+ 		megasas_return_cmd_fusion(instance, cmd);
+ 		dev_err(&instance->pdev->dev, "Error building command\n");
+ 		cmd->request_desc = NULL;
+-		return 1;
++		return SCSI_MLQUEUE_HOST_BUSY;
+ 	}
+ 
+ 	req_desc = cmd->request_desc;
+-- 
+1.9.3
+

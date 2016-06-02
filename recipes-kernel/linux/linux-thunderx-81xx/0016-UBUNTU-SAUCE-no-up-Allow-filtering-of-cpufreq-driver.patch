@@ -1,0 +1,77 @@
+From 84e7abb286d1ec9cc4e08b0b56f293c4c6208f20 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Tue, 24 Apr 2012 11:47:18 -0600
+Subject: [PATCH 0016/1767] UBUNTU: SAUCE: (no-up) Allow filtering of cpufreq
+ drivers
+
+Harmless patch that allows k8 powernow machines to boot. Carry until
+conflict.
+
+BugLink: http://bugs.launchpad.net/bugs/984288
+
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Acked-by: Herton Krzesinski <herton.krzesinski@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ Documentation/kernel-parameters.txt |  4 ++++
+ drivers/cpufreq/cpufreq.c           | 22 +++++++++++++++++++++-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
+index 742f69d..fb56bce 100644
+--- a/Documentation/kernel-parameters.txt
++++ b/Documentation/kernel-parameters.txt
+@@ -750,6 +750,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+ 			/proc/<pid>/coredump_filter.
+ 			See also Documentation/filesystems/proc.txt.
+ 
++	cpufreq_driver= [X86] Allow only the named cpu frequency scaling driver
++			to register. Example: cpufreq_driver=powernow-k8
++			Format: { none | STRING }
++
+ 	cpuidle.off=1	[CPU_IDLE]
+ 			disable the cpuidle sub-system
+ 
+diff --git a/drivers/cpufreq/cpufreq.c b/drivers/cpufreq/cpufreq.c
+index 8412ce5..ee8477c 100644
+--- a/drivers/cpufreq/cpufreq.c
++++ b/drivers/cpufreq/cpufreq.c
+@@ -2392,6 +2392,20 @@ EXPORT_SYMBOL_GPL(cpufreq_boost_enabled);
+  *               REGISTER / UNREGISTER CPUFREQ DRIVER                *
+  *********************************************************************/
+ 
++static char cpufreq_driver_name[CPUFREQ_NAME_LEN];
++
++static int __init cpufreq_driver_setup(char *str)
++{
++	strlcpy(cpufreq_driver_name, str, CPUFREQ_NAME_LEN);
++	return 1;
++}
++
++/*
++ * Set this name to only allow one specific cpu freq driver, e.g.,
++ * cpufreq_driver=powernow-k8
++ */
++__setup("cpufreq_driver=", cpufreq_driver_setup);
++
+ /**
+  * cpufreq_register_driver - register a CPU Frequency driver
+  * @driver_data: A struct cpufreq_driver containing the values#
+@@ -2418,7 +2432,13 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
+ 	     (!!driver_data->get_intermediate != !!driver_data->target_intermediate))
+ 		return -EINVAL;
+ 
+-	pr_debug("trying to register driver %s\n", driver_data->name);
++	pr_debug("trying to register driver %s, cpufreq_driver=%s\n",
++		driver_data->name, cpufreq_driver_name);
++
++	if (cpufreq_driver_name[0])
++		if (!driver_data->name ||
++			strcmp(cpufreq_driver_name, driver_data->name))
++				return -EINVAL;
+ 
+ 	/* Protect against concurrent CPU online/offline. */
+ 	get_online_cpus();
+-- 
+1.9.3
+

@@ -1,0 +1,48 @@
+From 052eae95f795112e7769d99a73a0890068c56ce3 Mon Sep 17 00:00:00 2001
+From: Rex Zhu <Rex.Zhu@amd.com>
+Date: Thu, 19 Nov 2015 13:46:01 +0800
+Subject: [PATCH 1316/1767] drm/amd/powerplay: add new function point in hwmgr.
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+1. for set_cpu_power_state
+2. restore display configuration
+
+Signed-off-by: Rex Zhu <Rex.Zhu@amd.com>
+Reviewed-by: Alex Deucher <alexander.deucher@amd.com>
+Reviewed-by: Jammy Zhou <Jammy.Zhou@amd.com>
+(cherry picked from commit 73c9f222889986d6f0ba0708115337a0284a5b61)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/inc/hwmgr.h | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/inc/hwmgr.h b/drivers/gpu/drm/amd/powerplay/inc/hwmgr.h
+index edb6ae6..ce9738b 100644
+--- a/drivers/gpu/drm/amd/powerplay/inc/hwmgr.h
++++ b/drivers/gpu/drm/amd/powerplay/inc/hwmgr.h
+@@ -313,6 +313,10 @@ struct pp_hwmgr_func {
+ 					const struct pp_hw_power_state *pstate1,
+ 					const struct pp_hw_power_state *pstate2,
+ 					bool *equal);
++	int (*set_cpu_power_state)(struct pp_hwmgr *hwmgr);
++	int (*store_cc6_data)(struct pp_hwmgr *hwmgr, uint32_t separation_time,
++				bool cc6_disable, bool pstate_disable,
++				bool pstate_switch_disable);
+ };
+ 
+ struct pp_table_func {
+@@ -576,7 +580,7 @@ struct pp_hwmgr {
+ 	const struct pp_hwmgr_func *hwmgr_func;
+ 	const struct pp_table_func *pptable_func;
+ 	struct pp_power_state    *ps;
+-        enum pp_power_source  power_source;
++	enum pp_power_source  power_source;
+ 	uint32_t num_ps;
+ 	struct pp_thermal_controller_info thermal_controller;
+ 	bool fan_ctrl_is_in_default_mode;
+-- 
+1.9.3
+

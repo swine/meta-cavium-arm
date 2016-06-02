@@ -1,0 +1,26 @@
+From c46a81fc3196527dc8e6ce89ad1f95127c7598f2 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Fri, 27 May 2016 17:27:16 -0700
+Subject: [PATCH 38/39] net:thunderx: Fix 88xx pass2 silicon check
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic.h b/drivers/net/ethernet/cavium/thunder/nic.h
+index d98c789..87def2a 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic.h
++++ b/drivers/net/ethernet/cavium/thunder/nic.h
+@@ -532,7 +532,7 @@ static inline bool pass1_silicon(struct pci_dev *pdev)
+ 
+ static inline bool pass2_silicon(struct pci_dev *pdev)
+ {
+-	return (pdev->revision == 8) &&
++	return (pdev->revision >= 8) &&
+ 		(pdev->subsystem_device == PCI_SUBSYS_DEVID_88XX_NIC_PF);
+ }
+ 
+-- 
+1.9.1
+

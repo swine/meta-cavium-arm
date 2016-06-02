@@ -1,0 +1,50 @@
+From 1cb16d738ea365ca655bfa58b6ee701144e89047 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Thu, 18 Feb 2016 17:50:12 +0100
+Subject: [PATCH 1655/1767] arm64: dts: Add Cavium ThunderX specific PMU
+
+BugLink: http://bugs.launchpad.net/bugs/1559349
+
+Add a compatible string for the Cavium ThunderX PMU.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+(cherry picked from linux-next commit 94085fe570e7b87597d4695e6fa77d4256efd29e)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ Documentation/devicetree/bindings/arm/pmu.txt | 1 +
+ arch/arm64/boot/dts/cavium/thunder-88xx.dtsi  | 5 +++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/arm/pmu.txt b/Documentation/devicetree/bindings/arm/pmu.txt
+index 97ba45a..ccf18f9 100644
+--- a/Documentation/devicetree/bindings/arm/pmu.txt
++++ b/Documentation/devicetree/bindings/arm/pmu.txt
+@@ -24,6 +24,7 @@ Required properties:
+ 	"qcom,scorpion-pmu"
+ 	"qcom,scorpion-mp-pmu"
+ 	"qcom,krait-pmu"
++	"cavium,thunder-pmu"
+ - interrupts : 1 combined interrupt or 1 per core. If the interrupt is a per-cpu
+                interrupt (PPI) then 1 interrupt should be specified.
+ 
+diff --git a/arch/arm64/boot/dts/cavium/thunder-88xx.dtsi b/arch/arm64/boot/dts/cavium/thunder-88xx.dtsi
+index 9cb7cf9..2eb9b22 100644
+--- a/arch/arm64/boot/dts/cavium/thunder-88xx.dtsi
++++ b/arch/arm64/boot/dts/cavium/thunder-88xx.dtsi
+@@ -360,6 +360,11 @@
+ 		             <1 10 0xff01>;
+ 	};
+ 
++	pmu {
++		compatible = "cavium,thunder-pmu", "arm,armv8-pmuv3";
++		interrupts = <1 7 4>;
++	};
++
+ 	soc {
+ 		compatible = "simple-bus";
+ 		#address-cells = <2>;
+-- 
+1.9.3
+

@@ -1,0 +1,35 @@
+From 384a92f7743c39640d0b1e0db09210ec8cff1e38 Mon Sep 17 00:00:00 2001
+From: Peter Hutterer <peter.hutterer@who-t.net>
+Date: Sat, 6 Feb 2016 21:28:05 -0600
+Subject: [PATCH 0517/1767] Input: wacom_w8001 - use __set_bit for evbits
+
+BugLink: http://bugs.launchpad.net/bugs/1542771
+
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+Acked-by: Benjamin Tissoires <benjamin.tissoires@gmail.com>
+Reviewed-by: Ping Cheng <pingc@wacom.com>
+Signed-off-by: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+(cherry picked from commit 86c03f46b9a40b251e4d97f461a13f8b1f18ae17)
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/input/touchscreen/wacom_w8001.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/input/touchscreen/wacom_w8001.c b/drivers/input/touchscreen/wacom_w8001.c
+index 2792ca3..d194d57 100644
+--- a/drivers/input/touchscreen/wacom_w8001.c
++++ b/drivers/input/touchscreen/wacom_w8001.c
+@@ -393,7 +393,8 @@ static int w8001_setup(struct w8001 *w8001)
+ 
+ 	msleep(250);	/* wait 250ms before querying the device */
+ 
+-	dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
++	__set_bit(EV_KEY, dev->evbit);
++	__set_bit(EV_ABS, dev->evbit);
+ 	strlcat(w8001->name, "Wacom Serial", sizeof(w8001->name));
+ 
+ 	__set_bit(INPUT_PROP_DIRECT, dev->propbit);
+-- 
+1.9.3
+

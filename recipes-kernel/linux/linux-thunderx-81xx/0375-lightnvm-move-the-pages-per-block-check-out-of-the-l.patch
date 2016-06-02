@@ -1,0 +1,56 @@
+From e490fde6dd127d5e76fdaab77eda992737f6510b Mon Sep 17 00:00:00 2001
+From: Wenwei Tao <ww.tao0320@gmail.com>
+Date: Tue, 12 Jan 2016 07:49:27 +0100
+Subject: [PATCH 0375/1767] lightnvm: move the pages per block check out of the
+ loop
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+There is no need to check whether dev's pages per block is
+beyond rrpc support every time we init a lun, we only need
+to check it once before enter the lun init loop.
+
+Signed-off-by: Wenwei Tao <ww.tao0320@gmail.com>
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 4b79beb4c36d697e940e9f70d72399c71230a418)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/rrpc.c | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index 745acd9..ec7aacf 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -1114,6 +1114,11 @@ static int rrpc_luns_init(struct rrpc *rrpc, int lun_begin, int lun_end)
+ 	struct rrpc_lun *rlun;
+ 	int i, j;
+ 
++	if (dev->pgs_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
++		pr_err("rrpc: number of pages per block too high.");
++		return -EINVAL;
++	}
++
+ 	spin_lock_init(&rrpc->rev_lock);
+ 
+ 	rrpc->luns = kcalloc(rrpc->nr_luns, sizeof(struct rrpc_lun),
+@@ -1125,12 +1130,6 @@ static int rrpc_luns_init(struct rrpc *rrpc, int lun_begin, int lun_end)
+ 	for (i = 0; i < rrpc->nr_luns; i++) {
+ 		struct nvm_lun *lun = dev->mt->get_lun(dev, lun_begin + i);
+ 
+-		if (dev->pgs_per_blk >
+-				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
+-			pr_err("rrpc: number of pages per block too high.");
+-			goto err;
+-		}
+-
+ 		rlun = &rrpc->luns[i];
+ 		rlun->rrpc = rrpc;
+ 		rlun->parent = lun;
+-- 
+1.9.3
+

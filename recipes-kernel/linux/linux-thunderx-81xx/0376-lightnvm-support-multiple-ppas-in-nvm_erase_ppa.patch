@@ -1,0 +1,74 @@
+From 7b4826c3325023ddcf6f44924f85453e4204bfc2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:28 +0100
+Subject: [PATCH 0376/1767] lightnvm: support multiple ppas in nvm_erase_ppa
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Sometimes a user want to erase multiple PPAs at the same time. Extend
+nvm_erase_ppa to take multiple ppas and number of ppas to be erased.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 81e681d3f7424fc2f03b6269e15c63131473c98f)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c   | 4 ++--
+ drivers/lightnvm/gennvm.c | 2 +-
+ include/linux/lightnvm.h  | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index 0c8f42f..cd674af 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -265,7 +265,7 @@ void nvm_free_rqd_ppalist(struct nvm_dev *dev, struct nvm_rq *rqd)
+ }
+ EXPORT_SYMBOL(nvm_free_rqd_ppalist);
+ 
+-int nvm_erase_ppa(struct nvm_dev *dev, struct ppa_addr ppa)
++int nvm_erase_ppa(struct nvm_dev *dev, struct ppa_addr *ppas, int nr_ppas)
+ {
+ 	struct nvm_rq rqd;
+ 	int ret;
+@@ -275,7 +275,7 @@ int nvm_erase_ppa(struct nvm_dev *dev, struct ppa_addr ppa)
+ 
+ 	memset(&rqd, 0, sizeof(struct nvm_rq));
+ 
+-	ret = nvm_set_rqd_ppalist(dev, &rqd, &ppa, 1);
++	ret = nvm_set_rqd_ppalist(dev, &rqd, ppas, nr_ppas);
+ 	if (ret)
+ 		return ret;
+ 
+diff --git a/drivers/lightnvm/gennvm.c b/drivers/lightnvm/gennvm.c
+index 12ddcaa..262da6d 100644
+--- a/drivers/lightnvm/gennvm.c
++++ b/drivers/lightnvm/gennvm.c
+@@ -396,7 +396,7 @@ static int gennvm_erase_blk(struct nvm_dev *dev, struct nvm_block *blk,
+ {
+ 	struct ppa_addr addr = block_to_ppa(dev, blk);
+ 
+-	return nvm_erase_ppa(dev, addr);
++	return nvm_erase_ppa(dev, &addr, 1);
+ }
+ 
+ static struct nvm_lun *gennvm_get_lun(struct nvm_dev *dev, int lunid)
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index 9c9fe9c..a83298f 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -435,7 +435,7 @@ extern void nvm_addr_to_generic_mode(struct nvm_dev *, struct nvm_rq *);
+ extern int nvm_set_rqd_ppalist(struct nvm_dev *, struct nvm_rq *,
+ 							struct ppa_addr *, int);
+ extern void nvm_free_rqd_ppalist(struct nvm_dev *, struct nvm_rq *);
+-extern int nvm_erase_ppa(struct nvm_dev *, struct ppa_addr);
++extern int nvm_erase_ppa(struct nvm_dev *, struct ppa_addr *, int);
+ extern int nvm_erase_blk(struct nvm_dev *, struct nvm_block *);
+ extern void nvm_end_io(struct nvm_rq *, int);
+ #else /* CONFIG_NVM */
+-- 
+1.9.3
+

@@ -1,0 +1,37 @@
+From 07278fb842967fa12e10f3035175b71214e97169 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Wed, 11 May 2016 17:53:44 -0700
+Subject: [PATCH 25/39] net: thunderx: Restrict TNS_BYPASS config to 88xx
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 9b214cf..8807ce8 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -391,11 +391,14 @@ static void nic_init_hw(struct nicpf *nic)
+ 	/* Enable backpressure */
+ 	nic_reg_write(nic, NIC_PF_BP_CFG, (1ULL << 6) | 0x03);
+ 
+-	/* Disable TNS mode on both interfaces */
+-	nic_reg_write(nic, NIC_PF_INTF_0_1_SEND_CFG,
+-		      (NIC_TNS_BYPASS_MODE << 7) | BGX0_BLOCK);
+-	nic_reg_write(nic, NIC_PF_INTF_0_1_SEND_CFG | (1 << 8),
+-		      (NIC_TNS_BYPASS_MODE << 7) | BGX1_BLOCK);
++	if (nic->pdev->subsystem_device == PCI_SUBSYS_DEVID_88XX_NIC_PF) {
++		/* Disable TNS mode on both interfaces */
++		nic_reg_write(nic, NIC_PF_INTF_0_1_SEND_CFG,
++			      (NIC_TNS_BYPASS_MODE << 7) | BGX0_BLOCK);
++		nic_reg_write(nic, NIC_PF_INTF_0_1_SEND_CFG | (1 << 8),
++			      (NIC_TNS_BYPASS_MODE << 7) | BGX1_BLOCK);
++	}
++
+ 	nic_reg_write(nic, NIC_PF_INTF_0_1_BP_CFG,
+ 		      (1ULL << 63) | BGX0_BLOCK);
+ 	nic_reg_write(nic, NIC_PF_INTF_0_1_BP_CFG + (1 << 8),
+-- 
+1.9.1
+

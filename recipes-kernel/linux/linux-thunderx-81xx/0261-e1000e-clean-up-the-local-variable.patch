@@ -1,0 +1,40 @@
+From 0006eea3b2945188ed8eb96d3ab18d8daf635de7 Mon Sep 17 00:00:00 2001
+From: Jean Sacren <sakiwit@gmail.com>
+Date: Sat, 19 Sep 2015 05:08:42 -0600
+Subject: [PATCH 0261/1767] e1000e: clean up the local variable
+
+The local variable 'ret' doesn't serve much purpose so we might as well
+clean it up.
+
+Signed-off-by: Jean Sacren <sakiwit@gmail.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 5a5e889c80cef7513a40143ee1e474acccdee13b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/e1000e/netdev.c | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/e1000e/netdev.c b/drivers/net/ethernet/intel/e1000e/netdev.c
+index 0a854a4..0003bf6 100644
+--- a/drivers/net/ethernet/intel/e1000e/netdev.c
++++ b/drivers/net/ethernet/intel/e1000e/netdev.c
+@@ -7504,14 +7504,11 @@ static struct pci_driver e1000_driver = {
+  **/
+ static int __init e1000_init_module(void)
+ {
+-	int ret;
+-
+ 	pr_info("Intel(R) PRO/1000 Network Driver - %s\n",
+ 		e1000e_driver_version);
+ 	pr_info("Copyright(c) 1999 - 2015 Intel Corporation.\n");
+-	ret = pci_register_driver(&e1000_driver);
+ 
+-	return ret;
++	return pci_register_driver(&e1000_driver);
+ }
+ module_init(e1000_init_module);
+ 
+-- 
+1.9.3
+

@@ -1,0 +1,31 @@
+From 6eb812e5874679e17f3fbb7024befea3af48a4d5 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:06:23 -0700
+Subject: [PATCH 1633/1767] Revert "UBUNTU: SAUCE: (no-up) apparmor: fix mount
+ not handling disconnected paths"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 1e7328d53e190f2971bc02f09a6fcee5d1c3d9aa.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/mount.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index b2d3354..ee6229df 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -332,7 +332,7 @@ audit:
+ static int path_flags(struct aa_profile *profile, struct path *path)
+ {
+ 	return profile->path_flags |
+-		(S_ISDIR(path->dentry->d_inode->i_mode) ? PATH_IS_DIR : 0);
++		S_ISDIR(path->dentry->d_inode->i_mode) ? PATH_IS_DIR : 0;
+ }
+ 
+ int aa_remount(struct aa_label *label, struct path *path, unsigned long flags,
+-- 
+1.9.3
+

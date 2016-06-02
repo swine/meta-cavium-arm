@@ -1,0 +1,53 @@
+From fdf0af1cd009611314569e4267680be9c31ab71e Mon Sep 17 00:00:00 2001
+From: Flora Cui <Flora.Cui@amd.com>
+Date: Thu, 4 Feb 2016 15:10:08 +0800
+Subject: [PATCH 1063/1767] drm/amdgpu: fix s4 resume
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit ca19852884c8937eed89560f924f5a34cfcc22af upstream.
+
+No need to re-init asic if it's already been initialized.
+Skip IB tests since kernel processes are frozen in thaw.
+
+Signed-off-by: Flora Cui <Flora.Cui@amd.com>
+Reviewed-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index 58cb698..c961fe0 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -1744,15 +1744,20 @@ int amdgpu_resume_kms(struct drm_device *dev, bool resume, bool fbcon)
+ 	}
+ 
+ 	/* post card */
+-	amdgpu_atom_asic_init(adev->mode_info.atom_context);
++	if (!amdgpu_card_posted(adev))
++		amdgpu_atom_asic_init(adev->mode_info.atom_context);
+ 
+ 	r = amdgpu_resume(adev);
++	if (r)
++		DRM_ERROR("amdgpu_resume failed (%d).\n", r);
+ 
+ 	amdgpu_fence_driver_resume(adev);
+ 
+-	r = amdgpu_ib_ring_tests(adev);
+-	if (r)
+-		DRM_ERROR("ib ring test failed (%d).\n", r);
++	if (resume) {
++		r = amdgpu_ib_ring_tests(adev);
++		if (r)
++			DRM_ERROR("ib ring test failed (%d).\n", r);
++	}
+ 
+ 	r = amdgpu_late_init(adev);
+ 	if (r)
+-- 
+1.9.3
+

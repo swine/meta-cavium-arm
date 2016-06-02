@@ -1,0 +1,28 @@
+From 27404d625e3270b98adc4ee207eb2f45e8e6b76c Mon Sep 17 00:00:00 2001
+From: Ganapatrao Kulkarni <gkulkarni@caviumnetworks.com>
+Date: Mon, 9 May 2016 17:16:55 -0700
+Subject: [PATCH 19/39] iommu/arm-smmu-v2: fixed minor bug of previous commit.
+
+fixed minor bug introduced while merge of 5f989a1e4b8f1f96044d36c7ba783c3af019bdfb
+
+Signed-off-by: Ganapatrao Kulkarni <gkulkarni@caviumnetworks.com>
+---
+ drivers/iommu/arm-smmu.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/iommu/arm-smmu.c b/drivers/iommu/arm-smmu.c
+index 20c9391..1508738 100644
+--- a/drivers/iommu/arm-smmu.c
++++ b/drivers/iommu/arm-smmu.c
+@@ -1671,7 +1671,7 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
+ 
+ 	/* See if 16bit VMID is supported */
+ 	if (id & ID2_VMID16)
+-		smmu->features = ARM_SMMU_FEAT_VMID16;
++		smmu->features |= ARM_SMMU_FEAT_VMID16;
+ 
+ 	/*
+ 	 * What the page table walker can address actually depends on which
+-- 
+1.9.1
+

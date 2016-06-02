@@ -1,0 +1,52 @@
+From 266798565b7bd808ced0961b10f850ed9b3b0cc9 Mon Sep 17 00:00:00 2001
+From: Dan Carpenter <dan.carpenter@oracle.com>
+Date: Mon, 4 Jan 2016 23:43:47 +0300
+Subject: [PATCH 1353/1767] drm/amdgpu/cgs: cleanup some indenting
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+This code is indented too far.  Also we normally use spaces to align if
+statement conditions.
+
+Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit b92c26d1808ccd2acac17b660dce750ba9b0a0db)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_cgs.c | 18 +++++++++---------
+ 1 file changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_cgs.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_cgs.c
+index 6fa0fea..59485d0 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_cgs.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_cgs.c
+@@ -843,15 +843,15 @@ static int amdgpu_cgs_acpi_eval_object(void *cgs_device,
+ 	if (info->input_count > 0) {
+ 		if (info->pinput_argument == NULL)
+ 			return -EINVAL;
+-			argument = info->pinput_argument;
+-			func_no = argument->value;
+-			for (i = 0; i < info->input_count; i++) {
+-				if (((argument->type == ACPI_TYPE_STRING) ||
+-					(argument->type == ACPI_TYPE_BUFFER))
+-					&& (argument->pointer == NULL))
+-					return -EINVAL;
+-				argument++;
+-			}
++		argument = info->pinput_argument;
++		func_no = argument->value;
++		for (i = 0; i < info->input_count; i++) {
++			if (((argument->type == ACPI_TYPE_STRING) ||
++			     (argument->type == ACPI_TYPE_BUFFER)) &&
++			    (argument->pointer == NULL))
++				return -EINVAL;
++			argument++;
++		}
+ 	}
+ 
+ 	if (info->output_count > 0) {
+-- 
+1.9.3
+

@@ -1,0 +1,104 @@
+From 3afd743ab89a08e63477bc95963b3e2473c05f48 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 15 Oct 2015 15:33:30 -0700
+Subject: [PATCH 0868/1767] UBUNTU: SAUCE: apparmor: Fix: query label file
+ permission
+
+File permissions have not been updated to use the newer
+compute_perms fn yet. So export the fn to compute the file
+permissions and use it in query_label until file permissions
+have been converted.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c   | 18 ++++++++++++++----
+ security/apparmor/file.c         |  8 ++++----
+ security/apparmor/include/file.h |  2 ++
+ 3 files changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 0134368..c5292a0 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -250,17 +250,27 @@ static ssize_t query_label(char *buf, size_t buf_len,
+ 			dfa = profile->file.dfa;
+ 			state = aa_dfa_match_len(dfa, profile->file.start,
+ 						 match_str + 1, match_len - 1);
++			aa_perms_clear(&tmp);
++			if (state) {
++				struct file_perms fperms = { };
++				struct path_cond cond = { };
++				fperms = aa_compute_fperms(dfa, state, &cond);
++				tmp.allow = fperms.allow;
++				tmp.audit = fperms.audit;
++				tmp.quiet = fperms.quiet;
++				tmp.kill = fperms.kill;
++			}
+ 		} else if (profile->policy.dfa) {
+ 			if (!PROFILE_MEDIATES_SAFE(profile, *match_str))
+ 				continue;	/* no change to current perms */
+ 			dfa = profile->policy.dfa;
+ 			state = aa_dfa_match_len(dfa, profile->policy.start[0],
+ 						 match_str, match_len);
++			if (state)
++				aa_compute_perms(dfa, state, &tmp);
++			else
++				aa_perms_clear(&tmp);
+ 		}
+-		if (state)
+-			aa_compute_perms(dfa, state, &tmp);
+-		else
+-			aa_perms_clear(&tmp);
+ 		aa_apply_modes_to_perms(profile, &tmp);
+ 		aa_perms_accum_raw(&perms, &tmp);
+ 	}
+diff --git a/security/apparmor/file.c b/security/apparmor/file.c
+index 13fb2a6..58ad159 100644
+--- a/security/apparmor/file.c
++++ b/security/apparmor/file.c
+@@ -208,7 +208,7 @@ static u32 map_old_perms(u32 old)
+ }
+ 
+ /**
+- * compute_perms - convert dfa compressed perms to internal perms
++ * aa_compute_fperms - convert dfa compressed perms to internal perms
+  * @dfa: dfa to compute perms for   (NOT NULL)
+  * @state: state in dfa
+  * @cond:  conditions to consider  (NOT NULL)
+@@ -218,8 +218,8 @@ static u32 map_old_perms(u32 old)
+  *
+  * Returns: computed permission set
+  */
+-static struct file_perms compute_perms(struct aa_dfa *dfa, unsigned int state,
+-				       struct path_cond *cond)
++struct file_perms aa_compute_fperms(struct aa_dfa *dfa, unsigned int state,
++				    struct path_cond *cond)
+ {
+ 	struct file_perms perms;
+ 
+@@ -273,7 +273,7 @@ unsigned int aa_str_perms(struct aa_dfa *dfa, unsigned int start,
+ 	}
+ 
+ 	state = aa_dfa_match(dfa, start, name);
+-	*perms = compute_perms(dfa, state, cond);
++	*perms = aa_compute_fperms(dfa, state, cond);
+ 
+ 	return state;
+ }
+diff --git a/security/apparmor/include/file.h b/security/apparmor/include/file.h
+index 83f7000..57cc023 100644
+--- a/security/apparmor/include/file.h
++++ b/security/apparmor/include/file.h
+@@ -204,6 +204,8 @@ struct aa_file_rules {
+ 	/* TODO: add delegate table */
+ };
+ 
++struct file_perms aa_compute_fperms(struct aa_dfa *dfa, unsigned int state,
++				    struct path_cond *cond);
+ unsigned int aa_str_perms(struct aa_dfa *dfa, unsigned int start,
+ 			  const char *name, struct path_cond *cond,
+ 			  struct file_perms *perms);
+-- 
+1.9.3
+

@@ -1,0 +1,51 @@
+From 7604bb21af56415e5f55f5aae69e64c24073e3bc Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Thu, 4 Feb 2016 23:29:45 -0500
+Subject: [PATCH 1413/1767] drm/amdgpu: handle vce pg flags properly
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Don't attempt to start/stop the vce block if pg is disabled.
+
+Reviewed-by: Eric Huang <JinHuiEric.Huang@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 808a934fd47c1c4a1670069cbe2fae7c23068b14)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/vce_v2_0.c | 3 +++
+ drivers/gpu/drm/amd/amdgpu/vce_v3_0.c | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/vce_v2_0.c b/drivers/gpu/drm/amd/amdgpu/vce_v2_0.c
+index 52ac7a8..d3ce608 100644
+--- a/drivers/gpu/drm/amd/amdgpu/vce_v2_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/vce_v2_0.c
+@@ -608,6 +608,9 @@ static int vce_v2_0_set_powergating_state(void *handle,
+ 	 */
+ 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+ 
++	if (!(adev->pg_flags & AMDGPU_PG_SUPPORT_VCE))
++		return 0;
++
+ 	if (state == AMD_PG_STATE_GATE)
+ 		/* XXX do we need a vce_v2_0_stop()? */
+ 		return 0;
+diff --git a/drivers/gpu/drm/amd/amdgpu/vce_v3_0.c b/drivers/gpu/drm/amd/amdgpu/vce_v3_0.c
+index 35f48ad..c009315 100644
+--- a/drivers/gpu/drm/amd/amdgpu/vce_v3_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/vce_v3_0.c
+@@ -771,6 +771,9 @@ static int vce_v3_0_set_powergating_state(void *handle,
+ 	 */
+ 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+ 
++	if (!(adev->pg_flags & AMDGPU_PG_SUPPORT_VCE))
++		return 0;
++
+ 	if (state == AMD_PG_STATE_GATE)
+ 		/* XXX do we need a vce_v3_0_stop()? */
+ 		return 0;
+-- 
+1.9.3
+

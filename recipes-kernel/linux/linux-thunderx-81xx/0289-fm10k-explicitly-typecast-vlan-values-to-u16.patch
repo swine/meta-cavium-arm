@@ -1,0 +1,50 @@
+From a3854d6ffd1ed67d56b793c3325ceb817848c0f9 Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Fri, 16 Oct 2015 10:57:01 -0700
+Subject: [PATCH 0289/1767] fm10k: explicitly typecast vlan values to u16
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Tested-by: Krishneil Singh <Krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit cdf32c94bd3569d4e46b8f993e0fd8e45d438d18)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_pf.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_pf.c b/drivers/net/ethernet/intel/fm10k/fm10k_pf.c
+index b1e0975..00f7a29 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_pf.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_pf.c
+@@ -1212,7 +1212,7 @@ s32 fm10k_iov_msg_mac_vlan_pf(struct fm10k_hw *hw, u32 **results,
+ 		set = !(vid & FM10K_VLAN_CLEAR);
+ 		vid &= ~FM10K_VLAN_CLEAR;
+ 
+-		err = fm10k_iov_select_vid(vf_info, vid);
++		err = fm10k_iov_select_vid(vf_info, (u16)vid);
+ 		if (err < 0)
+ 			return err;
+ 		else
+@@ -1242,7 +1242,7 @@ s32 fm10k_iov_msg_mac_vlan_pf(struct fm10k_hw *hw, u32 **results,
+ 		if (err < 0)
+ 			return err;
+ 		else
+-			vlan = err;
++			vlan = (u16)err;
+ 
+ 		/* notify switch of request for new unicast address */
+ 		err = hw->mac.ops.update_uc_addr(hw, vf_info->glort,
+@@ -1268,7 +1268,7 @@ s32 fm10k_iov_msg_mac_vlan_pf(struct fm10k_hw *hw, u32 **results,
+ 		if (err < 0)
+ 			return err;
+ 		else
+-			vlan = err;
++			vlan = (u16)err;
+ 
+ 		/* notify switch of request for new multicast address */
+ 		err = hw->mac.ops.update_mc_addr(hw, vf_info->glort,
+-- 
+1.9.3
+

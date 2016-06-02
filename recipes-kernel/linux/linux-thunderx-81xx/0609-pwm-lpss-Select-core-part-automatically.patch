@@ -1,0 +1,58 @@
+From 6a80a16b2f633b2e26ad2cd5345a1f4d0be635e7 Mon Sep 17 00:00:00 2001
+From: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+Date: Wed, 18 Nov 2015 13:25:17 +0200
+Subject: [PATCH 0609/1767] pwm: lpss: Select core part automatically
+
+BugLink: http://bugs.launchpad.net/bugs/1520436
+
+We have two users of core part right now. Let them to select core part
+automatically.
+
+Signed-off-by: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+Signed-off-by: Mika Westerberg <mika.westerberg@linux.intel.com>
+Signed-off-by: Thierry Reding <thierry.reding@gmail.com>
+(cherry picked from commit 6f90a00c6667dce5651341f0629443cf7951b235)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/pwm/Kconfig | 15 +++++----------
+ 1 file changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/pwm/Kconfig b/drivers/pwm/Kconfig
+index 2f4641a..aef635b 100644
+--- a/drivers/pwm/Kconfig
++++ b/drivers/pwm/Kconfig
+@@ -222,18 +222,12 @@ config PWM_LPC32XX
+ 	  will be called pwm-lpc32xx.
+ 
+ config PWM_LPSS
+-	tristate "Intel LPSS PWM support"
+-	depends on X86
+-	help
+-	  Generic PWM framework driver for Intel Low Power Subsystem PWM
+-	  controller.
+-
+-	  To compile this driver as a module, choose M here: the module
+-	  will be called pwm-lpss.
++	tristate
+ 
+ config PWM_LPSS_PCI
+ 	tristate "Intel LPSS PWM PCI driver"
+-	depends on PWM_LPSS && PCI
++	depends on X86 && PCI
++	select PWM_LPSS
+ 	help
+ 	  The PCI driver for Intel Low Power Subsystem PWM controller.
+ 
+@@ -242,7 +236,8 @@ config PWM_LPSS_PCI
+ 
+ config PWM_LPSS_PLATFORM
+ 	tristate "Intel LPSS PWM platform driver"
+-	depends on PWM_LPSS && ACPI
++	depends on X86 && ACPI
++	select PWM_LPSS
+ 	help
+ 	  The platform driver for Intel Low Power Subsystem PWM controller.
+ 
+-- 
+1.9.3
+

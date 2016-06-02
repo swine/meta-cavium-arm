@@ -1,0 +1,57 @@
+From d11c43b8e77cb71404c905bd6b8ea70e56287657 Mon Sep 17 00:00:00 2001
+From: "Fu, Zhonghui" <zhonghui.fu@linux.intel.com>
+Date: Fri, 4 Dec 2015 21:05:56 +0800
+Subject: [PATCH 1529/1767] mmc: enable MMC/SD/SDIO device to suspend/resume
+ asynchronously
+
+BugLink: http://bugs.launchpad.net/bugs/1520454
+
+Now, PM core supports asynchronous suspend/resume mode for devices
+during system suspend/resume, and the power state transition of one
+device may be completed in separate kernel thread. PM core ensures
+all power state transition dependency between devices. This patch
+enables MMC/SD/SDIO card and SDIO function devices to suspend/resume
+asynchronously. This will take advantage of multicore and improve
+system suspend/resume speed. After applying this patch and enabling
+all SDIO function's child devices to suspend/resume asynchronously
+on ASUS T100TA, the system suspend-to-idle time is reduced from
+1645ms to 1108ms, and the system resume time is reduced from 940ms
+to 918ms.
+
+Signed-off-by: Zhonghui Fu <zhonghui.fu@linux.intel.com>
+Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+(cherry picked from commit ec076cd226c3d93565ede082a240e23b5090e36c)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/mmc/core/bus.c      | 2 ++
+ drivers/mmc/core/sdio_bus.c | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/drivers/mmc/core/bus.c b/drivers/mmc/core/bus.c
+index 972ff84..4bc48f1 100644
+--- a/drivers/mmc/core/bus.c
++++ b/drivers/mmc/core/bus.c
+@@ -349,6 +349,8 @@ int mmc_add_card(struct mmc_card *card)
+ 
+ 	card->dev.of_node = mmc_of_find_child_device(card->host, 0);
+ 
++	device_enable_async_suspend(&card->dev);
++
+ 	ret = device_add(&card->dev);
+ 	if (ret)
+ 		return ret;
+diff --git a/drivers/mmc/core/sdio_bus.c b/drivers/mmc/core/sdio_bus.c
+index 7e327a6..86f5b32 100644
+--- a/drivers/mmc/core/sdio_bus.c
++++ b/drivers/mmc/core/sdio_bus.c
+@@ -322,6 +322,7 @@ int sdio_add_func(struct sdio_func *func)
+ 
+ 	sdio_set_of_node(func);
+ 	sdio_acpi_set_handle(func);
++	device_enable_async_suspend(&func->dev);
+ 	ret = device_add(&func->dev);
+ 	if (ret == 0)
+ 		sdio_func_set_present(func);
+-- 
+1.9.3
+

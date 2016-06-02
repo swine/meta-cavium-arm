@@ -1,0 +1,79 @@
+From 20674e1fbd56358bd9716af887ee456b9bc723c9 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 15 Dec 2015 04:42:12 -0800
+Subject: [PATCH 0872/1767] UBUNTU: SAUCE: fix: replacedby forwarding is not
+ being properly update when ns is destroyed
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index ad11222..d80fc50 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -333,13 +333,16 @@ fail:
+ 	return NULL;
+ }
+ 
+-static bool __aa_label_remove(struct aa_labelset *ls, struct aa_label *label)
++static bool __aa_label_remove(struct aa_labelset *ls, struct aa_label *label,
++			      struct aa_label *new)
+ {
+ 	AA_BUG(!ls);
+ 	AA_BUG(!label);
+ 	AA_BUG(!write_is_locked(&ls->lock));
+ 	AA_BUG(labels_set(label) != ls);
+ 
++	if (new)
++		__aa_update_replacedby(label, new);
+ 	if (label_invalid(label))
+ 		labelstats_dec(invalid_intree);
+ 	else
+@@ -369,8 +372,7 @@ bool aa_label_remove(struct aa_labelset *ls, struct aa_label *l)
+ 	bool res;
+ 
+ 	write_lock_irqsave(&ls->lock, flags);
+-	__aa_update_replacedby(l, &labels_ns(l)->unconfined->label);
+-	res = __aa_label_remove(ls, l);
++	res = __aa_label_remove(ls, l, &labels_ns(l)->unconfined->label);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+ 
+ 	return res;
+@@ -419,7 +421,7 @@ static struct aa_label *__aa_label_remove_and_insert(struct aa_labelset *ls,
+ 	AA_BUG(labels_set(remove) != ls);
+ 	AA_BUG(insert->flags & FLAG_IN_TREE);
+ 
+-	__aa_label_remove(ls, remove);
++	__aa_label_remove(ls, remove, insert);
+ 	return __aa_label_insert(ls, insert, replace);
+ }
+ 
+@@ -462,8 +464,7 @@ bool aa_label_replace(struct aa_label *old, struct aa_label *new)
+ 		struct aa_label *l;
+ 		struct aa_labelset *ls = labels_set(old);
+ 		write_lock_irqsave(&ls->lock, flags);
+-		__aa_update_replacedby(old, new);
+-		res = __aa_label_remove(ls, old);
++		res = __aa_label_remove(ls, old, new);
+ 		if (labels_ns(old) != labels_ns(new)) {
+ 			write_unlock_irqrestore(&ls->lock, flags);
+ 			ls = labels_set(new);
+@@ -1724,7 +1725,11 @@ void aa_labelset_destroy(struct aa_labelset *ls)
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	for (node = rb_first(&ls->root); node; node = rb_first(&ls->root)) {
+ 		struct aa_label *this = rb_entry(node, struct aa_label, node);
+-		__aa_label_remove(ls, this);
++		if (ls != &root_ns->labels)
++			__aa_label_remove(ls, this,
++				  &labels_ns(this)->parent->unconfined->label);
++		else
++			__aa_label_remove(ls, this, NULL);
+ 	}
+ 	write_unlock_irqrestore(&ls->lock, flags);
+ }
+-- 
+1.9.3
+

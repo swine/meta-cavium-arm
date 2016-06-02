@@ -1,0 +1,38 @@
+From f310694c6ccd43392be14c694ba9481d8f4b83e3 Mon Sep 17 00:00:00 2001
+From: Keith Busch <keith.busch@intel.com>
+Date: Mon, 4 Jan 2016 09:10:56 -0700
+Subject: [PATCH 0447/1767] NVMe: Use a retryable error code on reset
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+A negative status has the "do not retry" bit set, which makes it not
+retryable.  Use a fake status that can potentially be retried on reset.
+
+An aborted command's status is overridden by the timeout handler so
+that it won't be retried, which is necessary to keep initialization from
+getting into a reset loop.
+
+Signed-off-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 1d49c38c4865c596b01b31a52540275c1bb383e7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/pci.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index d0b37b9..7bd8b44 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -1017,7 +1017,7 @@ static void nvme_cancel_queue_ios(struct request *req, void *data, bool reserved
+ 	dev_warn(nvmeq->q_dmadev,
+ 		 "Cancelling I/O %d QID %d\n", req->tag, nvmeq->qid);
+ 
+-	status = NVME_SC_CANCELLED;
++	status = NVME_SC_ABORT_REQ;
+ 	if (blk_queue_dying(req->q))
+ 		status |= NVME_SC_DNR;
+ 	blk_mq_complete_request(req, status);
+-- 
+1.9.3
+

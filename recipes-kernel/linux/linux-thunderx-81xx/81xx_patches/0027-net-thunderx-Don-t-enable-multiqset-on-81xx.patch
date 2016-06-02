@@ -1,0 +1,27 @@
+From 5a176515faac62df060d722304c19fbe0b9c7e98 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Thu, 12 May 2016 11:28:35 -0700
+Subject: [PATCH 27/39] net: thunderx: Don't enable multiqset on 81xx
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 8807ce8..8195ab9 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -1190,6 +1190,9 @@ static int nic_num_sqs_en(struct nicpf *nic, int vf_en)
+ 	int pos, sqs_per_vf = MAX_SQS_PER_VF_SINGLE_NODE;
+ 	u16 total_vf;
+ 
++	if (num_online_cpus() <= MAX_QUEUES_PER_QSET)
++		return 0;
++
+ 	/* Check if its a multi-node environment */
+ 	if (nr_node_ids > 1)
+ 		sqs_per_vf = MAX_SQS_PER_VF;
+-- 
+1.9.1
+

@@ -1,0 +1,29 @@
+From 62e68bcf7f9fe8ab211510cbbdac7862b401f194 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Thu, 17 Sep 2015 11:37:43 -0600
+Subject: [PATCH 0088/1767] UBUNTU: SAUCE: Add vmlinux.strip to BOOT_TARGETS1
+
+This came in via "UBUNTU: Rebase to v4.2-rc3", but I'm not
+sure why.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/powerpc/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/powerpc/Makefile b/arch/powerpc/Makefile
+index 96efd82..96f49dd 100644
+--- a/arch/powerpc/Makefile
++++ b/arch/powerpc/Makefile
+@@ -241,7 +241,7 @@ drivers-$(CONFIG_OPROFILE)	+= arch/powerpc/oprofile/
+ all: zImage
+ 
+ # With make 3.82 we cannot mix normal and wildcard targets
+-BOOT_TARGETS1 := zImage zImage.initrd uImage
++BOOT_TARGETS1 := zImage zImage.initrd uImage vmlinux.strip
+ BOOT_TARGETS2 := zImage% dtbImage% treeImage.% cuImage.% simpleImage.% uImage.%
+ 
+ PHONY += $(BOOT_TARGETS1) $(BOOT_TARGETS2)
+-- 
+1.9.3
+

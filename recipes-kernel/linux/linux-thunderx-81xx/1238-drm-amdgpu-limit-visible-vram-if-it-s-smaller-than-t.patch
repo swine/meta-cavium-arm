@@ -1,0 +1,59 @@
+From 3b64e990f668551cd6801198b926eefb8a0b642b Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Wed, 9 Dec 2015 15:36:40 -0500
+Subject: [PATCH 1238/1767] drm/amdgpu: limit visible vram if it's smaller than
+ the BAR
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+In some cases the amount of vram may be less than the BAR size,
+if so, limit visible vram to the amount of actual vram, not the
+BAR size.
+
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit a1493cd575678910f90d488069a8a2c41a144fda)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c | 4 ++++
+ drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+index 272110c..39c5512 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+@@ -407,6 +407,10 @@ static int gmc_v7_0_mc_init(struct amdgpu_device *adev)
+ 	adev->mc.real_vram_size = RREG32(mmCONFIG_MEMSIZE) * 1024ULL * 1024ULL;
+ 	adev->mc.visible_vram_size = adev->mc.aper_size;
+ 
++	/* In case the PCI BAR is larger than the actual amount of vram */
++	if (adev->mc.visible_vram_size > adev->mc.real_vram_size)
++		adev->mc.visible_vram_size = adev->mc.real_vram_size;
++
+ 	/* unless the user had overridden it, set the gart
+ 	 * size equal to the 1024 or vram, whichever is larger.
+ 	 */
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c
+index ba4ad00..793979e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c
+@@ -448,6 +448,10 @@ static int gmc_v8_0_mc_init(struct amdgpu_device *adev)
+ 	adev->mc.real_vram_size = RREG32(mmCONFIG_MEMSIZE) * 1024ULL * 1024ULL;
+ 	adev->mc.visible_vram_size = adev->mc.aper_size;
+ 
++	/* In case the PCI BAR is larger than the actual amount of vram */
++	if (adev->mc.visible_vram_size > adev->mc.real_vram_size)
++		adev->mc.visible_vram_size = adev->mc.real_vram_size;
++
+ 	/* unless the user had overridden it, set the gart
+ 	 * size equal to the 1024 or vram, whichever is larger.
+ 	 */
+-- 
+1.9.3
+

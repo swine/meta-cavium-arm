@@ -1,0 +1,61 @@
+From 8d608e448860373db2ce58791a1799bbf3327089 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Sat, 10 Oct 2015 17:43:23 -0700
+Subject: [PATCH 0863/1767] UBUNTU: SAUCE: apparmor Fix: refcount bug in
+ pivotroot mediation
+
+pivotroot medition may change the tasks current cred if the a transition
+rule is defined. However aa_begin_current_label(), and
+aa_end_current_label() define a critical section block where the tasks
+cred label are not allowed to be updated. Specifically they do not take
+a refcount on the tasks cred, but will return a refcounted label IF
+there is an updated version of the label that can not be immediately
+updated. The aa_end_current_label() fn detects whether the label used
+has a refcount to put by comparing the label to the task's cred label,
+and if its different putting label.
+
+When the task cred's label is changed within this critical section,
+the cred update will put the creds label reference, and then the
+aa_begin_current_label() fn will detect the difference in the cred
+and working label and subsequentially do an extra put on the label.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/include/context.h | 2 ++
+ security/apparmor/lsm.c             | 4 ++--
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/security/apparmor/include/context.h b/security/apparmor/include/context.h
+index 9adac5d..4c1acfc 100644
+--- a/security/apparmor/include/context.h
++++ b/security/apparmor/include/context.h
+@@ -162,6 +162,8 @@ static inline void aa_end_current_label(struct aa_label *label)
+  *   just return the up to date label
+  *
+  * The returned reference must be put with aa_end_current_label()
++ * This must NOT be used if the task cred could be updated within the
++ * critical section between aa_begin_current_label() .. aa_end_current_label()
+  */
+ static inline struct aa_label *aa_begin_current_label(bool update)
+ {
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index a866a0b..4b8602d 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -580,10 +580,10 @@ static int apparmor_sb_pivotroot(struct path *old_path, struct path *new_path)
+ 	struct aa_label *label;
+ 	int error = 0;
+ 
+-	label = aa_begin_current_label(NO_UPDATE);
++	label = aa_get_current_label();
+ 	if (!unconfined(label))
+ 		error = aa_pivotroot(label, old_path, new_path);
+-	aa_end_current_label(label);
++	aa_put_label(label);
+ 
+ 	return error;
+ }
+-- 
+1.9.3
+

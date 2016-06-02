@@ -1,0 +1,33 @@
+From 506bbe911dbb35e2f3f02aa7fdd26a0d24b03fba Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:08 -0700
+Subject: [PATCH 1597/1767] Revert "UBUNTU: SAUCE: apparmor: fix refcount race
+ when finding a child profile"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 4dd6c2373c433dad655c265616465bb06ca615d9.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 908e41a..c5d4a60 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -811,9 +811,7 @@ struct aa_profile *aa_find_child(struct aa_profile *parent, const char *name)
+ 	struct aa_profile *profile;
+ 
+ 	rcu_read_lock();
+-	do {
+-		profile = __find_child(&parent->base.profiles, name);
+-	} while (profile && !aa_get_profile_not0(profile));
++	profile = aa_get_profile(__find_child(&parent->base.profiles, name));
+ 	rcu_read_unlock();
+ 
+ 	/* refcount released by caller */
+-- 
+1.9.3
+

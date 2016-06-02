@@ -1,0 +1,540 @@
+From 25ff9f518c74567d7fcb05a8143f9e37f970eaac Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 8 Oct 2015 13:35:21 -0700
+Subject: [PATCH 0860/1767] UBUNTU: SAUCE: apparmor: Fix: convert replacedby
+ update to be protected by the labelset lock
+
+BugLink: http://bugs.launchpad.net/bugs/1448912
+
+replacedby updates must be able to occur when in an rcu critical sections,
+and when spin locks are held. As such it can not use a mutex lock to
+protect its critical section. Since replacedby updates are accompanied by
+labelset insertion and removals use the labelset write lock to protect
+the update critical section.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/af_unix.c         | 59 ++++++++++++++++++++-------------
+ security/apparmor/apparmorfs.c      |  9 ++---
+ security/apparmor/include/context.h | 50 +++++++++++-----------------
+ security/apparmor/include/label.h   |  3 +-
+ security/apparmor/label.c           | 42 +++++++++++++++--------
+ security/apparmor/net.c             |  8 +++--
+ security/apparmor/policy.c          | 66 +++++++++++--------------------------
+ security/apparmor/procattr.c        |  2 +-
+ 8 files changed, 116 insertions(+), 123 deletions(-)
+
+diff --git a/security/apparmor/af_unix.c b/security/apparmor/af_unix.c
+index fd0657e..b37ac44 100644
+--- a/security/apparmor/af_unix.c
++++ b/security/apparmor/af_unix.c
+@@ -288,7 +288,11 @@ static int unix_label_sock_perm(struct aa_label *label, int op, u32 request,
+ /* revaliation, get/set attr */
+ int aa_unix_sock_perm(int op, u32 request, struct socket *sock)
+ {
+-	return unix_label_sock_perm(aa_current_label(), op, request, sock);
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = unix_label_sock_perm(label, op, request, sock);
++	aa_end_current_label(label);
++
++	return error;
+ }
+ 
+ static int profile_bind_perm(struct aa_profile *profile, struct sock *sk,
+@@ -325,14 +329,17 @@ int aa_unix_bind_perm(struct socket *sock, struct sockaddr *address,
+ 		      int addrlen)
+ {
+ 	struct aa_profile *profile;
+-	struct aa_label *label = aa_current_label();
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = 0;
+ 
+ 	 /* fs bind is handled by mknod */
+-	if (unconfined(label) || unix_addr_fs(address, addrlen))
+-		return 0;
++	if (!(unconfined(label) || unix_addr_fs(address, addrlen)))
++		error = fn_for_each_confined(label, profile,
++				profile_bind_perm(profile, sock->sk, address,
++						  addrlen));
++	aa_end_current_label(label);
+ 
+-	return fn_for_each_confined(label, profile,
+-			profile_bind_perm(profile, sock->sk, address, addrlen));
++	return error;
+ }
+ 
+ int aa_unix_connect_perm(struct socket *sock, struct sockaddr *address,
+@@ -379,13 +386,16 @@ static int profile_listen_perm(struct aa_profile *profile, struct sock *sk,
+ int aa_unix_listen_perm(struct socket *sock, int backlog)
+ {
+ 	struct aa_profile *profile;
+-	struct aa_label *label = aa_current_label();
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = 0;
+ 
+-	if (unconfined(label) || UNIX_FS(sock->sk))
+-		return 0;
++	if (!(unconfined(label) || UNIX_FS(sock->sk)))
++		error = fn_for_each_confined(label, profile,
++				profile_listen_perm(profile, sock->sk,
++						    backlog));
++	aa_end_current_label(label);
+ 
+-	return fn_for_each_confined(label, profile,
+-			profile_listen_perm(profile, sock->sk, backlog));
++	return error;
+ }
+ 
+ 
+@@ -418,13 +428,16 @@ static inline int profile_accept_perm(struct aa_profile *profile,
+ int aa_unix_accept_perm(struct socket *sock, struct socket *newsock)
+ {
+ 	struct aa_profile *profile;
+-	struct aa_label *label = aa_current_label();
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = 0;
+ 
+-	if (unconfined(label) || UNIX_FS(sock->sk))
+-		return 0;
++	if (!(unconfined(label) || UNIX_FS(sock->sk)))
++		error = fn_for_each_confined(label, profile,
++				profile_accept_perm(profile, sock->sk,
++						    newsock->sk));
++	aa_end_current_label(label);
+ 
+-	return fn_for_each_confined(label, profile,
+-			profile_accept_perm(profile, sock->sk, newsock->sk));
++	return error;
+ }
+ 
+ 
+@@ -473,14 +486,16 @@ int aa_unix_opt_perm(int op, u32 request, struct socket *sock, int level,
+ 		     int optname)
+ {
+ 	struct aa_profile *profile;
+-	struct aa_label *label = aa_current_label();
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = 0;
+ 
+-	if (unconfined(label) || UNIX_FS(sock->sk))
+-		return 0;
++	if (!(unconfined(label) || UNIX_FS(sock->sk)))
++		error = fn_for_each_confined(label, profile,
++				profile_opt_perm(profile, op, request,
++						 sock->sk, level, optname));
++	aa_end_current_label(label);
+ 
+-	return fn_for_each_confined(label, profile,
+-			profile_opt_perm(profile, op, request, sock->sk,
+-					 level, optname));
++	return error;
+ }
+ 
+ /* null peer_label is allowed, in which case the peer_sk label is used */
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 8afb5f6..0134368 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -212,7 +212,7 @@ static ssize_t query_label(char *buf, size_t buf_len,
+ 			   char *query, size_t query_len)
+ {
+ 	struct aa_profile *profile;
+-	struct aa_label *label;
++	struct aa_label *label, *curr;
+ 	char *label_name, *match_str;
+ 	size_t label_name_len, match_len;
+ 	struct aa_perms perms;
+@@ -236,8 +236,9 @@ static ssize_t query_label(char *buf, size_t buf_len,
+ 	match_str = label_name + label_name_len + 1;
+ 	match_len = query_len - label_name_len - 1;
+ 
+-	label = aa_label_parse(aa_current_label(), label_name, GFP_KERNEL,
+-			       false);
++	curr = aa_begin_current_label(DO_UPDATE);
++	label = aa_label_parse(curr, label_name, GFP_KERNEL, false);
++	aa_end_current_label(curr);
+ 	if (IS_ERR(label))
+ 		return PTR_ERR(label);
+ 
+@@ -874,7 +875,7 @@ static struct aa_profile *next_profile(struct aa_namespace *root,
+ static void *p_start(struct seq_file *f, loff_t *pos)
+ {
+ 	struct aa_profile *profile = NULL;
+-	struct aa_namespace *root = labels_ns(aa_current_label());
++	struct aa_namespace *root = current_ns();
+ 	loff_t l = *pos;
+ 	f->private = aa_get_namespace(root);
+ 
+diff --git a/security/apparmor/include/context.h b/security/apparmor/include/context.h
+index a8f3ef6d..9adac5d 100644
+--- a/security/apparmor/include/context.h
++++ b/security/apparmor/include/context.h
+@@ -138,24 +138,6 @@ static inline struct aa_label *aa_get_current_label(void)
+ }
+ 
+ /**
+- * aa_begin_current_label - find newest version of the current tasks label
+- *
+- * Returns: newest version of confining label (NOT NULL)
+- *
+- * This fn will not update the tasks cred, so it is safe inside of locks
+- *
+- * The returned reference must be put with aa_end_current_label()
+- */
+-static inline struct aa_label *aa_begin_current_label(void)
+-{
+-	struct aa_label *l = aa_current_raw_label();
+-
+-	if (label_invalid(l))
+-		l = aa_get_newest_label(l);
+-	return l;
+-}
+-
+-/**
+  * aa_end_current_label - put a reference found with aa_begin_current_label
+  * @label: label reference to put
+  *
+@@ -169,29 +151,35 @@ static inline void aa_end_current_label(struct aa_label *label)
+ }
+ 
+ /**
+- * aa_current_label - find the current tasks confining label and update it
++ * aa_begin_current_label - find the current tasks confining label and update it
++ * @update: whether the current label can be updated
+  *
+  * Returns: up to date confining label or the ns unconfined label (NOT NULL)
+  *
+- * This fn will update the tasks cred structure if the label has been
+- * replaced.  Not safe to call inside locks
++ * If @update is true this fn will update the tasks cred structure if the
++ *   label has been replaced.  Not safe to call inside locks
++ * else
++ *   just return the up to date label
++ *
++ * The returned reference must be put with aa_end_current_label()
+  */
+-static inline struct aa_label *aa_current_label(void)
++static inline struct aa_label *aa_begin_current_label(bool update)
+ {
+-	const struct aa_task_cxt *cxt = current_cxt();
+-	struct aa_label *label;
+-	BUG_ON(!cxt || !cxt->label);
++	struct aa_label *label = aa_current_raw_label();
+ 
+-	if (label_invalid(cxt->label)) {
+-		label = aa_get_newest_label(cxt->label);
+-		aa_replace_current_label(label);
+-		aa_put_label(label);
+-		cxt = current_cxt();
++	if (label_invalid(label)) {
++		label = aa_get_newest_label(label);
++		if (update && aa_replace_current_label(label) == 0)
++			/* task cred will keep the reference */
++			aa_put_label(label);
+ 	}
+ 
+-	return cxt->label;
++	return label;
+ }
+ 
++#define NO_UPDATE false
++#define DO_UPDATE true
++
+ /**
+  * aa_clear_task_cxt_trans - clear transition tracking info from the cxt
+  * @cxt: task context to clear (NOT NULL)
+diff --git a/security/apparmor/include/label.h b/security/apparmor/include/label.h
+index 82abbb3..d7f50a2 100644
+--- a/security/apparmor/include/label.h
++++ b/security/apparmor/include/label.h
+@@ -296,8 +296,7 @@ struct aa_label *aa_label_insert(struct aa_labelset *ls, struct aa_label *l);
+ struct aa_label *aa_label_remove_and_insert(struct aa_labelset *ls,
+ 					    struct aa_label *remove,
+ 					    struct aa_label *insert);
+-bool aa_label_replace(struct aa_labelset *ls, struct aa_label *old,
+-		      struct aa_label *new);
++bool aa_label_replace(struct aa_label *old, struct aa_label *new);
+ bool aa_label_make_newest(struct aa_labelset *ls, struct aa_label *old,
+ 			  struct aa_label *new);
+ 
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 2c4175b..931edef 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -78,7 +78,7 @@ void __aa_update_replacedby(struct aa_label *orig, struct aa_label *new)
+ 
+ 	AA_BUG(!orig);
+ 	AA_BUG(!new);
+-	AA_BUG(!mutex_is_locked(&labels_ns(orig)->lock));
++	AA_BUG(!write_is_locked(&labels_set(orig)->lock));
+ 
+ 	tmp = rcu_dereference_protected(orig->replacedby->label,
+ 					&labels_ns(orig)->lock);
+@@ -356,6 +356,7 @@ bool aa_label_remove(struct aa_labelset *ls, struct aa_label *l)
+ 	bool res;
+ 
+ 	write_lock_irqsave(&ls->lock, flags);
++	__aa_update_replacedby(l, &labels_ns(l)->unconfined->label);
+ 	res = __aa_label_remove(ls, l);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+ 
+@@ -425,25 +426,42 @@ struct aa_label *aa_label_remove_and_insert(struct aa_labelset *ls,
+ 
+ /**
+  * aa_label_replace - replace a label @old with a new version @new
+- * @ls: labelset being manipulated
+  * @old: label to replace
+  * @new: label replacing @old
+  *
+  * Returns: true if @old was in tree and replaced
+  *     else @old was not in tree, and @new was not inserted
+  */
+-bool aa_label_replace(struct aa_labelset *ls, struct aa_label *old,
+-		      struct aa_label *new)
++bool aa_label_replace(struct aa_label *old, struct aa_label *new)
+ {
+-	struct aa_label *l;
+ 	unsigned long flags;
+ 	bool res;
+ 
+-	write_lock_irqsave(&ls->lock, flags);
+-	l = __aa_label_remove_and_insert(ls, old, new, true);
+-	res = (l == new);
+-	write_unlock_irqrestore(&ls->lock, flags);
+-	aa_put_label(l);
++	if (old->hname == new->hname && labels_ns(old) == labels_ns(new)) {
++		write_lock_irqsave(&labels_set(old)->lock, flags);
++		if (old->replacedby != new->replacedby) {
++			free_replacedby(new->replacedby);
++			new->replacedby = aa_get_replacedby(old->replacedby);
++		}
++		__aa_update_replacedby(old, new);
++		res = __aa_label_replace(labels_set(old), old, new);
++		write_unlock_irqrestore(&labels_set(old)->lock, flags);
++	} else {
++		struct aa_label *l;
++		struct aa_labelset *ls = labels_set(old);
++		write_lock_irqsave(&ls->lock, flags);
++		__aa_update_replacedby(old, new);
++		res = __aa_label_remove(ls, old);
++		if (labels_ns(old) != labels_ns(new)) {
++			write_unlock_irqrestore(&ls->lock, flags);
++			ls = labels_set(new);
++			write_lock_irqsave(&ls->lock, flags);
++		}
++		l = __aa_label_insert(ls, new, true);
++		res = (l == new);
++		write_unlock_irqrestore(&ls->lock, flags);
++		aa_put_label(l);
++	}
+ 
+ 	return res;
+ }
+@@ -1124,11 +1142,9 @@ struct aa_label *aa_label_merge(struct aa_label *a, struct aa_label *b,
+ 		/* only label update will set replacedby so ns lock is enough */
+ 		new->replacedby = r;
+ 
+-		mutex_lock(&labels_ns(a)->lock);
+ 		write_lock_irqsave(&ls->lock, flags);
+ 		label = __label_merge_insert(ls, new, a, b);
+ 		write_unlock_irqrestore(&ls->lock, flags);
+-		mutex_unlock(&labels_ns(a)->lock);
+ 
+ 		if (label != new) {
+ 			/* new may not be fully setup so no put_label */
+@@ -1171,11 +1187,9 @@ struct aa_label *aa_label_vec_merge(struct aa_profile **vec, int len,
+ 	for (i = 0; i < len; i++) {
+ 		new->ent[i] = aa_get_profile(vec[i]);
+ 	}
+-	mutex_lock(&labels_ns(new)->lock);
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	label = __aa_label_insert(ls, new, false);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+-	mutex_unlock(&labels_ns(new)->lock);
+ 	if (label != new)
+ 		/* not fully constructed don't put */
+ 		aa_label_free(new);
+diff --git a/security/apparmor/net.c b/security/apparmor/net.c
+index e1deffb..92607cb 100644
+--- a/security/apparmor/net.c
++++ b/security/apparmor/net.c
+@@ -253,13 +253,17 @@ static int aa_label_sk_perm(struct aa_label *label, int op, u32 request,
+ static int aa_sk_perm(int op, u32 request, struct sock *sk)
+ {
+ 	struct aa_label *label;
++	int error;
+ 
+ 	AA_BUG(!sk);
+ 	AA_BUG(in_interrupt());
+ 
+ 	/* TODO: switch to begin_current_label ???? */
+-	label = aa_current_label();
+-	return aa_label_sk_perm(label, op, request, sk);
++	label = aa_begin_current_label(DO_UPDATE);
++	error = aa_label_sk_perm(label, op, request, sk);
++	aa_end_current_label(label);
++
++	return error;
+ }
+ 
+ #define af_select(FAMILY, FN, DEF_FN)		\
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 7a9d4c8..9165cd2 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -412,7 +412,7 @@ static struct aa_namespace *aa_prepare_namespace(const char *name)
+ {
+ 	struct aa_namespace *ns, *root;
+ 
+-	root = labels_ns(aa_current_label());
++	root = current_ns();
+ 
+ 	mutex_lock(&root->lock);
+ 
+@@ -517,8 +517,6 @@ static void __remove_profile(struct aa_profile *profile)
+ 	__profile_list_release(&profile->base.profiles);
+ 	/* released by free_profile */
+ 	aa_label_remove(&profile->ns->labels, &profile->label);
+-	__aa_update_replacedby(&profile->label,
+-			       &profile->ns->unconfined->label);
+ 	__aa_fs_profile_rmdir(profile);
+ 	__list_remove_profile(profile);
+ }
+@@ -1044,7 +1042,6 @@ static struct aa_profile *__list_lookup_parent(struct list_head *lh,
+  * __replace_profile - replace @old with @new on a list
+  * @old: profile to be replaced  (NOT NULL)
+  * @new: profile to replace @old with  (NOT NULL)
+- * @share_replacedby: transfer @old->replacedby to @new
+  *
+  * Will duplicate and refcount elements that @new inherits from @old
+  * and will inherit @old children.
+@@ -1053,8 +1050,7 @@ static struct aa_profile *__list_lookup_parent(struct list_head *lh,
+  *
+  * Requires: namespace list lock be held, or list not be shared
+  */
+-static void __replace_profile(struct aa_profile *old, struct aa_profile *new,
+-			      bool share_replacedby)
++static void __replace_profile(struct aa_profile *old, struct aa_profile *new)
+ {
+ 	struct aa_profile *child, *tmp;
+ 
+@@ -1069,7 +1065,7 @@ static void __replace_profile(struct aa_profile *old, struct aa_profile *new,
+ 			p = __find_child(&new->base.profiles, child->base.name);
+ 			if (p) {
+ 				/* @p replaces @child  */
+-				__replace_profile(child, p, share_replacedby);
++				__replace_profile(child, p);
+ 				continue;
+ 			}
+ 
+@@ -1087,13 +1083,8 @@ static void __replace_profile(struct aa_profile *old, struct aa_profile *new,
+ 		struct aa_profile *parent = aa_deref_parent(old);
+ 		rcu_assign_pointer(new->parent, aa_get_profile(parent));
+ 	}
+-	__aa_update_replacedby(&old->label, &new->label);
+-	if (share_replacedby)
+-		new->label.replacedby = aa_get_replacedby(old->label.replacedby);
+-	else if (!rcu_access_pointer(new->label.replacedby->label))
+-		/* aafs interface uses replacedby */
+-		rcu_assign_pointer(new->label.replacedby->label,
+-				   aa_get_label(&new->label));
++	aa_label_replace(&old->label, &new->label);
++	/* migrate dents must come after label replacement b/c replacedby */
+ 	__aa_fs_profile_migrate_dents(old, new);
+ 
+ 	if (list_empty(&new->base.list)) {
+@@ -1241,24 +1232,16 @@ ssize_t aa_replace_profiles(void *udata, size_t size, bool noreplace)
+ 
+ 	/* create new fs entries for introspection if needed */
+ 	list_for_each_entry(ent, &lh, list) {
+-		struct aa_replacedby *r;
+-		if (ent->old) {
+-			/* inherit old interface files */
++		struct aa_replacedby *r = aa_alloc_replacedby(&ent->new->label);
++		if (!r) {
++			info = "failed to create";
++			error = -ENOMEM;
++			goto fail_lock;
++		}
++		ent->new->label.replacedby = r;
+ 
+-			/* if (ent->rename)
+-				TODO: support rename */
+-		/* } else if (ent->rename) {
+-			TODO: support rename */
+-		} else {
++		if (!ent->old) {
+ 			struct dentry *parent;
+-			r = aa_alloc_replacedby(NULL);
+-			if (!r) {
+-				info = "failed to create";
+-				error = -ENOMEM;
+-				goto fail_lock;
+-			}
+-			ent->new->label.replacedby = r;
+-
+ 			if (rcu_access_pointer(ent->new->parent)) {
+ 				struct aa_profile *p;
+ 				p = aa_deref_parent(ent->new);
+@@ -1283,19 +1266,12 @@ ssize_t aa_replace_profiles(void *udata, size_t size, bool noreplace)
+ 
+ 		if (ent->old) {
+ 			share_name(ent->old, ent->new);
+-			__replace_profile(ent->old, ent->new, 1);
+-			aa_label_replace(&ns->labels, &ent->old->label,
+-					 &ent->new->label);
+-			if (ent->rename) {
+-				/* aafs interface uses replacedby */
+-				rcu_assign_pointer(ent->new->label.replacedby->label,
+-						   aa_get_label(&ent->new->label));
+-				__replace_profile(ent->rename, ent->new, 0);
+-			}
++			__replace_profile(ent->old, ent->new);
++			if (ent->rename)
++				__replace_profile(ent->rename, ent->new);
+ 		} else if (ent->rename) {
+-			/* aafs interface uses replacedby */
+-			rcu_assign_pointer(ent->new->label.replacedby->label,
+-					   aa_get_label(&ent->new->label));
++			/* TODO: case not actually supported yet */
++			;
+ 		} else {
+ 			struct list_head *lh;
+ 			if (rcu_access_pointer(ent->new->parent)) {
+@@ -1304,10 +1280,6 @@ ssize_t aa_replace_profiles(void *udata, size_t size, bool noreplace)
+                                lh = &parent->base.profiles;
+ 			} else
+ 				lh = &ns->base.profiles;
+-
+-			/* aafs interface uses replacedby */
+-			rcu_assign_pointer(ent->new->label.replacedby->label,
+-					   aa_get_label(&ent->new->label));
+ 			__add_profile(lh, ent->new);
+ 		}
+ 		aa_load_ent_free(ent);
+@@ -1360,7 +1332,7 @@ ssize_t aa_remove_profiles(char *fqname, size_t size)
+ 		goto fail;
+ 	}
+ 
+-	root = labels_ns(aa_current_label());
++	root = current_ns();
+ 
+ 	if (fqname[0] == ':') {
+ 		char *ns_name;
+diff --git a/security/apparmor/procattr.c b/security/apparmor/procattr.c
+index 079130a..f8eedc4 100644
+--- a/security/apparmor/procattr.c
++++ b/security/apparmor/procattr.c
+@@ -36,7 +36,7 @@
+ int aa_getprocattr(struct aa_label *label, char **string)
+ {
+ 	struct aa_namespace *ns = labels_ns(label);
+-	struct aa_namespace *current_ns = labels_ns(aa_current_label());
++	struct aa_namespace *current_ns = current_ns();
+ 	int len;
+ 
+ 	if (!aa_ns_visible(current_ns, ns))
+-- 
+1.9.3
+

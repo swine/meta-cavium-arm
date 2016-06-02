@@ -1,0 +1,37 @@
+From 33fef73daac69e0b98109bc7694cdd64390d4c90 Mon Sep 17 00:00:00 2001
+From: Joseph Salisbury <joseph.salisbury@canonical.com>
+Date: Thu, 15 Oct 2015 13:53:12 -0400
+Subject: [PATCH 0550/1767] UBUNTU: SAUCE: storvsc: use small sg_tablesize on
+ x86
+
+BugLink: http://bugs.launchpad.net/bugs/1495983
+
+OriginalAuthor: Olaf Hering <olaf@aepfle.de>
+Signed-off-by: Joseph Salisbury <joseph.salisbury@canonical.com>
+Acked-by: Seth Forshee <seth.forshee@canonical.com>
+Acked-by: Brad Figg <brad.figg@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Brad Figg <brad.figg@canonical.com>
+---
+ drivers/scsi/storvsc_drv.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/scsi/storvsc_drv.c b/drivers/scsi/storvsc_drv.c
+index 3fba42a..9972957 100644
+--- a/drivers/scsi/storvsc_drv.c
++++ b/drivers/scsi/storvsc_drv.c
+@@ -1633,6 +1633,11 @@ static int storvsc_probe(struct hv_device *device,
+ 	 * from the host.
+ 	 */
+ 	host->sg_tablesize = (stor_device->max_transfer_bytes >> PAGE_SHIFT);
++#if defined(CONFIG_X86_32)
++	dev_warn(&device->device, "adjusting sg_tablesize 0x%x -> 0x%x",
++			host->sg_tablesize, MAX_MULTIPAGE_BUFFER_COUNT);
++	host->sg_tablesize = MAX_MULTIPAGE_BUFFER_COUNT;
++#endif
+ 
+ 	/* Register the HBA and start the scsi bus scan */
+ 	ret = scsi_add_host(host, &device->device);
+-- 
+1.9.3
+

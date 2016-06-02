@@ -1,0 +1,42 @@
+From 3607ec486bbaaf6442e5f5c5f2ba2ac28ad9078b Mon Sep 17 00:00:00 2001
+From: Dan Carpenter <dan.carpenter@oracle.com>
+Date: Tue, 22 Sep 2015 15:32:07 +0300
+Subject: [PATCH 0100/1767] UBUNTU: SAUCE: (noup) cxlflash: a couple off by one
+ bugs
+
+BugLink: http://bugs.launchpad.net/bugs/1499849
+
+The "> MAX_CONTEXT" should be ">= MAX_CONTEXT".  Otherwise we go one
+step beyond the end of the cfg->ctx_tbl[] array.
+
+Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/cxlflash/superpipe.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/scsi/cxlflash/superpipe.c b/drivers/scsi/cxlflash/superpipe.c
+index cac2e6a..34b21a0 100644
+--- a/drivers/scsi/cxlflash/superpipe.c
++++ b/drivers/scsi/cxlflash/superpipe.c
+@@ -1380,7 +1380,7 @@ static int cxlflash_disk_attach(struct scsi_device *sdev,
+ 	}
+ 
+ 	ctxid = cxl_process_element(ctx);
+-	if (unlikely((ctxid > MAX_CONTEXT) || (ctxid < 0))) {
++	if (unlikely((ctxid >= MAX_CONTEXT) || (ctxid < 0))) {
+ 		dev_err(dev, "%s: ctxid (%d) invalid!\n", __func__, ctxid);
+ 		rc = -EPERM;
+ 		goto err2;
+@@ -1508,7 +1508,7 @@ static int recover_context(struct cxlflash_cfg *cfg, struct ctx_info *ctxi)
+ 	}
+ 
+ 	ctxid = cxl_process_element(ctx);
+-	if (unlikely((ctxid > MAX_CONTEXT) || (ctxid < 0))) {
++	if (unlikely((ctxid >= MAX_CONTEXT) || (ctxid < 0))) {
+ 		dev_err(dev, "%s: ctxid (%d) invalid!\n", __func__, ctxid);
+ 		rc = -EPERM;
+ 		goto err1;
+-- 
+1.9.3
+

@@ -1,0 +1,44 @@
+From 80beed4fe5cd0d6f8322b3548cdb1e44760f8d68 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 14 Oct 2015 05:00:54 -0700
+Subject: [PATCH 0866/1767] UBUNTU: SAUCE: apparmor: Fix: break circular
+ refcount for label that is directly freed.
+
+There are a few cases when racing an update where a label can be allocated
+with its replacedby, and end up being freed directly because it lost the
+race and will not be used. However without breaking the circular ref
+between the label and its replacedby, a double free of the label will
+occur:
+   label being freed
+      ref count from label to replacedby is put,
+         ref count from replacedby is put
+	    label is scheduled to be freed
+         replacedby is freed
+      label is freed
+   rcu call back to free label triggers
+      label is freed again
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 9644cbb..8c64588 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -227,6 +227,10 @@ void aa_label_destroy(struct aa_label *label)
+ 			label->ent[i.i] = LABEL_POISON + i.i;
+ 		}
+ 	}
++
++	if (rcu_dereference_protected(label->replacedby->label, true) == label)
++		rcu_assign_pointer(label->replacedby->label, NULL);
++
+ 	aa_free_sid(label->sid);
+ 	aa_put_replacedby(label->replacedby);
+ 	label->replacedby = REPLACEDBY_POISON + 1;
+-- 
+1.9.3
+

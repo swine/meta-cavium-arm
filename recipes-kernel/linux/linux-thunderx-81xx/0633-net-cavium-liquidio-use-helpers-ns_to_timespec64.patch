@@ -1,0 +1,42 @@
+From fbe21d7d190d6994404265f1985f000ab5a0b051 Mon Sep 17 00:00:00 2001
+From: Kefeng Wang <wangkefeng.wang@huawei.com>
+Date: Wed, 27 Jan 2016 17:34:37 +0800
+Subject: [PATCH 0633/1767] net: cavium: liquidio: use helpers
+ ns_to_timespec64()
+
+Convert the driver to use ns_to_timespec64() to keep consistency
+with timespec64_to_ns() instead of open coding the same logic.
+
+Signed-off-by: Kefeng Wang <wangkefeng.wang@huawei.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit 286af315d3f153595ce718fb1e442891f14ed5c0)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/cavium/liquidio/lio_main.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/liquidio/lio_main.c b/drivers/net/ethernet/cavium/liquidio/lio_main.c
+index b895044..8727655 100644
+--- a/drivers/net/ethernet/cavium/liquidio/lio_main.c
++++ b/drivers/net/ethernet/cavium/liquidio/lio_main.c
+@@ -1526,7 +1526,6 @@ static int liquidio_ptp_gettime(struct ptp_clock_info *ptp,
+ 				struct timespec64 *ts)
+ {
+ 	u64 ns;
+-	u32 remainder;
+ 	unsigned long flags;
+ 	struct lio *lio = container_of(ptp, struct lio, ptp_info);
+ 	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
+@@ -1536,8 +1535,7 @@ static int liquidio_ptp_gettime(struct ptp_clock_info *ptp,
+ 	ns += lio->ptp_adjust;
+ 	spin_unlock_irqrestore(&lio->ptp_lock, flags);
+ 
+-	ts->tv_sec = div_u64_rem(ns, 1000000000ULL, &remainder);
+-	ts->tv_nsec = remainder;
++	*ts = ns_to_timespec64(ns);
+ 
+ 	return 0;
+ }
+-- 
+1.9.3
+

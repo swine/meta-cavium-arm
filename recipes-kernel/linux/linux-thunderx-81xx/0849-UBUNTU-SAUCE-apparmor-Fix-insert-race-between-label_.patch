@@ -1,0 +1,51 @@
+From 800245275e79212b46bb9c721a2bc47bd847a2e4 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 15 Oct 2014 04:04:16 -0700
+Subject: [PATCH 0849/1767] UBUNTU: SAUCE: apparmor: Fix: insert race between
+ label_update and label_merge
+
+BugLink: http://bugs.launchpad.net/bugs/1448912
+
+it is possible for a label_merge to be racing label_update resulting
+in the AA_BUG(__aa_label_remove_and_insert()) to trip. Instead check
+if a version of label has already been inserted and gracefully fail
+if label_update lost the race.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 711c632..d08f711 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1782,15 +1782,22 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	if (invcount) {
+ 		l->size -= aa_sort_and_merge_profiles(l->size, &l->ent[0]);
+ 		if (labels_set(label) == labels_set(l)) {
+-			AA_BUG(__aa_label_remove_and_insert(labels_set(label), label, l) != l);
++			goto insert;
+ 		} else {
+ 			aa_label_remove(labels_set(label), label);
+ 			goto other_ls_insert;
+ 		}
+ 	} else {
+ 		AA_BUG(labels_ns(label) != labels_ns(l));
+-		AA_BUG(__aa_label_remove_and_insert(labels_set(label), label, l) != l);
++		goto insert;
+ 	}
++insert:
++	tmp = __aa_label_remove_and_insert(labels_set(label), label, l);
++	if (tmp != l) {
++		aa_get_label(tmp);
++		aa_label_free(l);
++	 }
++
+ 	write_unlock_irqrestore(&ls->lock, flags);
+ 
+ 	return l;
+-- 
+1.9.3
+

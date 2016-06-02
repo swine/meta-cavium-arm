@@ -1,0 +1,43 @@
+From 5989a9b18226607f978d4c29214ed7a358b5aa07 Mon Sep 17 00:00:00 2001
+From: Alexander Duyck <aduyck@mirantis.com>
+Date: Wed, 6 Jan 2016 23:10:54 -0800
+Subject: [PATCH 0702/1767] igb: Always enable VLAN 0 even if 8021q is not
+ loaded
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+This patch makes it so that we always add VLAN 0.  This is important as we
+need to guarantee the PF can receive untagged frames in the case of SR-IOV
+being enabled but VLAN filtering not being enabled in the kernel.
+
+Signed-off-by: Alexander Duyck <aduyck@mirantis.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit 5982a5565a08abf3b9ff18941b3e3cc94f7c8286)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/igb/igb_main.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/igb/igb_main.c b/drivers/net/ethernet/intel/igb/igb_main.c
+index 28023af..85d04b0 100644
+--- a/drivers/net/ethernet/intel/igb/igb_main.c
++++ b/drivers/net/ethernet/intel/igb/igb_main.c
+@@ -7177,11 +7177,12 @@ static int igb_vlan_rx_kill_vid(struct net_device *netdev,
+ 
+ static void igb_restore_vlan(struct igb_adapter *adapter)
+ {
+-	u16 vid;
++	u16 vid = 1;
+ 
+ 	igb_vlan_mode(adapter->netdev, adapter->netdev->features);
++	igb_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), 0);
+ 
+-	for_each_set_bit(vid, adapter->active_vlans, VLAN_N_VID)
++	for_each_set_bit_from(vid, adapter->active_vlans, VLAN_N_VID)
+ 		igb_vlan_rx_add_vid(adapter->netdev, htons(ETH_P_8021Q), vid);
+ }
+ 
+-- 
+1.9.3
+

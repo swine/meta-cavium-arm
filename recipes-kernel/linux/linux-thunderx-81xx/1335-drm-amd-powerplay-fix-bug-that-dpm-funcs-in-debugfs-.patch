@@ -1,0 +1,58 @@
+From e6c814c79b5dd9ecb008f963198ef710d4b8a05a Mon Sep 17 00:00:00 2001
+From: Rex Zhu <Rex.Zhu@amd.com>
+Date: Mon, 7 Dec 2015 16:42:35 +0800
+Subject: [PATCH 1335/1767] drm/amd/powerplay: fix bug that dpm funcs in
+ debugfs/sysfs missing.
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+in dpm module, sysfs init func move to late_init from sw_init.
+
+Reviewed-by: Alex Deucher <alexander.deucher@amd.com>
+
+Change-Id: Ice4a73212d8e3106d05f04a27043820ffd32929e
+Signed-off-by: Rex Zhu <Rex.Zhu@amd.com>
+(cherry picked from commit 7ad4e7f09372946d1bfd5359c45ccce024d0689e)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+index 6b46fbf..50af515 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+@@ -120,6 +120,19 @@ static int amdgpu_pp_early_init(void *handle)
+ 	return ret;
+ }
+ 
++
++static int amdgpu_pp_late_init(void *handle)
++{
++	int ret = 0;
++	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
++
++	if (adev->powerplay.ip_funcs->late_init)
++		ret = adev->powerplay.ip_funcs->late_init(
++					adev->powerplay.pp_handle);
++
++	return ret;
++}
++
+ static int amdgpu_pp_sw_init(void *handle)
+ {
+ 	int ret = 0;
+@@ -281,7 +294,7 @@ static void amdgpu_pp_print_status(void *handle)
+ 
+ const struct amd_ip_funcs amdgpu_pp_ip_funcs = {
+ 	.early_init = amdgpu_pp_early_init,
+-	.late_init = NULL,
++	.late_init = amdgpu_pp_late_init,
+ 	.sw_init = amdgpu_pp_sw_init,
+ 	.sw_fini = amdgpu_pp_sw_fini,
+ 	.hw_init = amdgpu_pp_hw_init,
+-- 
+1.9.3
+

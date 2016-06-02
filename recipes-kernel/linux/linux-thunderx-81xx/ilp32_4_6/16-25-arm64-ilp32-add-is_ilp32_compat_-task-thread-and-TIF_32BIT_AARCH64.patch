@@ -1,0 +1,86 @@
+diff --git a/arch/arm64/include/asm/elf.h b/arch/arm64/include/asm/elf.h
+index b5437c5..e18bb8a 100644
+--- a/arch/arm64/include/asm/elf.h
++++ b/arch/arm64/include/asm/elf.h
+@@ -142,7 +142,11 @@ typedef struct user_fpsimd_state elf_fpregset_t;
+  */
+ #define ELF_PLAT_INIT(_r, load_addr)	(_r)->regs[0] = 0
+ 
+-#define SET_PERSONALITY(ex)		clear_thread_flag(TIF_32BIT);
++#define SET_PERSONALITY(ex)		\
++do {						\
++	clear_thread_flag(TIF_32BIT_AARCH64);	\
++	clear_thread_flag(TIF_32BIT);		\
++} while (0)
+ 
+ #define ARCH_DLINFO							\
+ do {									\
+@@ -181,7 +185,12 @@ typedef compat_elf_greg_t		compat_elf_gregset_t[COMPAT_ELF_NGREG];
+ 					 ((x)->e_flags & EF_ARM_EABI_MASK))
+ 
+ #define compat_start_thread		compat_start_thread
+-#define COMPAT_SET_PERSONALITY(ex)	set_thread_flag(TIF_32BIT);
++#define COMPAT_SET_PERSONALITY(ex)		\
++do {						\
++	clear_thread_flag(TIF_32BIT_AARCH64);	\
++	set_thread_flag(TIF_32BIT);		\
++} while (0)
++
+ #define COMPAT_ARCH_DLINFO
+ extern int aarch32_setup_vectors_page(struct linux_binprm *bprm,
+ 				      int uses_interp);
+diff --git a/arch/arm64/include/asm/is_compat.h b/arch/arm64/include/asm/is_compat.h
+index 6139b5a..55134cf 100644
+--- a/arch/arm64/include/asm/is_compat.h
++++ b/arch/arm64/include/asm/is_compat.h
+@@ -45,11 +45,37 @@ static inline int is_a32_compat_thread(struct thread_info *thread)
+ 
+ #endif /* CONFIG_AARCH32_EL0 */
+ 
++#ifdef CONFIG_ARM64_ILP32
++
++static inline int is_ilp32_compat_task(void)
++{
++	return test_thread_flag(TIF_32BIT_AARCH64);
++}
++
++static inline int is_ilp32_compat_thread(struct thread_info *thread)
++{
++	return test_ti_thread_flag(thread, TIF_32BIT_AARCH64);
++}
++
++#else
++
++static inline int is_ilp32_compat_task(void)
++{
++	return 0;
++}
++
++static inline int is_ilp32_compat_thread(struct thread_info *thread)
++{
++	return 0;
++}
++
++#endif /* CONFIG_ARM64_ILP32 */
++
+ #ifdef CONFIG_COMPAT
+ 
+ static inline int is_compat_task(void)
+ {
+-	return is_a32_compat_task();
++	return is_a32_compat_task() || is_ilp32_compat_task();
+ }
+ 
+ #endif /* CONFIG_COMPAT */
+diff --git a/arch/arm64/include/asm/thread_info.h b/arch/arm64/include/asm/thread_info.h
+index 4daa559..8bcfa38 100644
+--- a/arch/arm64/include/asm/thread_info.h
++++ b/arch/arm64/include/asm/thread_info.h
+@@ -119,6 +119,7 @@ static inline struct thread_info *current_thread_info(void)
+ #define TIF_RESTORE_SIGMASK	20
+ #define TIF_SINGLESTEP		21
+ #define TIF_32BIT		22	/* AARCH32 process */
++#define TIF_32BIT_AARCH64	23	/* 32 bit process on AArch64(ILP32) */
+ 
+ #define _TIF_SIGPENDING		(1 << TIF_SIGPENDING)
+ #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)

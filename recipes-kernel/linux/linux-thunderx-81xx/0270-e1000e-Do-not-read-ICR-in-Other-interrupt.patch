@@ -1,0 +1,76 @@
+From c2258d6439e93d6520ddc3c92dd83a0c04379da1 Mon Sep 17 00:00:00 2001
+From: Benjamin Poirier <bpoirier@suse.com>
+Date: Mon, 9 Nov 2015 15:50:19 -0800
+Subject: [PATCH 0270/1767] e1000e: Do not read ICR in Other interrupt
+
+Removes the ICR read in the other interrupt handler, uses EIAC to
+autoclear the Other bit from ICR and IMS. This allows us to avoid
+interference with Rx and Tx interrupts in the Other interrupt handler.
+
+The information read from ICR is not needed. IMS is configured such that
+the only interrupt cause that can trigger the Other interrupt is Link
+Status Change.
+
+Signed-off-by: Benjamin Poirier <bpoirier@suse.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 16ecba59bc333d6282ee057fb02339f77a880beb)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/e1000e/netdev.c | 22 +++++++---------------
+ 1 file changed, 7 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/e1000e/netdev.c b/drivers/net/ethernet/intel/e1000e/netdev.c
+index 26cf183..56bc422 100644
+--- a/drivers/net/ethernet/intel/e1000e/netdev.c
++++ b/drivers/net/ethernet/intel/e1000e/netdev.c
+@@ -1905,24 +1905,15 @@ static irqreturn_t e1000_msix_other(int __always_unused irq, void *data)
+ 	struct net_device *netdev = data;
+ 	struct e1000_adapter *adapter = netdev_priv(netdev);
+ 	struct e1000_hw *hw = &adapter->hw;
+-	u32 icr = er32(ICR);
+ 
+-	if (icr & adapter->eiac_mask)
+-		ew32(ICS, (icr & adapter->eiac_mask));
++	hw->mac.get_link_status = true;
+ 
+-	if (icr & E1000_ICR_OTHER) {
+-		if (!(icr & E1000_ICR_LSC))
+-			goto no_link_interrupt;
+-		hw->mac.get_link_status = true;
+-		/* guard against interrupt when we're going down */
+-		if (!test_bit(__E1000_DOWN, &adapter->state))
+-			mod_timer(&adapter->watchdog_timer, jiffies + 1);
++	/* guard against interrupt when we're going down */
++	if (!test_bit(__E1000_DOWN, &adapter->state)) {
++		mod_timer(&adapter->watchdog_timer, jiffies + 1);
++		ew32(IMS, E1000_IMS_OTHER);
+ 	}
+ 
+-no_link_interrupt:
+-	if (!test_bit(__E1000_DOWN, &adapter->state))
+-		ew32(IMS, E1000_IMS_LSC | E1000_IMS_OTHER);
+-
+ 	return IRQ_HANDLED;
+ }
+ 
+@@ -2021,6 +2012,7 @@ static void e1000_configure_msix(struct e1000_adapter *adapter)
+ 		       hw->hw_addr + E1000_EITR_82574(vector));
+ 	else
+ 		writel(1, hw->hw_addr + E1000_EITR_82574(vector));
++	adapter->eiac_mask |= E1000_IMS_OTHER;
+ 
+ 	/* Cause Tx interrupts on every write back */
+ 	ivar |= (1 << 31);
+@@ -2249,7 +2241,7 @@ static void e1000_irq_enable(struct e1000_adapter *adapter)
+ 
+ 	if (adapter->msix_entries) {
+ 		ew32(EIAC_82574, adapter->eiac_mask & E1000_EIAC_MASK_82574);
+-		ew32(IMS, adapter->eiac_mask | E1000_IMS_OTHER | E1000_IMS_LSC);
++		ew32(IMS, adapter->eiac_mask | E1000_IMS_LSC);
+ 	} else if ((hw->mac.type == e1000_pch_lpt) ||
+ 		   (hw->mac.type == e1000_pch_spt)) {
+ 		ew32(IMS, IMS_ENABLE_MASK | E1000_IMS_ECCER);
+-- 
+1.9.3
+

@@ -1,0 +1,94 @@
+From 83e742e3251a3fc99d38a5811841ca7463323fbf Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Thu, 26 Nov 2015 10:07:41 +0100
+Subject: [PATCH 0404/1767] nvme: add explicit quirk handling
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Add an enum for all workarounds not in the spec and identify the affected
+controllers at probe time.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 106198edb74cdf3fe1aefa6ad1e199b58ab7c4cb)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/nvme.h | 13 +++++++++++++
+ drivers/nvme/host/pci.c  |  8 +++++---
+ 2 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/nvme/host/nvme.h b/drivers/nvme/host/nvme.h
+index bc19252..c117c41 100644
+--- a/drivers/nvme/host/nvme.h
++++ b/drivers/nvme/host/nvme.h
+@@ -32,6 +32,18 @@ enum {
+ 	NVME_NS_LIGHTNVM	= 1,
+ };
+ 
++/*
++ * List of workarounds for devices that required behavior not specified in
++ * the standard.
++ */
++enum nvme_quirks {
++	/*
++	 * Prefers I/O aligned to a stripe size specified in a vendor
++	 * specific Identify field.
++	 */
++	NVME_QUIRK_STRIPE_SIZE			= (1 << 0),
++};
++
+ struct nvme_ctrl {
+ 	const struct nvme_ctrl_ops *ops;
+ 	struct request_queue *admin_q;
+@@ -47,6 +59,7 @@ struct nvme_ctrl {
+ 	u16 abort_limit;
+ 	u8 event_limit;
+ 	u8 vwc;
++	unsigned long quirks;
+ };
+ 
+ /*
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 7ce22c7..8267d5e 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -2035,7 +2035,6 @@ static void nvme_dev_scan(struct work_struct *work)
+  */
+ static int nvme_dev_add(struct nvme_dev *dev)
+ {
+-	struct pci_dev *pdev = to_pci_dev(dev->dev);
+ 	int res;
+ 	struct nvme_id_ctrl *ctrl;
+ 	int shift = NVME_CAP_MPSMIN(lo_hi_readq(dev->bar + NVME_REG_CAP)) + 12;
+@@ -2056,8 +2055,8 @@ static int nvme_dev_add(struct nvme_dev *dev)
+ 		dev->max_hw_sectors = 1 << (ctrl->mdts + shift - 9);
+ 	else
+ 		dev->max_hw_sectors = UINT_MAX;
+-	if ((pdev->vendor == PCI_VENDOR_ID_INTEL) &&
+-			(pdev->device == 0x0953) && ctrl->vs[3]) {
++
++	if ((dev->ctrl.quirks & NVME_QUIRK_STRIPE_SIZE) && ctrl->vs[3]) {
+ 		unsigned int max_hw_sectors;
+ 
+ 		dev->stripe_size = 1 << (ctrl->vs[3] + shift);
+@@ -2749,6 +2748,7 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 
+ 	dev->ctrl.ops = &nvme_pci_ctrl_ops;
+ 	dev->ctrl.dev = dev->dev;
++	dev->ctrl.quirks = id->driver_data;
+ 
+ 	result = nvme_set_instance(dev);
+ 	if (result)
+@@ -2876,6 +2876,8 @@ static const struct pci_error_handlers nvme_err_handler = {
+ #define PCI_CLASS_STORAGE_EXPRESS	0x010802
+ 
+ static const struct pci_device_id nvme_id_table[] = {
++	{ PCI_VDEVICE(INTEL, 0x0953),
++		.driver_data = NVME_QUIRK_STRIPE_SIZE, },
+ 	{ PCI_DEVICE_CLASS(PCI_CLASS_STORAGE_EXPRESS, 0xffffff) },
+ 	{ PCI_DEVICE(PCI_VENDOR_ID_APPLE, 0x2001) },
+ 	{ 0, }
+-- 
+1.9.3
+

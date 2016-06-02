@@ -1,0 +1,42 @@
+From 9d3e84ac49579f1b9a4accc537844681756ec431 Mon Sep 17 00:00:00 2001
+From: Jean Sacren <sakiwit@gmail.com>
+Date: Sat, 19 Sep 2015 05:08:47 -0600
+Subject: [PATCH 0263/1767] e1000: get rid of duplicate exit path
+
+By using goto statement, we can achieve sharing the same exit path so
+that code duplication could be minimized.
+
+Signed-off-by: Jean Sacren <sakiwit@gmail.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit c619581a7903fadccb900d1d497d2366fdf7da9d)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/e1000/e1000_hw.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/e1000/e1000_hw.c b/drivers/net/ethernet/intel/e1000/e1000_hw.c
+index dbae55e..9c06456 100644
+--- a/drivers/net/ethernet/intel/e1000/e1000_hw.c
++++ b/drivers/net/ethernet/intel/e1000/e1000_hw.c
+@@ -2822,14 +2822,13 @@ s32 e1000_read_phy_reg(struct e1000_hw *hw, u32 reg_addr, u16 *phy_data)
+ 	    (reg_addr > MAX_PHY_MULTI_PAGE_REG)) {
+ 		ret_val = e1000_write_phy_reg_ex(hw, IGP01E1000_PHY_PAGE_SELECT,
+ 						 (u16) reg_addr);
+-		if (ret_val) {
+-			spin_unlock_irqrestore(&e1000_phy_lock, flags);
+-			return ret_val;
+-		}
++		if (ret_val)
++			goto out;
+ 	}
+ 
+ 	ret_val = e1000_read_phy_reg_ex(hw, MAX_PHY_REG_ADDRESS & reg_addr,
+ 					phy_data);
++out:
+ 	spin_unlock_irqrestore(&e1000_phy_lock, flags);
+ 
+ 	return ret_val;
+-- 
+1.9.3
+

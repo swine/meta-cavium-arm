@@ -1,0 +1,64 @@
+From f3dd7fef150995331e451598aef031f7976db016 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 13 Oct 2015 09:35:13 -0700
+Subject: [PATCH 0862/1767] UBUNTU: SAUCE: apparmor: ensure that repacedby
+ sharing is done correctly
+
+don't put the reference when sharing a replacedby until after all
+over references are gotten, otherwise the label might drop to a 0
+refcount and start being freed, even though it should be held by
+the shared replacedby.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 02742b2..e0681e4 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -87,6 +87,14 @@ void __aa_update_replacedby(struct aa_label *orig, struct aa_label *new)
+ 	aa_put_label(tmp);
+ }
+ 
++void __share_replacedby(struct aa_label *old, struct aa_label *new)
++{
++	struct aa_replacedby *r = new->replacedby;
++	new->replacedby = aa_get_replacedby(old->replacedby);
++	__aa_update_replacedby(old, new);
++	aa_put_replacedby(r);
++}
++
+ /* helper fn for label_for_each_confined */
+ int aa_label_next_confined(struct aa_label *l, int i)
+ {
+@@ -440,10 +448,9 @@ bool aa_label_replace(struct aa_label *old, struct aa_label *new)
+ 	if (old->hname == new->hname && labels_ns(old) == labels_ns(new)) {
+ 		write_lock_irqsave(&labels_set(old)->lock, flags);
+ 		if (old->replacedby != new->replacedby) {
+-			free_replacedby(new->replacedby);
+-			new->replacedby = aa_get_replacedby(old->replacedby);
+-		}
+-		__aa_update_replacedby(old, new);
++			__share_replacedby(old, new);
++		} else
++			__aa_update_replacedby(old, new);
+ 		res = __aa_label_replace(labels_set(old), old, new);
+ 		write_unlock_irqrestore(&labels_set(old)->lock, flags);
+ 	} else {
+@@ -704,9 +711,7 @@ static struct aa_label *__aa_label_insert(struct aa_labelset *ls,
+ 				/* queued for destruction, in place replace */
+ 			} else {
+ 				if (this->replacedby) {
+-					free_replacedby(l->replacedby);
+-					l->replacedby = aa_get_replacedby(this->replacedby);
+-					__aa_update_replacedby(this, l);
++					__share_replacedby(this, l);
+ 				} else
+ 					this->replacedby = aa_get_replacedby(l->replacedby);
+ 			}
+-- 
+1.9.3
+

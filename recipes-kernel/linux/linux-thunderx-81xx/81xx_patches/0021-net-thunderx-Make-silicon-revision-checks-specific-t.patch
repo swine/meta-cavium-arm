@@ -1,0 +1,35 @@
+From af38d85830960a4cc39555cae8d7afcbf63d503f Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Mon, 9 May 2016 17:29:12 -0700
+Subject: [PATCH 21/39] net: thunderx: Make silicon revision checks specific to
+ 88xx
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic.h | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic.h b/drivers/net/ethernet/cavium/thunder/nic.h
+index 28191e6..d98c789 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic.h
++++ b/drivers/net/ethernet/cavium/thunder/nic.h
+@@ -526,12 +526,14 @@ static inline int nic_get_node_id(struct pci_dev *pdev)
+ 
+ static inline bool pass1_silicon(struct pci_dev *pdev)
+ {
+-	return pdev->revision < 8;
++	return (pdev->revision < 8) &&
++		(pdev->subsystem_device == PCI_SUBSYS_DEVID_88XX_NIC_PF);
+ }
+ 
+ static inline bool pass2_silicon(struct pci_dev *pdev)
+ {
+-	return (pdev->revision == 8);
++	return (pdev->revision == 8) &&
++		(pdev->subsystem_device == PCI_SUBSYS_DEVID_88XX_NIC_PF);
+ }
+ 
+ int nicvf_set_real_num_queues(struct net_device *netdev,
+-- 
+1.9.1
+

@@ -1,0 +1,103 @@
+From d06e59cc3f5942cf19ec55d3b4cd8578c9d94599 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:29 +0100
+Subject: [PATCH 0377/1767] lightnvm: move rq->error to nvm_rq->error
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Instead of passing request error into the LightNVM modules, incorporate
+it into the nvm_rq.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 72d256ecc5d0c8cbcc0bd5c6d983b434df556cb4)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c   | 3 ++-
+ drivers/lightnvm/gennvm.c | 6 +++---
+ drivers/lightnvm/rrpc.c   | 2 +-
+ include/linux/lightnvm.h  | 4 +++-
+ 4 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index cd674af..dad84dd 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -291,7 +291,8 @@ EXPORT_SYMBOL(nvm_erase_ppa);
+ 
+ void nvm_end_io(struct nvm_rq *rqd, int error)
+ {
+-	rqd->end_io(rqd, error);
++	rqd->error = error;
++	rqd->end_io(rqd);
+ }
+ EXPORT_SYMBOL(nvm_end_io);
+ 
+diff --git a/drivers/lightnvm/gennvm.c b/drivers/lightnvm/gennvm.c
+index 262da6d..4c15846 100644
+--- a/drivers/lightnvm/gennvm.c
++++ b/drivers/lightnvm/gennvm.c
+@@ -363,11 +363,11 @@ static void gennvm_mark_blk_bad(struct nvm_dev *dev, struct nvm_rq *rqd)
+ 		gennvm_blk_set_type(dev, &rqd->ppa_addr, 2);
+ }
+ 
+-static void gennvm_end_io(struct nvm_rq *rqd, int error)
++static void gennvm_end_io(struct nvm_rq *rqd)
+ {
+ 	struct nvm_tgt_instance *ins = rqd->ins;
+ 
+-	switch (error) {
++	switch (rqd->error) {
+ 	case NVM_RSP_SUCCESS:
+ 	case NVM_RSP_ERR_EMPTYPAGE:
+ 		break;
+@@ -375,7 +375,7 @@ static void gennvm_end_io(struct nvm_rq *rqd, int error)
+ 		gennvm_mark_blk_bad(rqd->dev, rqd);
+ 	}
+ 
+-	ins->tt->end_io(rqd, error);
++	ins->tt->end_io(rqd);
+ }
+ 
+ static int gennvm_submit_io(struct nvm_dev *dev, struct nvm_rq *rqd)
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index ec7aacf..9a5d940 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -658,7 +658,7 @@ static void rrpc_end_io_write(struct rrpc *rrpc, struct rrpc_rq *rrqd,
+ 	}
+ }
+ 
+-static void rrpc_end_io(struct nvm_rq *rqd, int error)
++static void rrpc_end_io(struct nvm_rq *rqd)
+ {
+ 	struct rrpc *rrpc = container_of(rqd->ins, struct rrpc, instance);
+ 	struct rrpc_rq *rrqd = nvm_rq_to_pdu(rqd);
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index a83298f..9acc71a 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -149,7 +149,7 @@ struct ppa_addr {
+ };
+ 
+ struct nvm_rq;
+-typedef void (nvm_end_io_fn)(struct nvm_rq *, int);
++typedef void (nvm_end_io_fn)(struct nvm_rq *);
+ 
+ struct nvm_rq {
+ 	struct nvm_tgt_instance *ins;
+@@ -173,6 +173,8 @@ struct nvm_rq {
+ 	uint8_t opcode;
+ 	uint16_t nr_pages;
+ 	uint16_t flags;
++
++	int error;
+ };
+ 
+ static inline struct nvm_rq *nvm_rq_from_pdu(void *pdu)
+-- 
+1.9.3
+

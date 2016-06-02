@@ -1,0 +1,77 @@
+From 9d8670c93fa34e8403dc6f1076d41a0b29cbef38 Mon Sep 17 00:00:00 2001
+From: Peter Hutterer <peter.hutterer@who-t.net>
+Date: Sat, 6 Feb 2016 21:28:07 -0600
+Subject: [PATCH 0519/1767] Input: wacom_w8001 - handle touch error case
+ correctly
+
+BugLink: http://bugs.launchpad.net/bugs/1542771
+
+If a device failed at the pen setup and gets a zero reply from the touch
+device, we need to return an error. Otherwise we have a device with
+nothing but a name and the EV_KEY and EV_ABS bits.
+
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+Acked-by: Benjamin Tissoires <benjamin.tissoires@gmail.com>
+Signed-off-by: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+(cherry picked from commit e171735410ae5a0ebf90d6bc6a8a97fc28bfc041)
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/input/touchscreen/wacom_w8001.c | 19 +++++++++----------
+ 1 file changed, 9 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/input/touchscreen/wacom_w8001.c b/drivers/input/touchscreen/wacom_w8001.c
+index 222006e..9ea5f82 100644
+--- a/drivers/input/touchscreen/wacom_w8001.c
++++ b/drivers/input/touchscreen/wacom_w8001.c
+@@ -385,7 +385,7 @@ static int w8001_setup(struct w8001 *w8001)
+ 	struct input_dev *dev = w8001->dev;
+ 	struct w8001_coord coord;
+ 	struct w8001_touch_query touch;
+-	int error;
++	int error, err_pen, err_touch;
+ 
+ 	error = w8001_command(w8001, W8001_CMD_STOP, false);
+ 	if (error)
+@@ -400,8 +400,8 @@ static int w8001_setup(struct w8001 *w8001)
+ 	__set_bit(INPUT_PROP_DIRECT, dev->propbit);
+ 
+ 	/* penabled? */
+-	error = w8001_command(w8001, W8001_CMD_QUERY, true);
+-	if (!error) {
++	err_pen = w8001_command(w8001, W8001_CMD_QUERY, true);
++	if (!err_pen) {
+ 		__set_bit(BTN_TOUCH, dev->keybit);
+ 		__set_bit(BTN_TOOL_PEN, dev->keybit);
+ 		__set_bit(BTN_TOOL_RUBBER, dev->keybit);
+@@ -426,13 +426,12 @@ static int w8001_setup(struct w8001 *w8001)
+ 	}
+ 
+ 	/* Touch enabled? */
+-	error = w8001_command(w8001, W8001_CMD_TOUCHQUERY, true);
++	err_touch = w8001_command(w8001, W8001_CMD_TOUCHQUERY, true);
+ 
+-	/*
+-	 * Some non-touch devices may reply to the touch query. But their
+-	 * second byte is empty, which indicates touch is not supported.
+-	 */
+-	if (!error && w8001->response[1]) {
++	if (!err_touch && !w8001->response[1])
++		err_touch = -ENXIO;
++
++	if (!err_touch) {
+ 		__set_bit(BTN_TOUCH, dev->keybit);
+ 		__set_bit(BTN_TOOL_FINGER, dev->keybit);
+ 
+@@ -491,7 +490,7 @@ static int w8001_setup(struct w8001 *w8001)
+ 
+ 	strlcat(w8001->name, " Touchscreen", sizeof(w8001->name));
+ 
+-	return 0;
++	return !err_pen || !err_touch ? 0 : -ENXIO;
+ }
+ 
+ /*
+-- 
+1.9.3
+

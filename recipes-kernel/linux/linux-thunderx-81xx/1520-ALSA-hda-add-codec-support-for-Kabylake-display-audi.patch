@@ -1,0 +1,47 @@
+From cc78a6a27325d0a74fccd2cd3d11ff2c5cff2e49 Mon Sep 17 00:00:00 2001
+From: Libin Yang <libin.yang@linux.intel.com>
+Date: Thu, 14 Jan 2016 14:09:00 +0800
+Subject: [PATCH 1520/1767] ALSA: hda - add codec support for Kabylake display
+ audio codec
+
+BugLink: http://bugs.launchpad.net/bugs/1556002
+
+This patch adds codec ID (0x8086280b) for Kabylake display codec
+and apply the hsw fix-ups to Kabylake.
+
+Signed-off-by: Libin Yang <libin.yang@linux.intel.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+(cherry picked from commit 91815d8aa7e2f45d30e51caa297061ad893628d9)
+Signed-off-by: Timo Aaltonen <timo.aaltonen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ sound/pci/hda/patch_hdmi.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/sound/pci/hda/patch_hdmi.c b/sound/pci/hda/patch_hdmi.c
+index 70c9456..fa75613 100644
+--- a/sound/pci/hda/patch_hdmi.c
++++ b/sound/pci/hda/patch_hdmi.c
+@@ -51,8 +51,10 @@ MODULE_PARM_DESC(static_hdmi_pcm, "Don't restrict PCM parameters per ELD info");
+ #define is_broadwell(codec)    ((codec)->core.vendor_id == 0x80862808)
+ #define is_skylake(codec) ((codec)->core.vendor_id == 0x80862809)
+ #define is_broxton(codec) ((codec)->core.vendor_id == 0x8086280a)
++#define is_kabylake(codec) ((codec)->core.vendor_id == 0x8086280b)
+ #define is_haswell_plus(codec) (is_haswell(codec) || is_broadwell(codec) \
+-				|| is_skylake(codec) || is_broxton(codec))
++				|| is_skylake(codec) || is_broxton(codec) \
++				|| is_kabylake(codec))
+ 
+ #define is_valleyview(codec) ((codec)->core.vendor_id == 0x80862882)
+ #define is_cherryview(codec) ((codec)->core.vendor_id == 0x80862883)
+@@ -3580,6 +3582,7 @@ HDA_CODEC_ENTRY(0x80862807, "Haswell HDMI",	patch_generic_hdmi),
+ HDA_CODEC_ENTRY(0x80862808, "Broadwell HDMI",	patch_generic_hdmi),
+ HDA_CODEC_ENTRY(0x80862809, "Skylake HDMI",	patch_generic_hdmi),
+ HDA_CODEC_ENTRY(0x8086280a, "Broxton HDMI",	patch_generic_hdmi),
++HDA_CODEC_ENTRY(0x8086280b, "Kabylake HDMI",	patch_generic_hdmi),
+ HDA_CODEC_ENTRY(0x80862880, "CedarTrail HDMI",	patch_generic_hdmi),
+ HDA_CODEC_ENTRY(0x80862882, "Valleyview2 HDMI",	patch_generic_hdmi),
+ HDA_CODEC_ENTRY(0x80862883, "Braswell HDMI",	patch_generic_hdmi),
+-- 
+1.9.3
+

@@ -1,0 +1,49 @@
+From 63911c977bdbb16df2114ff3a4b915c9e8d09e27 Mon Sep 17 00:00:00 2001
+From: Andrey Smetanin <asmetanin@virtuozzo.com>
+Date: Mon, 30 Nov 2015 19:22:13 +0300
+Subject: [PATCH 0464/1767] drivers/hv: replace enum hv_message_type by u32
+
+enum hv_message_type inside struct hv_message, hv_post_message
+is not size portable. Replace enum by u32.
+
+Signed-off-by: Andrey Smetanin <asmetanin@virtuozzo.com>
+CC: Gleb Natapov <gleb@kernel.org>
+CC: Paolo Bonzini <pbonzini@redhat.com>
+CC: "K. Y. Srinivasan" <kys@microsoft.com>
+CC: Haiyang Zhang <haiyangz@microsoft.com>
+CC: Vitaly Kuznetsov <vkuznets@redhat.com>
+CC: Roman Kagan <rkagan@virtuozzo.com>
+CC: Denis V. Lunev <den@openvz.org>
+CC: qemu-devel@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 7797dcf63f11b6e1d34822daf2317223d0f4ad46)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/hv/hyperv_vmbus.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/hv/hyperv_vmbus.h b/drivers/hv/hyperv_vmbus.h
+index cc2fb53..0388638 100644
+--- a/drivers/hv/hyperv_vmbus.h
++++ b/drivers/hv/hyperv_vmbus.h
+@@ -174,7 +174,7 @@ union hv_message_flags {
+ 
+ /* Define synthetic interrupt controller message header. */
+ struct hv_message_header {
+-	enum hv_message_type message_type;
++	u32 message_type;
+ 	u8 payload_size;
+ 	union hv_message_flags message_flags;
+ 	u8 reserved[2];
+@@ -347,7 +347,7 @@ enum hv_call_code {
+ struct hv_input_post_message {
+ 	union hv_connection_id connectionid;
+ 	u32 reserved;
+-	enum hv_message_type message_type;
++	u32 message_type;
+ 	u32 payload_size;
+ 	u64 payload[HV_MESSAGE_PAYLOAD_QWORD_COUNT];
+ };
+-- 
+1.9.3
+

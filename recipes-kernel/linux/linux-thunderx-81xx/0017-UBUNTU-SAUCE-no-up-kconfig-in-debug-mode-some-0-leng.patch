@@ -1,0 +1,34 @@
+From 73f1767fc962e10884093c8542a69703c7dd1971 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Thu, 3 May 2012 16:01:39 +0100
+Subject: [PATCH 0017/1767] UBUNTU: SAUCE: (no-up) kconfig: in debug mode some
+ 0 length message prints occur
+
+Has no real kernel impact, so continue to carry.
+
+When we enable the zconfdump() debugging we see assertion failures
+attempting to print the config.  Convert this into a noop.
+
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ scripts/kconfig/lkc.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/scripts/kconfig/lkc.h b/scripts/kconfig/lkc.h
+index 91ca126..9faeb23 100644
+--- a/scripts/kconfig/lkc.h
++++ b/scripts/kconfig/lkc.h
+@@ -88,7 +88,9 @@ void set_all_choice_values(struct symbol *csym);
+ /* confdata.c and expr.c */
+ static inline void xfwrite(const void *str, size_t len, size_t count, FILE *out)
+ {
+-	assert(len != 0);
++	//assert(len != 0);
++	if (len == 0)
++		return;
+ 
+ 	if (fwrite(str, len, count, out) != count)
+ 		fprintf(stderr, "Error in writing or end of file.\n");
+-- 
+1.9.3
+

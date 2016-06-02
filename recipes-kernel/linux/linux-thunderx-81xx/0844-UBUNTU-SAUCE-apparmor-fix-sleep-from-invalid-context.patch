@@ -1,0 +1,128 @@
+From 543836746d077dc1c3374a83052c2cb8e82173a7 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 29 Jan 2016 16:53:15 -0800
+Subject: [PATCH 0844/1767] UBUNTU: SAUCE: apparmor: fix sleep from invalid
+ context
+
+This is a patch to an apparmor feature that is not currently upstream
+
+BugLink: http://bugs.launchpad.net/bugs/1539349
+
+Commit 08518549722f0c992a9e4be71a0777f37147e9d2 made it so kern_path() via
+getname_kernel() may do a GFP_KERNEL based allocation which is causing the
+"sleep from invalid context" lockdep warning. Rework The apparmor mount
+code to move kern_path() calls outside of the get_buffers()/put_buffers()
+RCU read_lock block.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/mount.c | 47 ++++++++++++++++++++++++-----------------------
+ 1 file changed, 24 insertions(+), 23 deletions(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index b2d3354..8c81157 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -381,13 +381,13 @@ int aa_bind_mount(struct aa_label *label, struct path *path,
+ 
+ 	flags &= MS_REC | MS_BIND;
+ 
+-	get_buffers(buffer, old_buffer);
+-	error = aa_path_name(path, path_flags(labels_profile(label), path), buffer, &name,
+-			     &info, labels_profile(label)->disconnected);
++	error = kern_path(dev_name, LOOKUP_FOLLOW|LOOKUP_AUTOMOUNT, &old_path);
+ 	if (error)
+ 		goto error;
+ 
+-	error = kern_path(dev_name, LOOKUP_FOLLOW|LOOKUP_AUTOMOUNT, &old_path);
++	get_buffers(buffer, old_buffer);
++	error = aa_path_name(path, path_flags(labels_profile(label), path), buffer, &name,
++			     &info, labels_profile(label)->disconnected);
+ 	if (error)
+ 		goto error;
+ 
+@@ -463,6 +463,10 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 	if (!orig_name || !*orig_name)
+ 		return -EINVAL;
+ 
++	error = kern_path(orig_name, LOOKUP_FOLLOW, &old_path);
++	if (error)
++		goto error;
++
+ 	get_buffers(buffer, old_buffer);
+ 	error = aa_path_name(path, path_flags(labels_profile(label), path),
+ 			     buffer, &name, &info,
+@@ -470,10 +474,6 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 	if (error)
+ 		goto error;
+ 
+-	error = kern_path(orig_name, LOOKUP_FOLLOW, &old_path);
+-	if (error)
+-		goto error;
+-
+ 	error = aa_path_name(&old_path, path_flags(labels_profile(label),
+ 						   &old_path),
+ 			     old_buffer, &old_name, &info,
+@@ -508,22 +508,20 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 	const char *name = NULL, *dev_name = NULL, *info = NULL;
+ 	bool binary = true;
+ 	int error;
++	int requires_dev;
++	struct file_system_type *fstype;
++	struct path dev_path;
+ 
+ 	dev_name = orig_dev_name;
+-	get_buffers(buffer, dev_buffer);
+ 	if (type) {
+-		int requires_dev;
+-		struct file_system_type *fstype = get_fs_type(type);
++		fstype = get_fs_type(type);
+ 		if (!fstype)
+ 			return -ENODEV;
+-
+ 		binary = fstype->fs_flags & FS_BINARY_MOUNTDATA;
+ 		requires_dev = fstype->fs_flags & FS_REQUIRES_DEV;
+ 		put_filesystem(fstype);
+ 
+ 		if (requires_dev) {
+-			struct path dev_path;
+-
+ 			if (!dev_name || !*dev_name) {
+ 				error = -ENOENT;
+ 				goto out;
+@@ -532,18 +530,21 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 			error = kern_path(dev_name, LOOKUP_FOLLOW, &dev_path);
+ 			if (error)
+ 				goto error;
+-
+-			error = aa_path_name(&dev_path,
+-					     path_flags(labels_profile(label),
+-							&dev_path),
+-					     dev_buffer, &dev_name, &info,
+-					     labels_profile(label)->disconnected);
+-			path_put(&dev_path);
+-			if (error)
+-				goto error;
+ 		}
+ 	}
+ 
++	get_buffers(buffer, dev_buffer);
++	if (type) {
++		error = aa_path_name(&dev_path,
++				     path_flags(labels_profile(label),
++						&dev_path),
++				     dev_buffer, &dev_name, &info,
++				     labels_profile(label)->disconnected);
++		path_put(&dev_path);
++		if (error)
++			goto error;
++	}
++
+ 	error = aa_path_name(path, path_flags(labels_profile(label), path),
+ 			     buffer, &name, &info,
+ 			     labels_profile(label)->disconnected);
+-- 
+1.9.3
+

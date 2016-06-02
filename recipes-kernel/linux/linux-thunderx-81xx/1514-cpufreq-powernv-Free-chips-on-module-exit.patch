@@ -1,0 +1,35 @@
+From cfec075c8ed740c921cac4aba943b18a27baf068 Mon Sep 17 00:00:00 2001
+From: Shilpasri G Bhat <shilpa.bhat@linux.vnet.ibm.com>
+Date: Wed, 3 Feb 2016 01:11:37 +0530
+Subject: [PATCH 1514/1767] cpufreq: powernv: Free 'chips' on module exit
+
+BugLink: http://bugs.launchpad.net/bugs/1555765
+
+This will free the dynamically allocated memory of 'chips' on
+module exit.
+
+Signed-off-by: Shilpasri G Bhat <shilpa.bhat@linux.vnet.ibm.com>
+Reviewed-by: Gautham R. Shenoy <ego@linux.vnet.ibm.com>
+Acked-by: Viresh Kumar <viresh.kumar@linaro.org>
+Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+(cherry picked from linux-next commit 86622cb8c57abb05fe95bea3a068949c0ca79fc3)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/cpufreq/powernv-cpufreq.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/cpufreq/powernv-cpufreq.c b/drivers/cpufreq/powernv-cpufreq.c
+index cb50138..047170f 100644
+--- a/drivers/cpufreq/powernv-cpufreq.c
++++ b/drivers/cpufreq/powernv-cpufreq.c
+@@ -612,6 +612,7 @@ static void __exit powernv_cpufreq_exit(void)
+ 	unregister_reboot_notifier(&powernv_cpufreq_reboot_nb);
+ 	opal_message_notifier_unregister(OPAL_MSG_OCC,
+ 					 &powernv_cpufreq_opal_nb);
++	kfree(chips);
+ 	cpufreq_unregister_driver(&powernv_cpufreq_driver);
+ }
+ module_exit(powernv_cpufreq_exit);
+-- 
+1.9.3
+

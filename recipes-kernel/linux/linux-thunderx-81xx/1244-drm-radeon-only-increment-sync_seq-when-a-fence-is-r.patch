@@ -1,0 +1,50 @@
+From 02fc0e7d462a0eb5923eba263f4c3f73e8b72c69 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Nicolai=20H=C3=A4hnle?= <nicolai.haehnle@amd.com>
+Date: Sat, 12 Dec 2015 11:42:25 -0500
+Subject: [PATCH 1244/1767] drm/radeon: only increment sync_seq when a fence is
+ really emitted
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+In the rare situation where the kmalloc fails we're probably screwed anyway,
+but let's try to be more robust about it.
+
+Reviewed-by: Michel Dänzer <michel.daenzer@amd.com>
+Signed-off-by: Nicolai Hähnle <Nicolai.Haehnle@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit b24c683af14bdc52b81899937ef2e52c15fe4768)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/radeon/radeon_fence.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/radeon/radeon_fence.c b/drivers/gpu/drm/radeon/radeon_fence.c
+index df09ca7..05815c4 100644
+--- a/drivers/gpu/drm/radeon/radeon_fence.c
++++ b/drivers/gpu/drm/radeon/radeon_fence.c
+@@ -130,7 +130,7 @@ int radeon_fence_emit(struct radeon_device *rdev,
+ 		      struct radeon_fence **fence,
+ 		      int ring)
+ {
+-	u64 seq = ++rdev->fence_drv[ring].sync_seq[ring];
++	u64 seq;
+ 
+ 	/* we are protected by the ring emission mutex */
+ 	*fence = kmalloc(sizeof(struct radeon_fence), GFP_KERNEL);
+@@ -138,7 +138,7 @@ int radeon_fence_emit(struct radeon_device *rdev,
+ 		return -ENOMEM;
+ 	}
+ 	(*fence)->rdev = rdev;
+-	(*fence)->seq = seq;
++	(*fence)->seq = seq = ++rdev->fence_drv[ring].sync_seq[ring];
+ 	(*fence)->ring = ring;
+ 	(*fence)->is_vm_update = false;
+ 	fence_init(&(*fence)->base, &radeon_fence_ops,
+-- 
+1.9.3
+

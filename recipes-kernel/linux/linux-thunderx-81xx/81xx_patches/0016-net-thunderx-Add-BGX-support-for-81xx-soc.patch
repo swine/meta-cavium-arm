@@ -1,0 +1,204 @@
+From a234085718a44b0c4ba2c543791ee8168a05e28b Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Fri, 6 May 2016 13:25:23 -0700
+Subject: [PATCH 16/39] net: thunderx: Add BGX support for 81xx soc
+
+This chip adds support for BGX module on 81xx where a BGX
+can be split and have different LMACs configured with
+different modes.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 98 ++++++++++++++++++++---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.h | 11 +++
+ 2 files changed, 100 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index fd3bfa2..d255eac 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -50,6 +50,7 @@ struct bgx {
+ 	int			lmac_count;
+ 	void __iomem		*reg_base;
+ 	struct pci_dev		*pdev;
++	bool                    is_81xx;
+ };
+ 
+ static struct bgx *bgx_vnic[MAX_BGX_THUNDER];
+@@ -772,9 +773,17 @@ static void bgx_print_qlm_mode(struct bgx *bgx, u8 lmacid)
+ 	struct device *dev = &bgx->pdev->dev;
+ 	struct lmac *lmac;
+ 	char str[20];
++	u8 dlm;
++
++	if (lmacid > MAX_LMAC_PER_BGX)
++		return;
+ 
+ 	lmac = &bgx->lmac[lmacid];
+-	sprintf(str, "BGX%d QLM mode", bgx->bgx_id);
++	dlm = (lmacid / 2) + (bgx->bgx_id * 2);
++	if (!bgx->is_81xx)
++		sprintf(str, "BGX%d QLM mode", bgx->bgx_id);
++	else
++		sprintf(str, "BGX%d DLM%d mode", bgx->bgx_id, dlm);
+ 
+ 	switch (lmac->lmac_type) {
+ 	case BGX_MODE_SGMII:
+@@ -826,24 +835,71 @@ static void lmac_set_lane2sds(struct lmac *lmac)
+ static void bgx_set_lmac_config(struct bgx *bgx, u8 idx)
+ {
+ 	struct lmac *lmac;
++	struct lmac *olmac;
+ 	u64 cmr_cfg;
++	u8 lmac_type;
++	u8 lane_to_sds;
+ 
+ 	lmac = &bgx->lmac[idx];
+ 	lmac->lmacid = idx;
+ 
+-	/* Read LMAC0 type to figure out QLM mode
+-	 * This is configured by low level firmware
++	if (!bgx->is_81xx) {
++		/* Read LMAC0 type to figure out QLM mode
++		 * This is configured by low level firmware
++		 */
++		cmr_cfg = bgx_reg_read(bgx, 0, BGX_CMRX_CFG);
++		lmac->lmac_type = (cmr_cfg >> 8) & 0x07;
++		lmac->use_training =
++			bgx_reg_read(bgx, 0, BGX_SPUX_BR_PMD_CRTL) &
++				SPU_PMD_CRTL_TRAIN_EN;
++		lmac_set_lane2sds(lmac);
++	}
++
++	/* On 81xx BGX can be split across 2 DLMs
++	 * firmware programs lmac_type of LMAC1 and LMAC3
+ 	 */
+-	cmr_cfg = bgx_reg_read(bgx, 0, BGX_CMRX_CFG);
+-	lmac->lmac_type = (cmr_cfg >> 8) & 0x07;
+-	lmac->use_training =
+-		bgx_reg_read(bgx, 0, BGX_SPUX_BR_PMD_CRTL) &
++	if ((idx == 1) || (idx == 3)) {
++		cmr_cfg = bgx_reg_read(bgx, idx, BGX_CMRX_CFG);
++		lmac_type = (u8)((cmr_cfg >> 8) & 0x07);
++		lane_to_sds = (u8)(cmr_cfg & 0xFF);
++		/* Check if config is not reset value */
++		if ((lmac_type == 0) && (lane_to_sds == 0xE4))
++			lmac->lmac_type = BGX_MODE_INVALID;
++		else
++			lmac->lmac_type = lmac_type;
++		lmac->use_training =
++			bgx_reg_read(bgx, idx, BGX_SPUX_BR_PMD_CRTL) &
++				SPU_PMD_CRTL_TRAIN_EN;
++		lmac_set_lane2sds(lmac);
++
++		/* Set LMAC type of other lmac on same DLM i.e LMAC 0/2 */
++		olmac = &bgx->lmac[idx - 1];
++		olmac->lmac_type = lmac->lmac_type;
++		olmac->use_training =
++		bgx_reg_read(bgx, idx - 1, BGX_SPUX_BR_PMD_CRTL) &
+ 			SPU_PMD_CRTL_TRAIN_EN;
+-	lmac_set_lane2sds(lmac);
++		lmac_set_lane2sds(lmac);
++	}
++}
++
++static bool is_dlm0_in_bgx_mode(struct bgx *bgx)
++{
++	struct lmac *lmac;
++
++	if (!bgx->is_81xx)
++		return true;
++
++	lmac = &bgx->lmac[1];
++	if (lmac->lmac_type == BGX_MODE_INVALID)
++		return false;
++
++	return true;
+ }
+ 
+ static void bgx_get_qlm_mode(struct bgx *bgx)
+ {
++	struct lmac *lmac01;
++	struct lmac *lmac23;
+ 	u8  idx;
+ 
+ 	/* It is assumed that low level firmware sets this value */
+@@ -853,7 +909,26 @@ static void bgx_get_qlm_mode(struct bgx *bgx)
+ 
+ 	for (idx = 0; idx < bgx->lmac_count; idx++)
+ 		bgx_set_lmac_config(bgx, idx);
+-	bgx_print_qlm_mode(bgx, 0);
++
++	if (!bgx->is_81xx) {
++		bgx_print_qlm_mode(bgx, 0);
++		return;
++	}
++
++	bgx_print_qlm_mode(bgx, 1);
++	bgx_print_qlm_mode(bgx, 3);
++
++	/* If DLM0 is not in BGX mode then LMAC0/1 have
++	 * to be configured with serdes lanes of DLM1
++	 */
++	if (is_dlm0_in_bgx_mode(bgx) || (bgx->lmac_count > 2))
++		return;
++	for (idx = 0; idx < bgx->lmac_count; idx++) {
++		lmac01 = &bgx->lmac[idx];
++		lmac23 = &bgx->lmac[idx + 2];
++		lmac01->lmac_type = lmac23->lmac_type;
++		lmac01->lane_to_sds = lmac23->lane_to_sds;
++	}
+ }
+ 
+ #ifdef CONFIG_ACPI
+@@ -1013,6 +1088,7 @@ static int bgx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	struct device *dev = &pdev->dev;
+ 	struct bgx *bgx = NULL;
+ 	u8 lmac;
++	u16 sdevid;
+ 
+ 	bgx = devm_kzalloc(dev, sizeof(*bgx), GFP_KERNEL);
+ 	if (!bgx)
+@@ -1034,6 +1110,10 @@ static int bgx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		goto err_disable_device;
+ 	}
+ 
++	pci_read_config_word(pdev, PCI_SUBSYSTEM_ID, &sdevid);
++	if (sdevid == PCI_SUBSYS_DEVID_81XX_BGX)
++		bgx->is_81xx = true;
++
+ 	/* MAP configuration registers */
+ 	bgx->reg_base = pcim_iomap(pdev, PCI_CFG_REG_BAR_NUM, 0);
+ 	if (!bgx->reg_base) {
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+index 86ef1ec..62422c4 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+@@ -9,6 +9,14 @@
+ #ifndef THUNDER_BGX_H
+ #define THUNDER_BGX_H
+ 
++/* PCI device ID */
++#define	PCI_DEVICE_ID_THUNDER_BGX		0xA026
++
++/* Subsystem device IDs */
++#define PCI_SUBSYS_DEVID_88XX_BGX		0xA126
++#define PCI_SUBSYS_DEVID_81XX_BGX		0xA226
++#define PCI_SUBSYS_DEVID_83XX_BGX		0xA326
++
+ #define    MAX_BGX_THUNDER			8 /* Max 4 nodes, 2 per node */
+ #define    MAX_BGX_PER_CN88XX			2
+ #define    MAX_BGX_PER_CN81XX			2
+@@ -213,6 +221,9 @@ enum LMAC_TYPE {
+ 	BGX_MODE_XLAUI = 4, /* 4 lanes, 10.3125 Gbaud */
+ 	BGX_MODE_10G_KR = 3,/* 1 lane, 10.3125 Gbaud */
+ 	BGX_MODE_40G_KR = 4,/* 4 lanes, 10.3125 Gbaud */
++	BGX_MODE_RGMII = 5,
++	BGX_MODE_QSGMII = 6,
++	BGX_MODE_INVALID = 7,
+ };
+ 
+ enum qlm_mode {
+-- 
+1.9.1
+

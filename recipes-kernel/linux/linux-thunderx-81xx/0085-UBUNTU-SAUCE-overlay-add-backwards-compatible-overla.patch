@@ -1,0 +1,403 @@
+From 7ad92653c4cd3e5d47d2a0e22f42dfa63a0ba281 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Mon, 18 May 2015 11:09:52 +0100
+Subject: [PATCH 0085/1767] UBUNTU: SAUCE: overlay: add backwards compatible
+ overlayfs format support V4
+
+Adds a nearly completely compatible overlayfs filesystem type to overlay
+fs, allowing it to mount those filesystems.  It does still require the
+new workdir= arguement to allow them to be writable.  This is aimed to
+be paired with an overlayfs userspace mount helper.
+
+V2: Fix up rename handling, which was leaving chardev-0 style whiteouts
+    lying about.
+V3: pull up to mainline v4.0.
+V4: pull up to mainline v4.2.
+
+BugLink: http://bugs.launchpad.net/bugs/1395877
+BugLink: http://bugs.launchpad.net/bugs/1410480
+BugLink: http://bugs.launchpad.net/bugs/1478609
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/overlayfs/Kconfig     |  7 ++++
+ fs/overlayfs/dir.c       | 78 ++++++++++++++++++++++++++++++++++++++-
+ fs/overlayfs/overlayfs.h | 22 ++++++++++-
+ fs/overlayfs/readdir.c   |  6 ++-
+ fs/overlayfs/super.c     | 96 ++++++++++++++++++++++++++++++++++++++++++++++--
+ 5 files changed, 201 insertions(+), 8 deletions(-)
+
+diff --git a/fs/overlayfs/Kconfig b/fs/overlayfs/Kconfig
+index 3435581..b58e77b 100644
+--- a/fs/overlayfs/Kconfig
++++ b/fs/overlayfs/Kconfig
+@@ -8,3 +8,10 @@ config OVERLAY_FS
+ 	  merged with the 'upper' object.
+ 
+ 	  For more information see Documentation/filesystems/overlayfs.txt
++
++config OVERLAY_FS_V1
++	bool "Overlayfs filesystem (V1) format support"
++	help
++	  Support the older whiteout format overlayfs filesystems via
++	  the overlay module.  This is needed to support legacy kernels
++	  built using the original overlayfs patch set.
+diff --git a/fs/overlayfs/dir.c b/fs/overlayfs/dir.c
+index 692ceda..b16b7aa 100644
+--- a/fs/overlayfs/dir.c
++++ b/fs/overlayfs/dir.c
+@@ -48,6 +48,34 @@ struct dentry *ovl_lookup_temp(struct dentry *workdir, struct dentry *dentry)
+ 	return temp;
+ }
+ 
++#ifdef CONFIG_OVERLAY_FS_V1
++static const char *ovl_whiteout_symlink = "(overlay-whiteout)";
++int ovl_do_whiteout_v1(struct inode *workdir,
++			      struct dentry *dentry)
++{
++	int err;
++
++	err = vfs_symlink(workdir, dentry, ovl_whiteout_symlink);
++	if (err)
++		return err;
++
++	err = vfs_setxattr(dentry, ovl_whiteout_xattr, "y", 1, 0);
++	if (err)
++		vfs_unlink(workdir, dentry, NULL);
++
++	if (err) {
++		/*
++		 * There's no way to recover from failure to whiteout.
++		 * What should we do?  Log a big fat error and... ?
++		 */
++		pr_err("overlayfs: ERROR - failed to whiteout '%s'\n",
++		       dentry->d_name.name);
++	}
++
++	return err;
++}
++#endif
++
+ /* caller holds i_mutex on workdir */
+ static struct dentry *ovl_whiteout(struct dentry *workdir,
+ 				   struct dentry *dentry)
+@@ -60,7 +88,7 @@ static struct dentry *ovl_whiteout(struct dentry *workdir,
+ 	if (IS_ERR(whiteout))
+ 		return whiteout;
+ 
+-	err = ovl_do_whiteout(wdir, whiteout);
++	err = ovl_do_whiteout(wdir, whiteout, dentry);
+ 	if (err) {
+ 		dput(whiteout);
+ 		whiteout = ERR_PTR(err);
+@@ -699,6 +727,51 @@ static int ovl_rmdir(struct inode *dir, struct dentry *dentry)
+ 	return ovl_do_remove(dentry, true);
+ }
+ 
++/*
++ * ovl_downgrade_whiteout -- build a symlink whiteout and install it
++ * over the existing chardev whiteout.
++ */
++static void ovl_downgrade_whiteout(struct dentry *old_upperdir,
++				   struct dentry *old)
++{
++	struct dentry *workdir = ovl_workdir(old);
++	struct dentry *legacy_whiteout = NULL;
++	struct dentry *whtdentry;
++	int err;
++
++	err = ovl_lock_rename_workdir(workdir, old_upperdir);
++	if (err)
++		goto out;
++
++	whtdentry = lookup_one_len(old->d_name.name, old_upperdir,
++				   old->d_name.len);
++	if (IS_ERR(whtdentry)) {
++		err = PTR_ERR(whtdentry);
++		goto out_unlock_workdir;
++	}
++
++	legacy_whiteout = ovl_whiteout(workdir, old);
++	if (IS_ERR(legacy_whiteout)) {
++		err = PTR_ERR(legacy_whiteout);
++		goto out_dput;
++	}
++
++	err = ovl_do_rename(workdir->d_inode, legacy_whiteout,
++			    old_upperdir->d_inode, whtdentry, 0);
++	if (err)
++		ovl_cleanup(workdir->d_inode, legacy_whiteout);
++
++out_dput:
++	dput(whtdentry);
++	dput(legacy_whiteout);
++out_unlock_workdir:
++	unlock_rename(workdir, old_upperdir);
++out:
++	if (err)
++		pr_err("overlayfs: dowgrade of '%pd2' whiteout failed (%i)\n",
++		       old, err);
++}
++
+ static int ovl_rename2(struct inode *olddir, struct dentry *old,
+ 		       struct inode *newdir, struct dentry *new,
+ 		       unsigned int flags)
+@@ -919,6 +992,9 @@ out_dput:
+ 	dput(newdentry);
+ out_unlock:
+ 	unlock_rename(new_upperdir, old_upperdir);
++
++	if (!err && ovl_config_legacy(old) && flags & RENAME_WHITEOUT)
++		ovl_downgrade_whiteout(old_upperdir, old);
+ out_revert_creds:
+ 	if (old_opaque || new_opaque) {
+ 		revert_creds(old_cred);
+diff --git a/fs/overlayfs/overlayfs.h b/fs/overlayfs/overlayfs.h
+index e17154a..a84263b 100644
+--- a/fs/overlayfs/overlayfs.h
++++ b/fs/overlayfs/overlayfs.h
+@@ -27,6 +27,8 @@ enum ovl_path_type {
+ #define OVL_XATTR_PRE_LEN  16
+ #define OVL_XATTR_OPAQUE   OVL_XATTR_PRE_NAME"opaque"
+ 
++extern const char *ovl_whiteout_xattr; /* XXX: should be ^^ */
++
+ static inline int ovl_do_rmdir(struct inode *dir, struct dentry *dentry)
+ {
+ 	int err = vfs_rmdir(dir, dentry);
+@@ -124,12 +126,28 @@ static inline int ovl_do_rename(struct inode *olddir, struct dentry *olddentry,
+ 	return err;
+ }
+ 
+-static inline int ovl_do_whiteout(struct inode *dir, struct dentry *dentry)
++#ifdef CONFIG_OVERLAY_FS_V1
++extern int ovl_config_legacy(struct dentry *dentry);
++#else
++#define ovl_config_legacy(x) (0)
++#endif
++
++int ovl_do_whiteout_v1(struct inode *dir, struct dentry *dentry);
++
++static inline int ovl_do_whiteout_v2(struct inode *dir, struct dentry *dentry)
+ {
+ 	int err = vfs_whiteout(dir, dentry);
+ 	pr_debug("whiteout(%pd2) = %i\n", dentry, err);
+ 	return err;
+ }
++static inline int ovl_do_whiteout(struct inode *dir, struct dentry *dentry,
++				  struct dentry *ovlentry)
++{
++	if (ovl_config_legacy(ovlentry))
++		return ovl_do_whiteout_v1(dir, dentry);
++
++	return ovl_do_whiteout_v2(dir, dentry);
++}
+ 
+ enum ovl_path_type ovl_path_type(struct dentry *dentry);
+ u64 ovl_dentry_version_get(struct dentry *dentry);
+@@ -149,7 +167,7 @@ int ovl_want_write(struct dentry *dentry);
+ void ovl_drop_write(struct dentry *dentry);
+ bool ovl_dentry_is_opaque(struct dentry *dentry);
+ void ovl_dentry_set_opaque(struct dentry *dentry, bool opaque);
+-bool ovl_is_whiteout(struct dentry *dentry);
++bool ovl_is_whiteout(struct dentry *dentry, int is_legacy);
+ void ovl_dentry_update(struct dentry *dentry, struct dentry *upperdentry);
+ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
+ 			  unsigned int flags);
+diff --git a/fs/overlayfs/readdir.c b/fs/overlayfs/readdir.c
+index adcb139..7c75665 100644
+--- a/fs/overlayfs/readdir.c
++++ b/fs/overlayfs/readdir.c
+@@ -43,6 +43,7 @@ struct ovl_readdir_data {
+ 	struct ovl_cache_entry *first_maybe_whiteout;
+ 	int count;
+ 	int err;
++	int is_legacy;
+ };
+ 
+ struct ovl_dir_file {
+@@ -98,7 +99,7 @@ static struct ovl_cache_entry *ovl_cache_entry_new(struct ovl_readdir_data *rdd,
+ 	p->ino = ino;
+ 	p->is_whiteout = false;
+ 
+-	if (d_type == DT_CHR) {
++	if ((d_type == DT_CHR && !rdd->is_legacy) || (d_type == DT_LNK && rdd->is_legacy)) {
+ 		p->next_maybe_whiteout = rdd->first_maybe_whiteout;
+ 		rdd->first_maybe_whiteout = p;
+ 	}
+@@ -224,7 +225,7 @@ static int ovl_check_whiteouts(struct dentry *dir, struct ovl_readdir_data *rdd)
+ 			rdd->first_maybe_whiteout = p->next_maybe_whiteout;
+ 			dentry = lookup_one_len(p->name, dir, p->len);
+ 			if (!IS_ERR(dentry)) {
+-				p->is_whiteout = ovl_is_whiteout(dentry);
++				p->is_whiteout = ovl_is_whiteout(dentry, rdd->is_legacy);
+ 				dput(dentry);
+ 			}
+ 		}
+@@ -290,6 +291,7 @@ static int ovl_dir_read_merged(struct dentry *dentry, struct list_head *list)
+ 		.list = list,
+ 		.root = RB_ROOT,
+ 		.is_merge = false,
++		.is_legacy = ovl_config_legacy(dentry),
+ 	};
+ 	int idx, next;
+ 
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index f42c940..6149930 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -40,6 +40,7 @@ struct ovl_fs {
+ 	struct vfsmount **lower_mnt;
+ 	struct dentry *workdir;
+ 	long lower_namelen;
++	int legacy;
+ 	/* pathnames of lower and upper dirs, for show_options */
+ 	struct ovl_config config;
+ };
+@@ -237,13 +238,56 @@ u64 ovl_dentry_version_get(struct dentry *dentry)
+ 	return oe->version;
+ }
+ 
+-bool ovl_is_whiteout(struct dentry *dentry)
++#ifdef CONFIG_OVERLAY_FS_V1
++int ovl_config_legacy(struct dentry *dentry)
++{
++	struct super_block *sb = dentry->d_sb;
++	struct ovl_fs *ufs = sb->s_fs_info;
++
++	return ufs->legacy;
++}
++
++const char *ovl_whiteout_xattr = "trusted.overlay.whiteout";
++
++bool ovl_is_whiteout_v1(struct dentry *dentry)
++{
++	int res;
++	char val;
++
++	if (!dentry)
++		return false;
++	if (!dentry->d_inode)
++		return false;
++	if (!S_ISLNK(dentry->d_inode->i_mode))
++		return false;
++	if (!dentry->d_inode->i_op->getxattr)
++		return false;
++
++	res = dentry->d_inode->i_op->getxattr(dentry, ovl_whiteout_xattr, &val, 1);
++	if (res == 1 && val == 'y')
++		return true;
++
++	return false;
++}
++#else
++#define ovl_is_whiteout_v1(x) (0)
++#endif
++
++bool ovl_is_whiteout_v2(struct dentry *dentry)
+ {
+ 	struct inode *inode = dentry->d_inode;
+ 
+ 	return inode && IS_WHITEOUT(inode);
+ }
+ 
++bool ovl_is_whiteout(struct dentry *dentry, int is_legacy)
++{
++	if (is_legacy)
++		return ovl_is_whiteout_v2(dentry) || ovl_is_whiteout_v1(dentry);
++
++	return ovl_is_whiteout_v2(dentry);
++}
++
+ static bool ovl_is_opaquedir(struct dentry *dentry)
+ {
+ 	int res;
+@@ -408,6 +452,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
+ 	struct dentry *this, *prev = NULL;
+ 	unsigned int i;
+ 	int err;
++	int is_legacy = ovl_config_legacy(dentry);
+ 
+ 	upperdir = ovl_upperdentry_dereference(poe);
+ 	if (upperdir) {
+@@ -422,7 +467,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
+ 				err = -EREMOTE;
+ 				goto out;
+ 			}
+-			if (ovl_is_whiteout(this)) {
++			if (ovl_is_whiteout(this, is_legacy)) {
+ 				dput(this);
+ 				this = NULL;
+ 				upperopaque = true;
+@@ -456,7 +501,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
+ 		}
+ 		if (!this)
+ 			continue;
+-		if (ovl_is_whiteout(this)) {
++		if (ovl_is_whiteout(this, is_legacy)) {
+ 			dput(this);
+ 			break;
+ 		}
+@@ -1107,14 +1152,59 @@ static struct file_system_type ovl_fs_type = {
+ };
+ MODULE_ALIAS_FS("overlay");
+ 
++#ifdef CONFIG_OVERLAY_FS_V1
++static int ovl_v1_fill_super(struct super_block *sb, void *data, int silent)
++{
++	int ret;
++	struct ovl_fs *ufs;
++
++	ret = ovl_fill_super(sb, data, silent);
++	if (ret)
++		return ret;
++
++	/* Mark this as a overlayfs format. */
++	ufs = sb->s_fs_info;
++	ufs->legacy = 1;
++
++	return ret;
++}
++
++static struct dentry *ovl_mount_v1(struct file_system_type *fs_type, int flags,
++				const char *dev_name, void *raw_data)
++{
++	return mount_nodev(fs_type, flags, raw_data, ovl_v1_fill_super);
++}
++
++static struct file_system_type ovl_v1_fs_type = {
++	.owner		= THIS_MODULE,
++	.name		= "overlayfs",
++	.mount		= ovl_mount_v1,
++	.kill_sb	= kill_anon_super,
++	.fs_flags	= FS_USERNS_MOUNT,  /* XXX */
++};
++MODULE_ALIAS_FS("overlayfs");
++MODULE_ALIAS("overlayfs");
++#endif
++
+ static int __init ovl_init(void)
+ {
++	int ret;
++
++	if (IS_ENABLED(CONFIG_OVERLAY_FS_V1)) {
++		ret = register_filesystem(&ovl_v1_fs_type);
++		if (ret)
++			return ret;
++	}
++
+ 	return register_filesystem(&ovl_fs_type);
+ }
+ 
+ static void __exit ovl_exit(void)
+ {
+ 	unregister_filesystem(&ovl_fs_type);
++
++	if (IS_ENABLED(CONFIG_OVERLAY_FS_V1))
++		unregister_filesystem(&ovl_v1_fs_type);
+ }
+ 
+ module_init(ovl_init);
+-- 
+1.9.3
+

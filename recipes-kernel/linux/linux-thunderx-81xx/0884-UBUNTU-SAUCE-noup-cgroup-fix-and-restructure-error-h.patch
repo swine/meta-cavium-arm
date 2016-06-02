@@ -1,0 +1,81 @@
+From cabc42d910ac6757f7ebfd2c1b5c67299efb2131 Mon Sep 17 00:00:00 2001
+From: Tejun Heo <tj@kernel.org>
+Date: Mon, 29 Feb 2016 20:52:45 +0000
+Subject: [PATCH 0884/1767] UBUNTU: SAUCE: (noup) cgroup: fix and restructure
+ error handling in copy_cgroup_ns()
+
+copy_cgroup_ns()'s error handling was broken and the attempt to fix it
+d22025570e2e ("cgroup: fix alloc_cgroup_ns() error handling in
+copy_cgroup_ns()") was broken too in that it ended up trying an
+ERR_PTR() value.
+
+There's only one place where copy_cgroup_ns() needs to perform cleanup
+after failure.  Simplify and fix the error handling by removing the
+goto's.
+
+(Ported from upstream patch for linux-next - Serge)
+
+Signed-off-by: Tejun Heo <tj@kernel.org>
+Reported-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Serge Hallyn <serge.hallyn@ubuntu.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/cgroup.c | 21 +++++++--------------
+ 1 file changed, 7 insertions(+), 14 deletions(-)
+
+diff --git a/kernel/cgroup.c b/kernel/cgroup.c
+index 9510da9..3f11993 100644
+--- a/kernel/cgroup.c
++++ b/kernel/cgroup.c
+@@ -5951,9 +5951,8 @@ struct cgroup_namespace *
+ copy_cgroup_ns(unsigned long flags, struct user_namespace *user_ns,
+ 	       struct cgroup_namespace *old_ns)
+ {
+-	struct cgroup_namespace *new_ns = NULL;
+-	struct css_set *cset = NULL;
+-	int err;
++	struct cgroup_namespace *new_ns;
++	struct css_set *cset;
+ 
+ 	BUG_ON(!old_ns);
+ 
+@@ -5963,9 +5962,8 @@ copy_cgroup_ns(unsigned long flags, struct user_namespace *user_ns,
+ 	}
+ 
+ 	/* Allow only sysadmin to create cgroup namespace. */
+-	err = -EPERM;
+ 	if (!ns_capable(user_ns, CAP_SYS_ADMIN))
+-		goto err_out;
++		return ERR_PTR(-EPERM);
+ 
+ 	mutex_lock(&cgroup_mutex);
+ 	spin_lock_bh(&css_set_lock);
+@@ -5976,21 +5974,16 @@ copy_cgroup_ns(unsigned long flags, struct user_namespace *user_ns,
+ 	spin_unlock_bh(&css_set_lock);
+ 	mutex_unlock(&cgroup_mutex);
+ 
+-	err = -ENOMEM;
+ 	new_ns = alloc_cgroup_ns();
+-	if (!new_ns)
+-		goto err_out;
++	if (IS_ERR(new_ns)) {
++		put_css_set(cset);
++		return new_ns;
++	}
+ 
+ 	new_ns->user_ns = get_user_ns(user_ns);
+ 	new_ns->root_cset = cset;
+ 
+ 	return new_ns;
+-
+-err_out:
+-	if (cset)
+-		put_css_set(cset);
+-	kfree(new_ns);
+-	return ERR_PTR(err);
+ }
+ 
+ static inline struct cgroup_namespace *to_cg_ns(struct ns_common *ns)
+-- 
+1.9.3
+

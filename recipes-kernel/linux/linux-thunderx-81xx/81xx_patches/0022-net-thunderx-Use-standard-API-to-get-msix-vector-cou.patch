@@ -1,0 +1,42 @@
+From 2db6cede30db4a022b471434ebdf5161d44e60fa Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 10 May 2016 13:42:05 -0700
+Subject: [PATCH 22/39] net: thunderx: Use standard API to get msix vector
+ count
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 10 +++-------
+ 1 file changed, 3 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 4c8db3e..f432543 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -1106,11 +1106,7 @@ static int nic_enable_msix(struct nicpf *nic)
+ {
+ 	int i, ret;
+ 
+-	/* One mailbox vector per 64 VFs */
+-	if (pci_sriov_get_totalvfs(nic->pdev) > 64)
+-		nic->num_vec = NIC_PF_MSIX_VECTORS;
+-	else
+-		nic->num_vec = NIC_PF_MSIX_VECTORS - 1;
++	nic->num_vec = pci_msix_vec_count(nic->pdev);
+ 
+ 	for (i = 0; i < nic->num_vec; i++)
+ 		nic->msix_entries[i].entry = i;
+@@ -1118,8 +1114,8 @@ static int nic_enable_msix(struct nicpf *nic)
+ 	ret = pci_enable_msix(nic->pdev, nic->msix_entries, nic->num_vec);
+ 	if (ret) {
+ 		dev_err(&nic->pdev->dev,
+-			"Request for #%d msix vectors failed\n",
+-			   nic->num_vec);
++			"Request for #%d msix vectors failed, returned %d\n",
++			   nic->num_vec, ret);
+ 		return ret;
+ 	}
+ 
+-- 
+1.9.1
+

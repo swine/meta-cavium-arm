@@ -1,0 +1,166 @@
+From 34b89998a1ca9dbe31933c8dca7772f742befaa4 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Fri, 3 Aug 2012 10:42:33 -0600
+Subject: [PATCH 0031/1767] UBUNTU: SAUCE: (no-up) firmware: Remove av7110
+ files duplicated in linux-firmware
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ firmware/Makefile                 |   1 -
+ firmware/av7110/Boot.S            | 109 --------------------------------------
+ firmware/av7110/bootcode.bin.ihex |  15 ------
+ 3 files changed, 125 deletions(-)
+ delete mode 100644 firmware/av7110/Boot.S
+ delete mode 100644 firmware/av7110/bootcode.bin.ihex
+
+diff --git a/firmware/Makefile b/firmware/Makefile
+index d579b76..7a3de1c 100644
+--- a/firmware/Makefile
++++ b/firmware/Makefile
+@@ -58,7 +58,6 @@ fw-shipped-$(CONFIG_DRM_RADEON) += radeon/R100_cp.bin radeon/R200_cp.bin \
+ 				   radeon/RV770_pfp.bin radeon/RV770_me.bin \
+ 				   radeon/RV730_pfp.bin radeon/RV730_me.bin \
+ 				   radeon/RV710_pfp.bin radeon/RV710_me.bin
+-fw-shipped-$(CONFIG_DVB_AV7110) += av7110/bootcode.bin
+ fw-shipped-$(CONFIG_E100) += e100/d101m_ucode.bin e100/d101s_ucode.bin \
+ 			     e100/d102e_ucode.bin
+ fw-shipped-$(CONFIG_MYRI_SBUS) += myricom/lanai.bin
+diff --git a/firmware/av7110/Boot.S b/firmware/av7110/Boot.S
+deleted file mode 100644
+index d562fdc..0000000
+--- a/firmware/av7110/Boot.S
++++ /dev/null
+@@ -1,109 +0,0 @@
+-/*
+-   Boot.S: boot loader for Siemens DVB-S card
+-
+-   Copyright (C) 2001 Convergence integrated media GmbH
+-	              Written by Ralph Metzler
+-		                 <rjkm@convergence.de>
+-   Copyright (C) 2006 Matthieu CASTET <castet.mattheiu@free.fr>
+-
+-   This program is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU General Public License
+-   as published by the Free Software Foundation; either version 2
+-   of the License, or (at your option) any later version.
+-
+-   This program is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-   GNU General Public License for more details.
+-
+-   You should have received a copy of the GNU General Public License
+-   along with this program; if not, write to the Free Software
+-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA.
+-
+-*/
+-
+-/*
+-	check AV711x_3_1.pdf for some hardware infos
+-	build it with :
+-	$ cc -mbig-endian -c Boot.S
+-	$ ld -Ttext 0x2c000000 -EB -o Boot Boot.o
+-	$ objcopy -Obinary Boot
+-*/
+-
+-	.text
+-	.align
+-	.globl _start
+-_start:
+-	b reset			// reset vector
+-	movs  pc, r14           // undefined
+-	subs  pc, r14, #4       // SWI
+-	subs  pc, r14, #4       // prefetch abort
+-	subs  pc, r14, #8       // data abort
+-	subs  pc, r14, #4       // reserved
+-	subs  pc, r14, #4       // IRQ
+-	subs  pc, r14, #4       // FIQ
+-
+-	.word tbl               // table needed by firmware ROM
+-tbl:	.word (endtbl - tbl)
+-	.word 0
+-  	.word conf
+-endtbl:	.word 0
+-conf:	.word 0xa5a55a5a
+-	.word 0x001f1555
+-	.word 0x00000009
+-
+-reset:	ldr	r13, buffer
+-	ldr	r4, flag
+-	mov	r0, #0
+-	str	r0, [r4]
+-	str	r0, [r4, #4]
+-
+-	ldr		r1, wait_address
+-	ldr		r2, flag_address
+-	ldr		r3, sram
+-
+-copycode: // copy the code HW Sram
+-	ldmia	r1!, {r5-r12}
+-	stmia	r3!, {r5-r12}
+-	cmp		r1, r2
+-	ble 	copycode
+-	ldr		pc, sram // jump to the copied code
+-
+-wait:	ldrh	r1, [r4]        // wait for flag!=0
+- 	cmp	r1, #0
+-	beq	wait
+-
+-	mov	r1, r13         // buffer address
+- 	ldr	r3, [r4,#4]     // destaddr
+-
+- 	ldrh	r2, [r4,#2]     // get segment length
+-	add     r2, r2, #63     // round length to next 64 bytes
+-	movs	r2, r2, lsr #6  // and divide by 64
+-	moveq	r0, #2          // if 0, set flag to 2, else signal
+-	strh	r0, [r4]        // that buffer is accepted by setting to 0
+-        beq wait
+-	
+-copyloop:
+-	ldmia	r1!, {r5-r12}
+-	stmia	r3!, {r5-r12}
+-	ldmia	r1!, {r5-r12}
+-	stmia	r3!, {r5-r12}
+- 	subs	r2, r2, #1
+- 	bne	copyloop
+-
+-	eor     r13, r13, #0x1400    // switch to other buffer
+-	b	wait
+-
+-// flag is stored at 0x2c0003f8, length at 0x2c0003fa,
+-// destaddr at 0x2c0003fc
+-
+-flag:	.word	0x2c0003f8
+-
+-
+-// buffer 1 is at 0x2c000400, buffer 2 at 0x2c001000
+-
+-buffer:	.word	0x2c000400
+-
+-sram: .word   0x9e000800
+-wait_address: .word   wait
+-flag_address: .word   flag
+diff --git a/firmware/av7110/bootcode.bin.ihex b/firmware/av7110/bootcode.bin.ihex
+deleted file mode 100644
+index 26a2993..0000000
+--- a/firmware/av7110/bootcode.bin.ihex
++++ /dev/null
+@@ -1,15 +0,0 @@
+-:10000000EA00000EE1B0F00EE25EF004E25EF00401
+-:10001000E25EF008E25EF004E25EF004E25EF0040C
+-:100020002C0000240000000C000000002C00003414
+-:1000300000000000A5A55A5A001F15550000000930
+-:10004000E59FD07CE59F4074E3A00000E5840000BC
+-:10005000E5840004E59F1070E59F2070E59F306403
+-:10006000E8B11FE0E8A31FE0E1510002DAFFFFFB67
+-:10007000E59FF050E1D410B0E35100000AFFFFFC0F
+-:10008000E1A0100DE5943004E1D420B2E282203FDB
+-:10009000E1B0232203A00002E1C400B00AFFFFF494
+-:1000A000E8B11FE0E8A31FE0E8B11FE0E8A31FE00C
+-:1000B000E25220011AFFFFF9E22DDB05EAFFFFEC17
+-:1000C0002C0003F82C0004009E0008002C00007493
+-:0400D0002C0000C040
+-:00000001FF
+-- 
+1.9.3
+

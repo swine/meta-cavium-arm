@@ -1,0 +1,45 @@
+From 93fa9c47dfe0be1f5120d45aa6dc4a3fb4596f90 Mon Sep 17 00:00:00 2001
+From: Mahesh Salgaonkar <mahesh@linux.vnet.ibm.com>
+Date: Thu, 14 Jan 2016 08:45:28 +0530
+Subject: [PATCH 0326/1767] UBUNTU: SAUCE: KVM: PPC: Book3S HV: Fix soft
+ lockups in KVM on HMI for time base errors
+
+BugLink: http://bugs.launchpad.net/bugs/1537881
+https://lists.ozlabs.org/pipermail/linuxppc-dev/2016-January/138011.html
+
+When secondaries are napping in kvm_unsplit_nap() with hwthread_req = 1,
+the HMI goes ignored even though subcores are already exited the guest.
+Hence HMI keeps waking up secondaries from nap in a loop and secondaries
+always go back to nap since no vcore is assigned to them. This makes
+impossible for primary thread to get hold of secondary threads resulting
+into a soft lockup in KVM path.
+
+This patch fixes this by adding a HMI check just before the thread goes
+to unsplit nap.
+
+Signed-off-by: Mahesh Salgaonkar <mahesh@linux.vnet.ibm.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/powerpc/kvm/book3s_hv_rmhandlers.S | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/powerpc/kvm/book3s_hv_rmhandlers.S b/arch/powerpc/kvm/book3s_hv_rmhandlers.S
+index e57cc38..51647be 100644
+--- a/arch/powerpc/kvm/book3s_hv_rmhandlers.S
++++ b/arch/powerpc/kvm/book3s_hv_rmhandlers.S
+@@ -427,6 +427,12 @@ kvm_no_guest:
+  * whole-core mode, so we need to nap.
+  */
+ kvm_unsplit_nap:
++	/* Before we head down to nap, check if HMI is pending and handle it */
++	cmpwi	r12, BOOK3S_INTERRUPT_HMI
++	bne	55f
++	li	r3, 0			/* NULL argument */
++	bl	hmi_exception_realmode
++55:
+ 	/*
+ 	 * Ensure that secondary doesn't nap when it has
+ 	 * its vcore pointer set.
+-- 
+1.9.3
+

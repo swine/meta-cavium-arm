@@ -1,0 +1,36 @@
+From 8ece8b67092a30a9b86a1c75a2b196bf12d87f10 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:06:32 -0700
+Subject: [PATCH 1637/1767] Revert "UBUNTU: SAUCE: Revert: fix: only allow a
+ single threaded process to ..."
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 9b3067958c38974b4e447ce1688cba34fdf96b87.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/domain.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index 3728644..dd87dff 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -818,6 +818,13 @@ int aa_change_profile(const char *ns_name, const char *hname, bool onexec,
+ 	if (error)
+ 		goto audit;
+ 
++	if (onexec && !current_is_single_threaded()) {
++		info = "not a single threaded task";
++		error = -EACCES;
++		goto audit;
++	}
++
++
+ 	if (permtest)
+ 		goto audit;
+ 
+-- 
+1.9.3
+

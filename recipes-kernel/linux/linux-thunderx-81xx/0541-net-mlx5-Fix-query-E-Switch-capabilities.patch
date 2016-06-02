@@ -1,0 +1,35 @@
+From 99ad9131da8d02cce8b90c0870764d65f2b905f1 Mon Sep 17 00:00:00 2001
+From: Saeed Mahameed <saeedm@mellanox.com>
+Date: Thu, 10 Dec 2015 17:12:37 +0200
+Subject: [PATCH 0541/1767] net/mlx5: Fix query E-Switch capabilities
+
+BugLink: http://bugs.launchpad.net/bugs/1540435
+
+E-Switch capabilities should be queried only if E-Switch flow table
+is supported and not only when vport group manager.
+
+Fixes: d6666753c6e8 ("net/mlx5: E-Switch, Introduce HCA cap and E-Switch vport context")
+Signed-off-by: Saeed Mahameed <saeedm@mellanox.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit 9bd0a185c2c48226a50e6e5b639edaa9e8ab6c51)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/mellanox/mlx5/core/fw.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/mellanox/mlx5/core/fw.c b/drivers/net/ethernet/mellanox/mlx5/core/fw.c
+index 1c9f9a5..aa1ab47 100644
+--- a/drivers/net/ethernet/mellanox/mlx5/core/fw.c
++++ b/drivers/net/ethernet/mellanox/mlx5/core/fw.c
+@@ -173,7 +173,7 @@ int mlx5_query_hca_caps(struct mlx5_core_dev *dev)
+ 			return err;
+ 	}
+ 
+-	if (MLX5_CAP_GEN(dev, vport_group_manager)) {
++	if (MLX5_CAP_GEN(dev, eswitch_flow_table)) {
+ 		err = mlx5_core_get_caps(dev, MLX5_CAP_ESWITCH,
+ 					 HCA_CAP_OPMOD_GET_CUR);
+ 		if (err)
+-- 
+1.9.3
+

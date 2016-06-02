@@ -1,0 +1,44 @@
+From b3f30f0b5d22c346d45de6b87e7ea1583522eff9 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 16 Feb 2016 16:29:50 +0530
+Subject: [PATCH 1741/1767] net: thunderx: Fix for HW TSO not enabled for
+ secondary qsets
+
+For secondary Qsets 'hw_tso' is not getting set as probe() returns
+much earlier. Fixed it by moving silicon revision check.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit 8d210d54c5250c52b69266f299e64fe8356f9453)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_main.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_main.c b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+index 7c0276e..12c7cb5 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+@@ -1571,6 +1571,9 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	nicvf_send_vf_struct(nic);
+ 
++	if (!pass1_silicon(nic->pdev))
++		nic->hw_tso = true;
++
+ 	/* Check if this VF is in QS only mode */
+ 	if (nic->sqs_mode)
+ 		return 0;
+@@ -1590,9 +1593,6 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	netdev->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO;
+ 
+-	if (!pass1_silicon(nic->pdev))
+-		nic->hw_tso = true;
+-
+ 	netdev->netdev_ops = &nicvf_netdev_ops;
+ 	netdev->watchdog_timeo = NICVF_TX_TIMEOUT;
+ 
+-- 
+1.9.3
+

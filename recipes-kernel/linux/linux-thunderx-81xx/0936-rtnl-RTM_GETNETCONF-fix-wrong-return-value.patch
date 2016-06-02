@@ -1,0 +1,51 @@
+From 2c226f07f217aba93699fa8b7caba23fb3e4cfdf Mon Sep 17 00:00:00 2001
+From: Anton Protopopov <a.s.protopopov@gmail.com>
+Date: Tue, 16 Feb 2016 21:43:16 -0500
+Subject: [PATCH 0936/1767] rtnl: RTM_GETNETCONF: fix wrong return value
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+[ Upstream commit a97eb33ff225f34a8124774b3373fd244f0e83ce ]
+
+An error response from a RTM_GETNETCONF request can return the positive
+error value EINVAL in the struct nlmsgerr that can mislead userspace.
+
+Signed-off-by: Anton Protopopov <a.s.protopopov@gmail.com>
+Acked-by: Cong Wang <xiyou.wangcong@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/ipv4/devinet.c  | 2 +-
+ net/ipv6/addrconf.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/net/ipv4/devinet.c b/net/ipv4/devinet.c
+index cebd9d3..f6303b1 100644
+--- a/net/ipv4/devinet.c
++++ b/net/ipv4/devinet.c
+@@ -1847,7 +1847,7 @@ static int inet_netconf_get_devconf(struct sk_buff *in_skb,
+ 	if (err < 0)
+ 		goto errout;
+ 
+-	err = EINVAL;
++	err = -EINVAL;
+ 	if (!tb[NETCONFA_IFINDEX])
+ 		goto errout;
+ 
+diff --git a/net/ipv6/addrconf.c b/net/ipv6/addrconf.c
+index 828ab28..e8d3da0 100644
+--- a/net/ipv6/addrconf.c
++++ b/net/ipv6/addrconf.c
+@@ -583,7 +583,7 @@ static int inet6_netconf_get_devconf(struct sk_buff *in_skb,
+ 	if (err < 0)
+ 		goto errout;
+ 
+-	err = EINVAL;
++	err = -EINVAL;
+ 	if (!tb[NETCONFA_IFINDEX])
+ 		goto errout;
+ 
+-- 
+1.9.3
+

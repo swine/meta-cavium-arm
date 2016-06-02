@@ -1,0 +1,38 @@
+From f462943e3f18554d0058437c8da9f2539480253c Mon Sep 17 00:00:00 2001
+From: Javier Gonzalez <javier@javigon.com>
+Date: Tue, 12 Jan 2016 07:49:17 +0100
+Subject: [PATCH 0365/1767] lightnvm: add check after mempool allocation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+The mempool allocation might fail. Make sure to return error when it
+does, instead of causing a kernel panic.
+
+Signed-off-by: Javier Gonzalez <javier@cnexlabs.com>
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 3bfbc6adbc5031e8a5907baa5beb27b41637742a)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/rrpc.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index a1e7488..f4bc986 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -287,6 +287,8 @@ static int rrpc_move_valid_pages(struct rrpc *rrpc, struct rrpc_block *rblk)
+ 	}
+ 
+ 	page = mempool_alloc(rrpc->page_pool, GFP_NOIO);
++	if (!page)
++		return -ENOMEM;
+ 
+ 	while ((slot = find_first_zero_bit(rblk->invalid_pages,
+ 					    nr_pgs_per_blk)) < nr_pgs_per_blk) {
+-- 
+1.9.3
+

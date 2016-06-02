@@ -1,0 +1,91 @@
+From 4d663e9a570d2b02368b1a1de1b8e82be662f164 Mon Sep 17 00:00:00 2001
+From: John Keeping <john@metanate.com>
+Date: Tue, 19 Jan 2016 10:46:58 +0000
+Subject: [PATCH 1393/1767] drm/atomic-helper: Export framebuffer_changed()
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+The Rockchip driver cannot use drm_atomic_helper_wait_for_vblanks()
+because it has hardware counters for neither vblanks nor scanlines.
+
+In order to simplify re-implementing the functionality for this driver,
+export the framebuffer_changed() helper so it can be reused.
+
+Signed-off-by: John Keeping <john@metanate.com>
+Reviewed-by: Daniel Vetter <daniel.vetter@ffwll.ch>
+(cherry picked from commit c240906d36653944d5c049df7ce667a7e8bea6ac)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/drm_atomic_helper.c | 24 ++++++++++++++++++++----
+ include/drm/drm_atomic_helper.h     |  4 ++++
+ 2 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/drm_atomic_helper.c b/drivers/gpu/drm/drm_atomic_helper.c
+index 042598a..8a3f96c 100644
+--- a/drivers/gpu/drm/drm_atomic_helper.c
++++ b/drivers/gpu/drm/drm_atomic_helper.c
+@@ -956,9 +956,23 @@ static void wait_for_fences(struct drm_device *dev,
+ 	}
+ }
+ 
+-static bool framebuffer_changed(struct drm_device *dev,
+-				struct drm_atomic_state *old_state,
+-				struct drm_crtc *crtc)
++/**
++ * drm_atomic_helper_framebuffer_changed - check if framebuffer has changed
++ * @dev: DRM device
++ * @old_state: atomic state object with old state structures
++ * @crtc: DRM crtc
++ *
++ * Checks whether the framebuffer used for this CRTC changes as a result of
++ * the atomic update.  This is useful for drivers which cannot use
++ * drm_atomic_helper_wait_for_vblanks() and need to reimplement its
++ * functionality.
++ *
++ * Returns:
++ * true if the framebuffer changed.
++ */
++bool drm_atomic_helper_framebuffer_changed(struct drm_device *dev,
++					   struct drm_atomic_state *old_state,
++					   struct drm_crtc *crtc)
+ {
+ 	struct drm_plane *plane;
+ 	struct drm_plane_state *old_plane_state;
+@@ -975,6 +989,7 @@ static bool framebuffer_changed(struct drm_device *dev,
+ 
+ 	return false;
+ }
++EXPORT_SYMBOL(drm_atomic_helper_framebuffer_changed);
+ 
+ /**
+  * drm_atomic_helper_wait_for_vblanks - wait for vblank on crtcs
+@@ -1009,7 +1024,8 @@ drm_atomic_helper_wait_for_vblanks(struct drm_device *dev,
+ 		if (old_state->legacy_cursor_update)
+ 			continue;
+ 
+-		if (!framebuffer_changed(dev, old_state, crtc))
++		if (!drm_atomic_helper_framebuffer_changed(dev,
++				old_state, crtc))
+ 			continue;
+ 
+ 		ret = drm_crtc_vblank_get(crtc);
+diff --git a/include/drm/drm_atomic_helper.h b/include/drm/drm_atomic_helper.h
+index 8cba54a..186adfb 100644
+--- a/include/drm/drm_atomic_helper.h
++++ b/include/drm/drm_atomic_helper.h
+@@ -42,6 +42,10 @@ int drm_atomic_helper_commit(struct drm_device *dev,
+ 			     struct drm_atomic_state *state,
+ 			     bool async);
+ 
++bool drm_atomic_helper_framebuffer_changed(struct drm_device *dev,
++					   struct drm_atomic_state *old_state,
++					   struct drm_crtc *crtc);
++
+ void drm_atomic_helper_wait_for_vblanks(struct drm_device *dev,
+ 					struct drm_atomic_state *old_state);
+ 
+-- 
+1.9.3
+

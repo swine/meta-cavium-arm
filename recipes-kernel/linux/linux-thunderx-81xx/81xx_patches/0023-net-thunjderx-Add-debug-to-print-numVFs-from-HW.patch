@@ -1,0 +1,26 @@
+From 17923c395006a9ea15022705d16bfac3661cfaff Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 10 May 2016 13:45:55 -0700
+Subject: [PATCH 23/39] net: thunjderx: Add debug to print numVFs from HW
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index f432543..9b214cf 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -1393,6 +1393,8 @@ static int nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		goto err_release_regions;
+ 	}
+ 
++	dev_info(dev, "Num of VFs supported by HW: %d\n", pci_sriov_get_totalvfs(pdev));
++
+ 	nic->node = nic_get_node_id(pdev);
+ 
+ 	/* Initialize hardware */
+-- 
+1.9.1
+

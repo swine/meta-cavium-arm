@@ -1,0 +1,40 @@
+From 1c5be68d392213c3cfaac6a2e59291a281119de4 Mon Sep 17 00:00:00 2001
+From: Shota Suzuki <suzuki_shota_t3@lab.ntt.co.jp>
+Date: Fri, 11 Dec 2015 18:44:00 +0900
+Subject: [PATCH 0696/1767] igb: Unpair the queues when changing the number of
+ queues
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+By the commit 72ddef0506da ("igb: Fix oops caused by missing queue
+pairing"), the IGB_FLAG_QUEUE_PAIRS flag can now be set when changing the
+number of queues by "ethtool -L", but it is never cleared unless the igb
+driver is reloaded.
+This patch clears it if queue pairing becomes unnecessary as a result of
+"ethtool -L".
+
+Signed-off-by: Shota Suzuki <suzuki_shota_t3@lab.ntt.co.jp>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit 37a5d163fb447b39f7960d0534de30e88ad395bb)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/igb/igb_main.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/net/ethernet/intel/igb/igb_main.c b/drivers/net/ethernet/intel/igb/igb_main.c
+index 3e5170e..5f8d1f6 100644
+--- a/drivers/net/ethernet/intel/igb/igb_main.c
++++ b/drivers/net/ethernet/intel/igb/igb_main.c
+@@ -2931,6 +2931,8 @@ void igb_set_flag_queue_pairs(struct igb_adapter *adapter,
+ 		 */
+ 		if (adapter->rss_queues > (max_rss_queues / 2))
+ 			adapter->flags |= IGB_FLAG_QUEUE_PAIRS;
++		else
++			adapter->flags &= ~IGB_FLAG_QUEUE_PAIRS;
+ 		break;
+ 	}
+ }
+-- 
+1.9.3
+

@@ -1,0 +1,44 @@
+From 9fb2307879b7e16fa4f6adba89e755649cab5abe Mon Sep 17 00:00:00 2001
+From: Vegard Nossum <vegard.nossum@oracle.com>
+Date: Sat, 2 Jan 2016 14:02:07 +0100
+Subject: [PATCH 0618/1767] pwm: add HAS_IOMEM dependency to PWM_FSL_FTM
+
+BugLink: http://bugs.launchpad.net/bugs/1520436
+
+Ran into this on UML:
+
+drivers/built-in.o: In function `fsl_pwm_probe':
+linux/drivers/pwm/pwm-fsl-ftm.c:436: undefined reference to `devm_ioremap_resource'
+collect2: error: ld returned 1 exit status
+
+devm_ioremap_resource() is defined only when HAS_IOMEM is selected.
+
+Signed-off-by: Vegard Nossum <vegard.nossum@oracle.com>
+Cc: Xiubo Li <Li.Xiubo@freescale.com>
+Cc: Alison Wang <b18965@freescale.com>
+Cc: Jingchang Lu <b35083@freescale.com>
+Cc: Sascha Hauer <s.hauer@pengutronix.de>
+Cc: Yuan Yao <yao.yuan@freescale.com>
+Cc: Thierry Reding <thierry.reding@gmail.com>
+Signed-off-by: Thierry Reding <thierry.reding@gmail.com>
+(cherry picked from commit 36d5be4bc9059f8123e818c8b63a4049cf1d0e0f)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/pwm/Kconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/pwm/Kconfig b/drivers/pwm/Kconfig
+index 3513ff83..8cf0dae 100644
+--- a/drivers/pwm/Kconfig
++++ b/drivers/pwm/Kconfig
+@@ -148,6 +148,7 @@ config PWM_EP93XX
+ 
+ config PWM_FSL_FTM
+ 	tristate "Freescale FlexTimer Module (FTM) PWM support"
++	depends on HAS_IOMEM
+ 	depends on OF
+ 	select REGMAP_MMIO
+ 	help
+-- 
+1.9.3
+

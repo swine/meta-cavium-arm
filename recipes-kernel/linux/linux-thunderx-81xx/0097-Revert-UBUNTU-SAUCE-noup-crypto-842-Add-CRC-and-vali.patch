@@ -1,0 +1,163 @@
+From 07a0f6a400ac567f973cb8dbb8b51c2622285f31 Mon Sep 17 00:00:00 2001
+From: Haren Myneni <haren@linux.vnet.ibm.com>
+Date: Thu, 8 Oct 2015 13:45:51 -0700
+Subject: [PATCH 0097/1767] Revert "UBUNTU: SAUCE: (noup) crypto: 842 - Add CRC
+ and validation support"
+
+This reverts commit fe7304cac0078d185cbf38e0b44fecd84bfa63e3.
+
+Replace with upstream commit ea0b3984c1cc8b28de27a3bec285102b4e366a4c ('crypto: 842 - Add CRC and validation support')
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/crypto/nx/nx-842-powernv.c |  4 ++--
+ drivers/crypto/nx/nx-842-pseries.c |  8 ++------
+ lib/842/842.h                      |  2 --
+ lib/842/842_compress.c             | 13 -------------
+ lib/842/842_decompress.c           | 17 -----------------
+ 5 files changed, 4 insertions(+), 40 deletions(-)
+
+diff --git a/drivers/crypto/nx/nx-842-powernv.c b/drivers/crypto/nx/nx-842-powernv.c
+index 9ef51fa..3750e13 100644
+--- a/drivers/crypto/nx/nx-842-powernv.c
++++ b/drivers/crypto/nx/nx-842-powernv.c
+@@ -491,7 +491,7 @@ static int nx842_powernv_compress(const unsigned char *in, unsigned int inlen,
+ 				  void *wmem)
+ {
+ 	return nx842_powernv_function(in, inlen, out, outlenp,
+-				      wmem, CCW_FC_842_COMP_CRC);
++				      wmem, CCW_FC_842_COMP_NOCRC);
+ }
+ 
+ /**
+@@ -519,7 +519,7 @@ static int nx842_powernv_decompress(const unsigned char *in, unsigned int inlen,
+ 				    void *wmem)
+ {
+ 	return nx842_powernv_function(in, inlen, out, outlenp,
+-				      wmem, CCW_FC_842_DECOMP_CRC);
++				      wmem, CCW_FC_842_DECOMP_NOCRC);
+ }
+ 
+ static int __init nx842_powernv_probe(struct device_node *dn)
+diff --git a/drivers/crypto/nx/nx-842-pseries.c b/drivers/crypto/nx/nx-842-pseries.c
+index cddc6d8..f4cbde0 100644
+--- a/drivers/crypto/nx/nx-842-pseries.c
++++ b/drivers/crypto/nx/nx-842-pseries.c
+@@ -234,10 +234,6 @@ static int nx842_validate_result(struct device *dev,
+ 		dev_dbg(dev, "%s: Out of space in output buffer\n",
+ 					__func__);
+ 		return -ENOSPC;
+-	case 65: /* Calculated CRC doesn't match the passed value */
+-		dev_dbg(dev, "%s: CRC mismatch for decompression\n",
+-					__func__);
+-		return -EINVAL;
+ 	case 66: /* Input data contains an illegal template field */
+ 	case 67: /* Template indicates data past the end of the input stream */
+ 		dev_dbg(dev, "%s: Bad data for decompression (code:%d)\n",
+@@ -328,7 +324,7 @@ static int nx842_pseries_compress(const unsigned char *in, unsigned int inlen,
+ 	slout.entries = (struct nx842_slentry *)workmem->slout;
+ 
+ 	/* Init operation */
+-	op.flags = NX842_OP_COMPRESS_CRC;
++	op.flags = NX842_OP_COMPRESS;
+ 	csbcpb = &workmem->csbcpb;
+ 	memset(csbcpb, 0, sizeof(*csbcpb));
+ 	op.csbcpb = nx842_get_pa(csbcpb);
+@@ -461,7 +457,7 @@ static int nx842_pseries_decompress(const unsigned char *in, unsigned int inlen,
+ 	slout.entries = (struct nx842_slentry *)workmem->slout;
+ 
+ 	/* Init operation */
+-	op.flags = NX842_OP_DECOMPRESS_CRC;
++	op.flags = NX842_OP_DECOMPRESS;
+ 	csbcpb = &workmem->csbcpb;
+ 	memset(csbcpb, 0, sizeof(*csbcpb));
+ 	op.csbcpb = nx842_get_pa(csbcpb);
+diff --git a/lib/842/842.h b/lib/842/842.h
+index e0a122bc..7c20003 100644
+--- a/lib/842/842.h
++++ b/lib/842/842.h
+@@ -76,7 +76,6 @@
+ #include <linux/module.h>
+ #include <linux/kernel.h>
+ #include <linux/bitops.h>
+-#include <linux/crc32.h>
+ #include <asm/unaligned.h>
+ 
+ #include <linux/sw842.h>
+@@ -99,7 +98,6 @@
+ #define I2_BITS		(8)
+ #define I4_BITS		(9)
+ #define I8_BITS		(8)
+-#define CRC_BITS	(32)
+ 
+ #define REPEAT_BITS_MAX		(0x3f)
+ #define SHORT_DATA_BITS_MAX	(0x7)
+diff --git a/lib/842/842_compress.c b/lib/842/842_compress.c
+index 4051339..7ce6894 100644
+--- a/lib/842/842_compress.c
++++ b/lib/842/842_compress.c
+@@ -490,7 +490,6 @@ int sw842_compress(const u8 *in, unsigned int ilen,
+ 	int ret;
+ 	u64 last, next, pad, total;
+ 	u8 repeat_count = 0;
+-	u32 crc;
+ 
+ 	BUILD_BUG_ON(sizeof(*p) > SW842_MEM_COMPRESS);
+ 
+@@ -581,18 +580,6 @@ skip_comp:
+ 	if (ret)
+ 		return ret;
+ 
+-	/*
+-	 * crc(0:31) is appended to target data starting with the next
+-	 * bit after End of stream template.
+-	 * nx842 calculates CRC for data in big-endian format. So doing
+-	 * same here so that sw842 decompression can be used for both
+-	 * compressed data.
+-	 */
+-	crc = crc32_be(0, in, ilen);
+-	ret = add_bits(p, crc, CRC_BITS);
+-	if (ret)
+-		return ret;
+-
+ 	if (p->bit) {
+ 		p->out++;
+ 		p->olen--;
+diff --git a/lib/842/842_decompress.c b/lib/842/842_decompress.c
+index 8881dad..5446ff0 100644
+--- a/lib/842/842_decompress.c
++++ b/lib/842/842_decompress.c
+@@ -285,7 +285,6 @@ int sw842_decompress(const u8 *in, unsigned int ilen,
+ 	struct sw842_param p;
+ 	int ret;
+ 	u64 op, rep, tmp, bytes, total;
+-	u64 crc;
+ 
+ 	p.in = (u8 *)in;
+ 	p.bit = 0;
+@@ -376,22 +375,6 @@ int sw842_decompress(const u8 *in, unsigned int ilen,
+ 		}
+ 	} while (op != OP_END);
+ 
+-	/*
+-	 * crc(0:31) is saved in compressed data starting with the
+-	 * next bit after End of stream template.
+-	 */
+-	ret = next_bits(&p, &crc, CRC_BITS);
+-	if (ret)
+-		return ret;
+-
+-	/*
+-	 * Validate CRC saved in compressed data.
+-	 */
+-	if (crc != (u64)crc32_be(0, out, total - p.olen)) {
+-		pr_debug("CRC mismatch for decompression\n");
+-		return -EINVAL;
+-	}
+-
+ 	if (unlikely((total - p.olen) > UINT_MAX))
+ 		return -ENOSPC;
+ 
+-- 
+1.9.3
+

@@ -1,0 +1,49 @@
+From d1de55fd44594a8acc26f1e3b6ba8b1deb33f08c Mon Sep 17 00:00:00 2001
+From: Wenwei Tao <ww.tao0320@gmail.com>
+Date: Tue, 12 Jan 2016 07:49:23 +0100
+Subject: [PATCH 0371/1767] lightnvm: check bi_error in gc
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+We should check last io completion status before
+starting another one.
+
+Signed-off-by: Wenwei Tao <ww.tao0320@gmail.com>
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 2b11c1b24e50a26d435f1d59955f1268053623b7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/rrpc.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index 661c6f3..5df4a69 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -330,6 +330,10 @@ try:
+ 			goto finished;
+ 		}
+ 		wait_for_completion_io(&wait);
++		if (bio->bi_error) {
++			rrpc_inflight_laddr_release(rrpc, rqd);
++			goto finished;
++		}
+ 
+ 		bio_reset(bio);
+ 		reinit_completion(&wait);
+@@ -352,6 +356,8 @@ try:
+ 		wait_for_completion_io(&wait);
+ 
+ 		rrpc_inflight_laddr_release(rrpc, rqd);
++		if (bio->bi_error)
++			goto finished;
+ 
+ 		bio_reset(bio);
+ 	}
+-- 
+1.9.3
+

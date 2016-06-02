@@ -1,0 +1,136 @@
+From a3c22b630786000dada1f218f983f5c0b26a4039 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:20 +0100
+Subject: [PATCH 0368/1767] lightnvm: refactor rqd ppa list into set/free
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+A device may be driven in single, double or quad plane mode. In that
+case, the rqd must have either one, two, or four PPAs set for a single
+PPA sent to the device. Refactor this logic into their own
+functions to be shared by program/erase/read in the core.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit abd805ec9f51f37db9da63dda44c3f4b4ae8ad57)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c  | 71 ++++++++++++++++++++++++++++++++++--------------
+ include/linux/lightnvm.h |  3 ++
+ 2 files changed, 53 insertions(+), 21 deletions(-)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index 6134339..081b0f5 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -220,40 +220,69 @@ void nvm_generic_to_addr_mode(struct nvm_dev *dev, struct nvm_rq *rqd)
+ }
+ EXPORT_SYMBOL(nvm_generic_to_addr_mode);
+ 
+-int nvm_erase_ppa(struct nvm_dev *dev, struct ppa_addr ppa)
++int nvm_set_rqd_ppalist(struct nvm_dev *dev, struct nvm_rq *rqd,
++					struct ppa_addr *ppas, int nr_ppas)
+ {
+-	int plane_cnt = 0, pl_idx, ret;
+-	struct nvm_rq rqd;
++	int i, plane_cnt, pl_idx;
++
++	if (dev->plane_mode == NVM_PLANE_SINGLE && nr_ppas == 1) {
++		rqd->nr_pages = 1;
++		rqd->ppa_addr = ppas[0];
+ 
+-	if (!dev->ops->erase_block)
+ 		return 0;
++	}
+ 
+-	if (dev->plane_mode == NVM_PLANE_SINGLE) {
+-		rqd.nr_pages = 1;
+-		rqd.ppa_addr = ppa;
+-	} else {
+-		plane_cnt = (1 << dev->plane_mode);
+-		rqd.nr_pages = plane_cnt;
+-
+-		rqd.ppa_list = nvm_dev_dma_alloc(dev, GFP_KERNEL,
+-							&rqd.dma_ppa_list);
+-		if (!rqd.ppa_list) {
+-			pr_err("nvm: failed to allocate dma memory\n");
+-			return -ENOMEM;
+-		}
++	plane_cnt = (1 << dev->plane_mode);
++	rqd->nr_pages = plane_cnt * nr_ppas;
++
++	if (dev->ops->max_phys_sect < rqd->nr_pages)
++		return -EINVAL;
++
++	rqd->ppa_list = nvm_dev_dma_alloc(dev, GFP_KERNEL, &rqd->dma_ppa_list);
++	if (!rqd->ppa_list) {
++		pr_err("nvm: failed to allocate dma memory\n");
++		return -ENOMEM;
++	}
+ 
++	for (i = 0; i < nr_ppas; i++) {
+ 		for (pl_idx = 0; pl_idx < plane_cnt; pl_idx++) {
+-			ppa.g.pl = pl_idx;
+-			rqd.ppa_list[pl_idx] = ppa;
++			ppas[i].g.pl = pl_idx;
++			rqd->ppa_list[(i * plane_cnt) + pl_idx] = ppas[i];
+ 		}
+ 	}
+ 
++	return 0;
++}
++EXPORT_SYMBOL(nvm_set_rqd_ppalist);
++
++void nvm_free_rqd_ppalist(struct nvm_dev *dev, struct nvm_rq *rqd)
++{
++	if (!rqd->ppa_list)
++		return;
++
++	nvm_dev_dma_free(dev, rqd->ppa_list, rqd->dma_ppa_list);
++}
++EXPORT_SYMBOL(nvm_free_rqd_ppalist);
++
++int nvm_erase_ppa(struct nvm_dev *dev, struct ppa_addr ppa)
++{
++	struct nvm_rq rqd;
++	int ret;
++
++	if (!dev->ops->erase_block)
++		return 0;
++
++	memset(&rqd, 0, sizeof(struct nvm_rq));
++
++	ret = nvm_set_rqd_ppalist(dev, &rqd, &ppa, 1);
++	if (ret)
++		return ret;
++
+ 	nvm_generic_to_addr_mode(dev, &rqd);
+ 
+ 	ret = dev->ops->erase_block(dev, &rqd);
+ 
+-	if (plane_cnt)
+-		nvm_dev_dma_free(dev, rqd.ppa_list, rqd.dma_ppa_list);
++	nvm_free_rqd_ppalist(dev, &rqd);
+ 
+ 	return ret;
+ }
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index c228dbc..2fd6871 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -429,6 +429,9 @@ extern void nvm_unregister(char *);
+ extern int nvm_submit_io(struct nvm_dev *, struct nvm_rq *);
+ extern void nvm_generic_to_addr_mode(struct nvm_dev *, struct nvm_rq *);
+ extern void nvm_addr_to_generic_mode(struct nvm_dev *, struct nvm_rq *);
++extern int nvm_set_rqd_ppalist(struct nvm_dev *, struct nvm_rq *,
++							struct ppa_addr *, int);
++extern void nvm_free_rqd_ppalist(struct nvm_dev *, struct nvm_rq *);
+ extern int nvm_erase_ppa(struct nvm_dev *, struct ppa_addr);
+ extern int nvm_erase_blk(struct nvm_dev *, struct nvm_block *);
+ #else /* CONFIG_NVM */
+-- 
+1.9.3
+

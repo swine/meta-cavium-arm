@@ -1,0 +1,109 @@
+From a1b77257e116618f42906808d67a25433be06c22 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Mon, 23 Nov 2015 13:51:42 -0800
+Subject: [PATCH 0870/1767] UBUNTU: SAUCE: fixup: cleanup return handling of
+ labels
+
+fixup of
+[20/23] apparmor: Fix: refcount bug when inserting label update that transitions ns
+
+may want to split into 2 patches
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 50 ++++++++++-------------------------------------
+ 1 file changed, 10 insertions(+), 40 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index c09f8ff..ad11222 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -970,9 +970,6 @@ static struct aa_label *__label_merge_insert(struct aa_labelset *ls,
+ 	AA_BUG(!l);
+ 	AA_BUG(l->size < a->size + b->size);
+ 
+-	if (a == b)
+-		return aa_get_label(a);
+-
+ 	label_for_each_in_merge(i, a, b, next) {
+ 		if (PROFILE_INVALID(next)) {
+ 			l->ent[k] = aa_get_newest_profile(next);
+@@ -1155,12 +1152,6 @@ struct aa_label *aa_label_merge(struct aa_label *a, struct aa_label *b,
+ 		write_lock_irqsave(&ls->lock, flags);
+ 		label = __label_merge_insert(ls, new, a, b);
+ 		write_unlock_irqrestore(&ls->lock, flags);
+-
+-		if (label != new) {
+-			/* new may not be fully setup so no put_label */
+-			aa_label_free(new);
+-			new = NULL;
+-		}
+ 		aa_put_label(new);
+ 	out:
+ 		aa_put_label(a);
+@@ -1200,12 +1191,7 @@ struct aa_label *aa_label_vec_merge(struct aa_profile **vec, int len,
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	label = __aa_label_insert(ls, new, false);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+-	if (label != new)
+-		/* not fully constructed don't put */
+-		aa_label_free(new);
+-	else
+-		/* extra ref */
+-		aa_put_label(new);
++	aa_put_label(new);
+ 
+ 	return label;
+ }
+@@ -1852,38 +1838,22 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	/* updated label invalidated by being removed/renamed from labelset */
+ 	if (invcount) {
+ 		l->size -= aa_sort_and_merge_profiles(l->size, &l->ent[0]);
+-		if (labels_set(label) == labels_set(l)) {
+-			goto insert;
+-		} else {
++		if (labels_set(label) != labels_set(l)) {
+ 			aa_label_remove(labels_set(label), label);
+-			goto other_ls_insert;
++			write_unlock_irqrestore(&ls->lock, flags);
++			tmp = aa_label_insert(labels_set(l), l);
++			goto out;
+ 		}
+-	} else {
+-		AA_BUG(labels_ns(label) != labels_ns(l));
+-		goto insert;
+-	}
+-insert:
+-	tmp = __aa_label_insert(labels_set(label), l, true);
+-	if (tmp != l) {
+-		aa_label_free(l);
+-		l = tmp;
+ 	} else
+-		aa_put_label(l);	/* extr ref */
++		AA_BUG(labels_ns(label) != labels_ns(l));
+ 
++	tmp = __aa_label_insert(labels_set(label), l, true);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+ 
+-	return l;
+-
+-other_ls_insert:
+-	write_unlock_irqrestore(&ls->lock, flags);
+-	tmp = aa_label_insert(labels_set(l), l);
+-	if (tmp != l) {
+-		aa_put_label(l);
+-		l = tmp;
+-	} else
+-		aa_put_label(l);	/* extra ref */
++out:
++	aa_put_label(l);
+ 
+-	return l;
++	return tmp;
+ }
+ 
+ /**
+-- 
+1.9.3
+

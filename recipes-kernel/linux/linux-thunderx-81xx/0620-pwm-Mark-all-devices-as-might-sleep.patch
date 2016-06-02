@@ -1,0 +1,40 @@
+From 3a91d4214a65e66348524d3833546add0afc7f15 Mon Sep 17 00:00:00 2001
+From: Thierry Reding <thierry.reding@gmail.com>
+Date: Thu, 21 Jan 2016 15:04:59 +0100
+Subject: [PATCH 0620/1767] pwm: Mark all devices as "might sleep"
+
+BugLink: http://bugs.launchpad.net/bugs/1520436
+
+Commit d1cd21427747 ("pwm: Set enable state properly on failed call to
+enable") introduced a mutex that is needed to protect internal state of
+PWM devices. Since that mutex is acquired in pwm_set_polarity() and in
+pwm_enable() and might potentially block, all PWM devices effectively
+become "might sleep".
+
+It's rather pointless to keep the .can_sleep field around, but given
+that there are external users let's postpone the removal for the next
+release cycle.
+
+Signed-off-by: Thierry Reding <thierry.reding@gmail.com>
+(cherry picked from commit ff01c944cfa939f3474c28d88223213494aedf0b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/pwm/core.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pwm/core.c b/drivers/pwm/core.c
+index d24ca5f..7831bc6 100644
+--- a/drivers/pwm/core.c
++++ b/drivers/pwm/core.c
+@@ -889,7 +889,7 @@ EXPORT_SYMBOL_GPL(devm_pwm_put);
+   */
+ bool pwm_can_sleep(struct pwm_device *pwm)
+ {
+-	return pwm->chip->can_sleep;
++	return true;
+ }
+ EXPORT_SYMBOL_GPL(pwm_can_sleep);
+ 
+-- 
+1.9.3
+

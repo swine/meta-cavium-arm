@@ -1,0 +1,58 @@
+From 937a43ed266df4713771bc304d6db5f419597bfb Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexdeucher@gmail.com>
+Date: Mon, 7 Mar 2016 18:40:45 -0500
+Subject: [PATCH 1510/1767] drm/amdgpu: fix topaz/tonga gmc assignment in 4.4
+ stable
+
+BugLink: http://bugs.launchpad.net/bugs/1555640
+
+When upstream commit 429c45deae6e57f1bb91bfb05b671063fb0cef60
+was applied to 4.4 as d60703ca942e8d044d61360bc9792fcab54b95d0
+it applied incorrectly to the tonga_ip_blocks array rather than
+the topaz_ip_blocks array.  Fix that up here.
+
+Bug:
+https://bugzilla.kernel.org/show_bug.cgi?id=113951
+
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/vi.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/vi.c b/drivers/gpu/drm/amd/amdgpu/vi.c
+index 27dd74e5..0d14d10 100644
+--- a/drivers/gpu/drm/amd/amdgpu/vi.c
++++ b/drivers/gpu/drm/amd/amdgpu/vi.c
+@@ -1110,10 +1110,10 @@ static const struct amdgpu_ip_block_version topaz_ip_blocks[] =
+ 	},
+ 	{
+ 		.type = AMD_IP_BLOCK_TYPE_GMC,
+-		.major = 8,
+-		.minor = 0,
++		.major = 7,
++		.minor = 4,
+ 		.rev = 0,
+-		.funcs = &gmc_v8_0_ip_funcs,
++		.funcs = &gmc_v7_0_ip_funcs,
+ 	},
+ 	{
+ 		.type = AMD_IP_BLOCK_TYPE_IH,
+@@ -1157,10 +1157,10 @@ static const struct amdgpu_ip_block_version tonga_ip_blocks[] =
+ 	},
+ 	{
+ 		.type = AMD_IP_BLOCK_TYPE_GMC,
+-		.major = 7,
+-		.minor = 4,
++		.major = 8,
++		.minor = 0,
+ 		.rev = 0,
+-		.funcs = &gmc_v7_0_ip_funcs,
++		.funcs = &gmc_v8_0_ip_funcs,
+ 	},
+ 	{
+ 		.type = AMD_IP_BLOCK_TYPE_IH,
+-- 
+1.9.3
+

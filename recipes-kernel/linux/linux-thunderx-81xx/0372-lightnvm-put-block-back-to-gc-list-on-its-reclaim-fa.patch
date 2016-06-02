@@ -1,0 +1,63 @@
+From cc3c263229901da866eef2142490f085c678a6fa Mon Sep 17 00:00:00 2001
+From: Wenwei Tao <ww.tao0320@gmail.com>
+Date: Tue, 12 Jan 2016 07:49:24 +0100
+Subject: [PATCH 0372/1767] lightnvm: put block back to gc list on its reclaim
+ fail
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+We delete a block from the gc list before reclaim it, so
+put it back to the list on its reclaim fail, otherwise
+this block will not get reclaimed and be programmable
+in the future.
+
+Signed-off-by: Wenwei Tao <ww.tao0320@gmail.com>
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit d0ca798f960ad7d86f5186fe312c131d00563eb7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/rrpc.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index 5df4a69..bee2352 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -381,16 +381,26 @@ static void rrpc_block_gc(struct work_struct *work)
+ 	struct rrpc *rrpc = gcb->rrpc;
+ 	struct rrpc_block *rblk = gcb->rblk;
+ 	struct nvm_dev *dev = rrpc->dev;
++	struct nvm_lun *lun = rblk->parent->lun;
++	struct rrpc_lun *rlun = &rrpc->luns[lun->id - rrpc->lun_offset];
+ 
++	mempool_free(gcb, rrpc->gcb_pool);
+ 	pr_debug("nvm: block '%lu' being reclaimed\n", rblk->parent->id);
+ 
+ 	if (rrpc_move_valid_pages(rrpc, rblk))
+-		goto done;
++		goto put_back;
++
++	if (nvm_erase_blk(dev, rblk->parent))
++		goto put_back;
+ 
+-	nvm_erase_blk(dev, rblk->parent);
+ 	rrpc_put_blk(rrpc, rblk);
+-done:
+-	mempool_free(gcb, rrpc->gcb_pool);
++
++	return;
++
++put_back:
++	spin_lock(&rlun->lock);
++	list_add_tail(&rblk->prio, &rlun->prio_list);
++	spin_unlock(&rlun->lock);
+ }
+ 
+ /* the block with highest number of invalid pages, will be in the beginning
+-- 
+1.9.3
+

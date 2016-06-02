@@ -1,0 +1,166 @@
+From d9e2aba7cb47f89577a17d82d316055b0616f781 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Wed, 21 Nov 2012 10:04:42 -0700
+Subject: [PATCH 0048/1767] UBUNTU: SAUCE: (no-up) Remove dsp56k files used
+ only by m68k
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ firmware/Makefile                  |  1 -
+ firmware/dsp56k/bootstrap.asm      | 98 --------------------------------------
+ firmware/dsp56k/bootstrap.bin.ihex | 26 ----------
+ 3 files changed, 125 deletions(-)
+ delete mode 100644 firmware/dsp56k/bootstrap.asm
+ delete mode 100644 firmware/dsp56k/bootstrap.bin.ihex
+
+diff --git a/firmware/Makefile b/firmware/Makefile
+index a0f0e02..56c939f 100644
+--- a/firmware/Makefile
++++ b/firmware/Makefile
+@@ -20,7 +20,6 @@ fw-external-y := $(subst $(quote),,$(CONFIG_EXTRA_FIRMWARE))
+ # accurate. In the latter case it doesn't matter -- it'll use $(fw-shipped-all).
+ # But be aware that the config file might not be included at all.
+ 
+-fw-shipped-$(CONFIG_ATARI_DSP56K) += dsp56k/bootstrap.bin
+ fw-shipped-$(CONFIG_BNX2X) += bnx2x/bnx2x-e1-7.8.2.0.fw \
+ 			      bnx2x/bnx2x-e1h-7.8.2.0.fw \
+ 			      bnx2x/bnx2x-e2-7.8.2.0.fw
+diff --git a/firmware/dsp56k/bootstrap.asm b/firmware/dsp56k/bootstrap.asm
+deleted file mode 100644
+index a411047..0000000
+--- a/firmware/dsp56k/bootstrap.asm
++++ /dev/null
+@@ -1,98 +0,0 @@
+-; Author: Frederik Noring <noring@nocrew.org>
+-;
+-; This file is subject to the terms and conditions of the GNU General Public
+-; License.  See the file COPYING in the main directory of this archive
+-; for more details.
+-
+-; DSP56k loader
+-
+-; Host Interface
+-M_BCR   EQU     $FFFE           ; Port A Bus Control Register
+-M_PBC   EQU     $FFE0           ; Port B Control Register
+-M_PBDDR EQU     $FFE2           ; Port B Data Direction Register
+-M_PBD   EQU     $FFE4           ; Port B Data Register
+-M_PCC   EQU     $FFE1           ; Port C Control Register
+-M_PCDDR EQU     $FFE3           ; Port C Data Direction Register
+-M_PCD   EQU     $FFE5           ; Port C Data Register
+-
+-M_HCR   EQU     $FFE8           ; Host Control Register
+-M_HSR   EQU     $FFE9           ; Host Status Register
+-M_HRX   EQU     $FFEB           ; Host Receive Data Register
+-M_HTX   EQU     $FFEB           ; Host Transmit Data Register
+-
+-; SSI, Synchronous Serial Interface
+-M_RX    EQU     $FFEF           ; Serial Receive Data Register
+-M_TX    EQU     $FFEF           ; Serial Transmit Data Register
+-M_CRA   EQU     $FFEC           ; SSI Control Register A
+-M_CRB   EQU     $FFED           ; SSI Control Register B
+-M_SR    EQU     $FFEE           ; SSI Status Register
+-M_TSR   EQU     $FFEE           ; SSI Time Slot Register
+-
+-; Exception Processing
+-M_IPR   EQU     $FFFF           ; Interrupt Priority Register
+-
+-        org     P:$0
+-start   jmp     <$40
+-
+-        org     P:$40
+-;       ; Zero 16384 DSP X and Y words
+-;       clr     A #0,r0
+-;       clr     B #0,r4
+-;       do      #64,<_block1
+-;       rep     #256
+-;       move    A,X:(r0)+ B,Y:(r4)+
+-;_block1        ; Zero (32768-512) Program words
+-;       clr     A #512,r0
+-;       do      #126,<_block2
+-;       rep     #256
+-;       move    A,P:(r0)+
+-;_block2
+-
+-        ; Copy DSP program control
+-        move    #real,r0
+-        move    #upload,r1
+-        do      #upload_end-upload,_copy
+-        movem    P:(r0)+,x0
+-        movem    x0,P:(r1)+
+-_copy   movep   #4,X:<<M_HCR
+-        movep   #$c00,X:<<M_IPR
+-        and     #<$fe,mr
+-        jmp     upload
+-
+-real
+-        org     P:$7ea9
+-upload
+-        movep   #1,X:<<M_PBC
+-        movep   #0,X:<<M_BCR
+-
+-next    jclr    #0,X:<<M_HSR,*
+-        movep   X:<<M_HRX,A
+-        move    #>3,x0
+-        cmp     x0,A #>1,x0
+-        jeq     <$0
+-_get_address
+-        jclr    #0,X:<<M_HSR,_get_address
+-        movep   X:<<M_HRX,r0
+-_get_length
+-        jclr    #0,X:<<M_HSR,_get_length
+-        movep   X:<<M_HRX,y0
+-        cmp     x0,A #>2,x0
+-        jeq     load_X
+-        cmp     x0,A
+-        jeq     load_Y
+-
+-load_P  do      y0,_load_P
+-        jclr    #0,X:<<M_HSR,*
+-        movep   X:<<M_HRX,P:(r0)+
+-_load_P jmp     next
+-load_X  do      y0,_load_X
+-        jclr    #0,X:<<M_HSR,*
+-        movep   X:<<M_HRX,X:(r0)+
+-_load_X jmp     next
+-load_Y  do      y0,_load_Y
+-        jclr    #0,X:<<M_HSR,*
+-        movep   X:<<M_HRX,Y:(r0)+
+-_load_Y jmp     next
+-
+-upload_end
+-        end
+diff --git a/firmware/dsp56k/bootstrap.bin.ihex b/firmware/dsp56k/bootstrap.bin.ihex
+deleted file mode 100644
+index 233f21f..0000000
+--- a/firmware/dsp56k/bootstrap.bin.ihex
++++ /dev/null
+@@ -1,26 +0,0 @@
+-:100000000C004000000000000000000000000000A4
+-:1000100000000000000000000000000000000000E0
+-:1000200000000000000000000000000000000000D0
+-:1000300000000000000000000000000000000000C0
+-:1000400000000000000000000000000000000000B0
+-:1000500000000000000000000000000000000000A0
+-:100060000000000000000000000000000000000090
+-:100070000000000000000000000000000000000080
+-:100080000000000000000000000000000000000070
+-:100090000000000000000000000000000000000060
+-:1000A0000000000000000000000000000000000050
+-:1000B0000000000000000000000000000000000040
+-:1000C00060F40000004F61F400007EA9062E80005D
+-:1000D000004707D88407598408F4A800000408F4EE
+-:1000E000BF000C0000FEB80AF080007EA908F4A052
+-:1000F00000000108F4BE0000000AA980007EAD08DF
+-:100100004E2B44F40000000344F4450000010EA00F
+-:10011000000AA980007EB508502B0AA980007EB88D
+-:1001200008462B44F4450000020AF0AA007EC920CC
+-:1001300000450AF0AA007ED006C600007EC60AA9C5
+-:1001400080007EC408586B0AF080007EAD06C600B1
+-:10015000007ECD0AA980007ECB0858AB0AF0800053
+-:100160007EAD06C600007ED40AA980007ED2085863
+-:07017000EB0AF080007EADF8
+-:00000001FF
+-/* DSP56001 bootstrap code */
+-- 
+1.9.3
+

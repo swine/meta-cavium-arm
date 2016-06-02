@@ -1,0 +1,54 @@
+From 71325d5391d9fc946b5356d3e986c91c6020e15d Mon Sep 17 00:00:00 2001
+From: Hubert Chrzaniuk <hubert.chrzaniuk@intel.com>
+Date: Fri, 11 Dec 2015 14:21:22 +0100
+Subject: [PATCH 0837/1767] EDAC, sb_edac: Set fixed DIMM width on Xeon Knights
+ Landing
+
+BugLink: http://bugs.launchpad.net/bugs/1519631
+
+Knights Landing does not come with register that could be used to fetch
+DIMM width. However the value is fixed for this architecture so it can
+be hardcoded.
+
+Signed-off-by: Hubert Chrzaniuk <hubert.chrzaniuk@intel.com>
+Cc: Doug Thompson <dougthompson@xmission.com>
+Cc: Mauro Carvalho Chehab <mchehab@osg.samsung.com>
+Cc: linux-edac <linux-edac@vger.kernel.org>
+Cc: lukasz.anaczkowski@intel.com
+Link: http://lkml.kernel.org/r/1449840082-18673-1-git-send-email-hubert.chrzaniuk@intel.com
+Signed-off-by: Borislav Petkov <bp@suse.de>
+(cherry picked from commit 45f4d3ab3ee8d12471e47057ea4d0d86167b25a0)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/edac/sb_edac.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/edac/sb_edac.c b/drivers/edac/sb_edac.c
+index b3d924d..e438ee5 100644
+--- a/drivers/edac/sb_edac.c
++++ b/drivers/edac/sb_edac.c
+@@ -924,6 +924,12 @@ out:
+ 	return mtype;
+ }
+ 
++static enum dev_type knl_get_width(struct sbridge_pvt *pvt, u32 mtr)
++{
++	/* for KNL value is fixed */
++	return DEV_X16;
++}
++
+ static enum dev_type sbridge_get_width(struct sbridge_pvt *pvt, u32 mtr)
+ {
+ 	/* there's no way to figure out */
+@@ -3393,7 +3399,7 @@ static int sbridge_register_mci(struct sbridge_dev *sbridge_dev, enum type type)
+ 		pvt->info.interleave_list = knl_interleave_list;
+ 		pvt->info.max_interleave = ARRAY_SIZE(knl_interleave_list);
+ 		pvt->info.interleave_pkg = ibridge_interleave_pkg;
+-		pvt->info.get_width = ibridge_get_width;
++		pvt->info.get_width = knl_get_width;
+ 		mci->ctl_name = kasprintf(GFP_KERNEL,
+ 			"Knights Landing Socket#%d", mci->mc_idx);
+ 
+-- 
+1.9.3
+

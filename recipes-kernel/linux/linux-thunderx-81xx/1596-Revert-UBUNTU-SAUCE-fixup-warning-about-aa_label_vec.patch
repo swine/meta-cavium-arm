@@ -1,0 +1,31 @@
+From 8be64b55ddee768784e4bed9e03afe5c739e01af Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:05 -0700
+Subject: [PATCH 1596/1767] Revert "UBUNTU: SAUCE: fixup: warning about
+ aa_label_vec_find_or_create not being static"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 2d9e947542095ff2e927152f013bf82d44948792.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 76d0f48..e8224e1 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -774,7 +774,7 @@ struct aa_label *aa_label_insert(struct aa_labelset *ls, struct aa_label *l)
+ 	return label;
+ }
+ 
+-static struct aa_label *aa_label_vec_find_or_create(struct aa_labelset *ls,
++struct aa_label *aa_label_vec_find_or_create(struct aa_labelset *ls,
+ 					     struct aa_profile **vec, int len)
+ {
+ 	struct aa_label *label = aa_label_vec_find(ls, vec, len);
+-- 
+1.9.3
+

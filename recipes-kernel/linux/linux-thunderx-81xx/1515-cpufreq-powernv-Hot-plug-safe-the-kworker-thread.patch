@@ -1,0 +1,78 @@
+From 6f87a8e116ae626e0f90451f43e8a1b46c746859 Mon Sep 17 00:00:00 2001
+From: Shilpasri G Bhat <shilpa.bhat@linux.vnet.ibm.com>
+Date: Wed, 3 Feb 2016 01:11:38 +0530
+Subject: [PATCH 1515/1767] cpufreq: powernv: Hot-plug safe the kworker thread
+
+BugLink: http://bugs.launchpad.net/bugs/1555765
+
+In the kworker_thread powernv_cpufreq_work_fn(), we can end up
+sending an IPI to a cpu going offline. This is a rare corner case
+which is fixed using {get/put}_online_cpus(). Along with this fix,
+this patch adds changes to do oneshot cpumask_{clear/and} operation.
+
+Suggested-by: Shreyas B Prabhu <shreyas@linux.vnet.ibm.com>
+Suggested-by: Gautham R Shenoy <ego@linux.vnet.ibm.com>
+Signed-off-by: Shilpasri G Bhat <shilpa.bhat@linux.vnet.ibm.com>
+Reviewed-by: Gautham R. Shenoy <ego@linux.vnet.ibm.com>
+Acked-by: Viresh Kumar <viresh.kumar@linaro.org>
+Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+(cherry picked from linux-next commit 6d167a44e6c8da3316e037b788585fcf96112bea)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/cpufreq/powernv-cpufreq.c | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/cpufreq/powernv-cpufreq.c b/drivers/cpufreq/powernv-cpufreq.c
+index 047170f..2019643 100644
+--- a/drivers/cpufreq/powernv-cpufreq.c
++++ b/drivers/cpufreq/powernv-cpufreq.c
+@@ -28,6 +28,7 @@
+ #include <linux/of.h>
+ #include <linux/reboot.h>
+ #include <linux/slab.h>
++#include <linux/cpu.h>
+ 
+ #include <asm/cputhreads.h>
+ #include <asm/firmware.h>
+@@ -423,18 +424,19 @@ void powernv_cpufreq_work_fn(struct work_struct *work)
+ {
+ 	struct chip *chip = container_of(work, struct chip, throttle);
+ 	unsigned int cpu;
+-	cpumask_var_t mask;
++	cpumask_t mask;
+ 
+-	smp_call_function_any(&chip->mask,
++	get_online_cpus();
++	cpumask_and(&mask, &chip->mask, cpu_online_mask);
++	smp_call_function_any(&mask,
+ 			      powernv_cpufreq_throttle_check, NULL, 0);
+ 
+ 	if (!chip->restore)
+-		return;
++		goto out;
+ 
+ 	chip->restore = false;
+-	cpumask_copy(mask, &chip->mask);
+-	for_each_cpu_and(cpu, mask, cpu_online_mask) {
+-		int index, tcpu;
++	for_each_cpu(cpu, &mask) {
++		int index;
+ 		struct cpufreq_policy policy;
+ 
+ 		cpufreq_get_policy(&policy, cpu);
+@@ -442,9 +444,10 @@ void powernv_cpufreq_work_fn(struct work_struct *work)
+ 					       policy.cur,
+ 					       CPUFREQ_RELATION_C, &index);
+ 		powernv_cpufreq_target_index(&policy, index);
+-		for_each_cpu(tcpu, policy.cpus)
+-			cpumask_clear_cpu(tcpu, mask);
++		cpumask_andnot(&mask, &mask, policy.cpus);
+ 	}
++out:
++	put_online_cpus();
+ }
+ 
+ static char throttle_reason[][30] = {
+-- 
+1.9.3
+

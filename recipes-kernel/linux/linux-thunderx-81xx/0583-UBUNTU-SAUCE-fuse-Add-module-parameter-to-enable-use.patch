@@ -1,0 +1,44 @@
+From 8d243574a5558b88ec011d04633d4f59ed073f20 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Tue, 9 Feb 2016 13:31:28 -0600
+Subject: [PATCH 0583/1767] UBUNTU: SAUCE: fuse: Add module parameter to enable
+ user namespace mounts
+
+This is still an experimental feature, so disable it by default
+and allow it only when the system administrator supplies the
+userns_mounts=true module parameter.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/fuse/inode.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/fs/fuse/inode.c b/fs/fuse/inode.c
+index 2fd338c..4ce60b2 100644
+--- a/fs/fuse/inode.c
++++ b/fs/fuse/inode.c
+@@ -48,6 +48,10 @@ MODULE_PARM_DESC(max_user_congthresh,
+  "Global limit for the maximum congestion threshold an "
+  "unprivileged user can set");
+ 
++static bool userns_mounts;
++module_param(userns_mounts, bool, 0644);
++MODULE_PARM_DESC(userns_mounts, "Allow mounts from unprivileged user namespaces");
++
+ #define FUSE_SUPER_MAGIC 0x65735546
+ 
+ #define FUSE_DEFAULT_BLKSIZE 512
+@@ -1047,6 +1051,9 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
+ 	int err;
+ 	int is_bdev = sb->s_bdev != NULL;
+ 
++	if (!userns_mounts && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
+ 	err = -EINVAL;
+ 	if (sb->s_flags & MS_MANDLOCK)
+ 		goto err;
+-- 
+1.9.3
+

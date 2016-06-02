@@ -1,0 +1,43 @@
+From 7a27e76db7aa742cde0b034dc518e4898658187b Mon Sep 17 00:00:00 2001
+From: Sagar Arun Kamble <sagar.a.kamble@intel.com>
+Date: Sat, 12 Sep 2015 10:17:51 +0530
+Subject: [PATCH 0349/1767] drm/i915: WaRsDisableCoarsePowerGating
+
+BugLink: http://bugs.launchpad.net/bugs/1527462
+
+WaRsDisableCoarsePowerGating: Coarse Power Gating (CPG) needs to be
+disabled for platforms prior to BXT B0 and SKL GT3/GT4 till E0.
+
+v2: Added GT3/GT4 Check.
+
+Change-Id: Ia3c4c16e050c88d3e259f601054875c812d69c3a
+Signed-off-by: Sagar Arun Kamble <sagar.a.kamble@intel.com>
+Reviewed-by: Alex Dai <yu.dai@intel.com>
+[danvet: Align continuation properly.]
+Signed-off-by: Daniel Vetter <daniel.vetter@ffwll.ch>
+
+(back ported from commit f2d2fe95072acd5404f8051b8bf1195c61a47fb5)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+
+Conflicts:
+	drivers/gpu/drm/i915/intel_pm.c
+---
+ drivers/gpu/drm/i915/intel_pm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/i915/intel_pm.c b/drivers/gpu/drm/i915/intel_pm.c
+index f091ad1..2b32369 100644
+--- a/drivers/gpu/drm/i915/intel_pm.c
++++ b/drivers/gpu/drm/i915/intel_pm.c
+@@ -4824,7 +4824,7 @@ static void gen9_enable_rc6(struct drm_device *dev)
+ 	 * WaRsDisableCoarsePowerGating:skl,bxt - Render/Media PG need to be disabled with RC6.
+ 	 */
+ 	if ((IS_BROXTON(dev) && (INTEL_REVID(dev) < BXT_REVID_B0)) ||
+-	    ((IS_SKL_GT3(dev) || IS_SKL_GT4(dev)) && (INTEL_REVID(dev) <= SKL_REVID_F0)))
++	    ((IS_SKL_GT3(dev) || IS_SKL_GT4(dev)) && (INTEL_REVID(dev) <= SKL_REVID_E0)))
+ 		I915_WRITE(GEN9_PG_ENABLE, 0);
+ 	else
+ 		I915_WRITE(GEN9_PG_ENABLE, (rc6_mask & GEN6_RC_CTL_RC6_ENABLE) ?
+-- 
+1.9.3
+

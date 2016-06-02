@@ -1,0 +1,37 @@
+From 312171d6171807c82860ab73d249bb3525e8a43e Mon Sep 17 00:00:00 2001
+From: Alexander Duyck <aduyck@mirantis.com>
+Date: Tue, 29 Sep 2015 15:19:56 -0700
+Subject: [PATCH 0283/1767] fm10k: use napi_schedule_irqoff()
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+The fm10k_msix_clean_rings function runs from hard interrupt context or
+with interrupts already disabled in netpoll.
+
+It can use napi_schedule_irqoff() instead of napi_schedule()
+
+Signed-off-by: Alexander Duyck <aduyck@mirantis.com>
+Tested-by: Krishneil Singh <Krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit de125aaecf3f06984dd32335f1e6a41c80b71011)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_pci.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_pci.c b/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
+index 74be792..5fbffba 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
+@@ -846,7 +846,7 @@ static irqreturn_t fm10k_msix_clean_rings(int __always_unused irq, void *data)
+ 	struct fm10k_q_vector *q_vector = data;
+ 
+ 	if (q_vector->rx.count || q_vector->tx.count)
+-		napi_schedule(&q_vector->napi);
++		napi_schedule_irqoff(&q_vector->napi);
+ 
+ 	return IRQ_HANDLED;
+ }
+-- 
+1.9.3
+

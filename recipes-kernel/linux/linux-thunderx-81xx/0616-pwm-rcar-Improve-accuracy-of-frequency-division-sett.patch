@@ -1,0 +1,39 @@
+From 73c975e25bf7de090f956d094dff1cdfb90fe1b5 Mon Sep 17 00:00:00 2001
+From: Ryo Kodama <ryo.kodama.vz@renesas.com>
+Date: Mon, 9 Nov 2015 09:42:25 +0900
+Subject: [PATCH 0616/1767] pwm: rcar: Improve accuracy of frequency division
+ setting
+
+BugLink: http://bugs.launchpad.net/bugs/1520436
+
+From: Ryo Kodama <ryo.kodama.vz@renesas.com>
+
+When period_ns is set to the same value of RCAR_PWM_MAX_CYCLE in
+rcar_pwm_get_clock_division(), this function should allow such value
+for improving accuracy of frequency division setting.
+
+Signed-off-by: Ryo Kodama <ryo.kodama.vz@renesas.com>
+Signed-off-by: Yoshihiro Shimoda <yoshihiro.shimoda.uh@renesas.com>
+Signed-off-by: Thierry Reding <thierry.reding@gmail.com>
+(cherry picked from commit 72c16a9f98afad073b4a9c947c1c89bfb886ffcb)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/pwm/pwm-rcar.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pwm/pwm-rcar.c b/drivers/pwm/pwm-rcar.c
+index 6e99a63..7b8ac06 100644
+--- a/drivers/pwm/pwm-rcar.c
++++ b/drivers/pwm/pwm-rcar.c
+@@ -81,7 +81,7 @@ static int rcar_pwm_get_clock_division(struct rcar_pwm_chip *rp, int period_ns)
+ 		max = (unsigned long long)NSEC_PER_SEC * RCAR_PWM_MAX_CYCLE *
+ 			(1 << div);
+ 		do_div(max, clk_rate);
+-		if (period_ns < max)
++		if (period_ns <= max)
+ 			break;
+ 	}
+ 
+-- 
+1.9.3
+

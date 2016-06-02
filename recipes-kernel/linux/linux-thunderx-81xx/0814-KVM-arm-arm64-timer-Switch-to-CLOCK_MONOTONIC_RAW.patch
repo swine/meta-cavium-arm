@@ -1,0 +1,47 @@
+From a5a4aa4c52feff6ef53644ef85799f5eff8b3cb2 Mon Sep 17 00:00:00 2001
+From: Marc Zyngier <marc.zyngier@arm.com>
+Date: Fri, 15 Jan 2016 17:41:10 +0000
+Subject: [PATCH 0814/1767] KVM: arm/arm64: timer: Switch to
+ CLOCK_MONOTONIC_RAW
+
+In order to avoid NTP messing with the guest timer behind our back,
+use the new and improved monotonic raw version of the hrtimers.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+Cc: Tomasz Nowicki <tn@semihalf.com>
+Cc: Christoffer Dall <christoffer.dall@linaro.org>
+Link: http://lkml.kernel.org/r/1452879670-16133-4-git-send-email-marc.zyngier@arm.com
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+(cherry picked from linux-next commit a6e707ddbdf150bd1c2a5c0eccc55abdc62a0039)
+BugLink: http://bugs.launchpad.net/bugs/1549494
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ virt/kvm/arm/arch_timer.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/virt/kvm/arm/arch_timer.c b/virt/kvm/arm/arch_timer.c
+index ea60646..df2fc8d 100644
+--- a/virt/kvm/arm/arch_timer.c
++++ b/virt/kvm/arm/arch_timer.c
+@@ -48,7 +48,7 @@ static bool timer_is_armed(struct arch_timer_cpu *timer)
+ static void timer_arm(struct arch_timer_cpu *timer, u64 ns)
+ {
+ 	timer->armed = true;
+-	hrtimer_start(&timer->timer, ktime_add_ns(ktime_get(), ns),
++	hrtimer_start(&timer->timer, ktime_add_ns(ktime_get_raw(), ns),
+ 		      HRTIMER_MODE_ABS);
+ }
+ 
+@@ -311,7 +311,7 @@ void kvm_timer_vcpu_init(struct kvm_vcpu *vcpu)
+ 	struct arch_timer_cpu *timer = &vcpu->arch.timer_cpu;
+ 
+ 	INIT_WORK(&timer->expired, kvm_timer_inject_irq_work);
+-	hrtimer_init(&timer->timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
++	hrtimer_init(&timer->timer, CLOCK_MONOTONIC_RAW, HRTIMER_MODE_ABS);
+ 	timer->timer.function = kvm_timer_expire;
+ }
+ 
+-- 
+1.9.3
+

@@ -1,0 +1,46 @@
+From d4c039b37a3732dff2b229986eb74abd682e2425 Mon Sep 17 00:00:00 2001
+From: Rusty Russell <rusty@rustcorp.com.au>
+Date: Thu, 26 Nov 2015 09:43:08 +1030
+Subject: [PATCH 0653/1767] gcov: use within_module() helper.
+
+An exact mapping would be within_module_core(), but at this stage
+(MODULE_STATE_GOING) the init section is empty, and this is clearer.
+
+Reviewed-by: Peter Oberparleiter <oberpar@linux.vnet.ibm.com>
+Signed-off-by: Rusty Russell <rusty@rustcorp.com.au>
+Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+(cherry picked from commit c65abf358f211c3f88c8ed714dff25775ab49fc1)
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/gcov/base.c | 7 +------
+ 1 file changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/kernel/gcov/base.c b/kernel/gcov/base.c
+index 7080ae1..2f9df37 100644
+--- a/kernel/gcov/base.c
++++ b/kernel/gcov/base.c
+@@ -123,11 +123,6 @@ void gcov_enable_events(void)
+ }
+ 
+ #ifdef CONFIG_MODULES
+-static inline int within(void *addr, void *start, unsigned long size)
+-{
+-	return ((addr >= start) && (addr < start + size));
+-}
+-
+ /* Update list and generate events when modules are unloaded. */
+ static int gcov_module_notifier(struct notifier_block *nb, unsigned long event,
+ 				void *data)
+@@ -142,7 +137,7 @@ static int gcov_module_notifier(struct notifier_block *nb, unsigned long event,
+ 
+ 	/* Remove entries located in module from linked list. */
+ 	while ((info = gcov_info_next(info))) {
+-		if (within(info, mod->module_core, mod->core_size)) {
++		if (within_module((unsigned long)info, mod)) {
+ 			gcov_info_unlink(prev, info);
+ 			if (gcov_events_enabled)
+ 				gcov_event(GCOV_REMOVE, info);
+-- 
+1.9.3
+

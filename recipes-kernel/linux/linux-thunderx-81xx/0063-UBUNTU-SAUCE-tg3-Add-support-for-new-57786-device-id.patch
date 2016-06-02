@@ -1,0 +1,31 @@
+From 1749a0f28303af4729af34ae247b0e85a38cb90a Mon Sep 17 00:00:00 2001
+From: Joseph Salisbury <joseph.salisbury@canonical.com>
+Date: Fri, 8 Nov 2013 11:22:56 -0500
+Subject: [PATCH 0063/1767] UBUNTU: SAUCE: tg3: Add support for new 57786
+ device id.
+
+upstreamed
+
+BugLink: http://bugs.launchpad.net/bugs/1242610
+
+Signed-off-by: Joseph Salisbury <joseph.salisbury@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/broadcom/tg3.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/ethernet/broadcom/tg3.c b/drivers/net/ethernet/broadcom/tg3.c
+index 79789d8..b4646fa 100644
+--- a/drivers/net/ethernet/broadcom/tg3.c
++++ b/drivers/net/ethernet/broadcom/tg3.c
+@@ -329,6 +329,7 @@ static const struct pci_device_id tg3_pci_tbl[] = {
+ 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57785)},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57761)},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57765)},
++	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57786)},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57791),
+ 	 .driver_data = TG3_DRV_DATA_FLAG_10_100_ONLY},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, TG3PCI_DEVICE_TIGON3_57795),
+-- 
+1.9.3
+

@@ -1,0 +1,66 @@
+From f5ef67996b9e448f0ba924e6ce60be1ea5c08d3c Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Thu, 15 Oct 2015 10:59:16 -0400
+Subject: [PATCH 1387/1767] drm/amdgpu: Add some tweaks to gfx 8 soft reset
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Reviewed-by: Junwei Zhang <Jerry.Zhang@amd.com>
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Reviewed-by: Ken Wang <Qingqing.Wang@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 7776a69386179ea477f501aa222692b9856ec56c)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
+index 7b860a7..0cbfabd 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
+@@ -4687,7 +4687,18 @@ static int gfx_v8_0_soft_reset(void *handle)
+ 		gfx_v8_0_cp_gfx_enable(adev, false);
+ 
+ 		/* Disable MEC parsing/prefetching */
+-		/* XXX todo */
++		gfx_v8_0_cp_compute_enable(adev, false);
++
++		if (grbm_soft_reset || srbm_soft_reset) {
++			tmp = RREG32(mmGMCON_DEBUG);
++			tmp = REG_SET_FIELD(tmp,
++					    GMCON_DEBUG, GFX_STALL, 1);
++			tmp = REG_SET_FIELD(tmp,
++					    GMCON_DEBUG, GFX_CLEAR, 1);
++			WREG32(mmGMCON_DEBUG, tmp);
++
++			udelay(50);
++		}
+ 
+ 		if (grbm_soft_reset) {
+ 			tmp = RREG32(mmGRBM_SOFT_RESET);
+@@ -4716,6 +4727,16 @@ static int gfx_v8_0_soft_reset(void *handle)
+ 			WREG32(mmSRBM_SOFT_RESET, tmp);
+ 			tmp = RREG32(mmSRBM_SOFT_RESET);
+ 		}
++
++		if (grbm_soft_reset || srbm_soft_reset) {
++			tmp = RREG32(mmGMCON_DEBUG);
++			tmp = REG_SET_FIELD(tmp,
++					    GMCON_DEBUG, GFX_STALL, 0);
++			tmp = REG_SET_FIELD(tmp,
++					    GMCON_DEBUG, GFX_CLEAR, 0);
++			WREG32(mmGMCON_DEBUG, tmp);
++		}
++
+ 		/* Wait a little for things to settle down */
+ 		udelay(50);
+ 		gfx_v8_0_print_status((void *)adev);
+-- 
+1.9.3
+

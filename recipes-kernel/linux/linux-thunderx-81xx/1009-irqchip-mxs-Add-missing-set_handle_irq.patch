@@ -1,0 +1,44 @@
+From 962b7eb2e5d669e50b609e6f491d78d9c073f089 Mon Sep 17 00:00:00 2001
+From: Oleksij Rempel <linux@rempel-privat.de>
+Date: Fri, 29 Jan 2016 10:57:53 +0100
+Subject: [PATCH 1009/1767] irqchip/mxs: Add missing set_handle_irq()
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit c5b635203032462603c503ecce91a7021c1ad44a upstream.
+
+The rework of the driver missed to move the call to set_handle_irq() into
+asm9260_of_init(). As a consequence no interrupt entry point is installed and
+no interrupts are delivered
+
+Solution is simple: Install the interrupt entry handler.
+
+Fixes: 7e4ac676ee ("irqchip/mxs: Add Alphascale ASM9260 support")
+Signed-off-by: Oleksij Rempel <linux@rempel-privat.de>
+Cc: kernel@pengutronix.de
+Cc: jason@lakedaemon.net
+Cc: marc.zyngier@arm.com
+Link: http://lkml.kernel.org/r/1454061473-24957-1-git-send-email-linux@rempel-privat.de
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/irqchip/irq-mxs.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/irqchip/irq-mxs.c b/drivers/irqchip/irq-mxs.c
+index c22e2d4..efe5084 100644
+--- a/drivers/irqchip/irq-mxs.c
++++ b/drivers/irqchip/irq-mxs.c
+@@ -241,6 +241,7 @@ static int __init asm9260_of_init(struct device_node *np,
+ 		writel(0, icoll_priv.intr + i);
+ 
+ 	icoll_add_domain(np, ASM9260_NUM_IRQS);
++	set_handle_irq(icoll_handle_irq);
+ 
+ 	return 0;
+ }
+-- 
+1.9.3
+

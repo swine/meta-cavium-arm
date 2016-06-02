@@ -1,0 +1,28 @@
+From e52c4f2c62833c66788f04c9e97627545649bdd8 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 15 Dec 2015 04:43:30 -0800
+Subject: [PATCH 0873/1767] UBUNTU: SAUCE: fixup: make __share_replacedby
+ private to get rid of build warning
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index d80fc50..ee9a573 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -87,7 +87,7 @@ void __aa_update_replacedby(struct aa_label *orig, struct aa_label *new)
+ 	aa_put_label(tmp);
+ }
+ 
+-void __share_replacedby(struct aa_label *old, struct aa_label *new)
++static void __share_replacedby(struct aa_label *old, struct aa_label *new)
+ {
+ 	struct aa_replacedby *r = new->replacedby;
+ 	new->replacedby = aa_get_replacedby(old->replacedby);
+-- 
+1.9.3
+

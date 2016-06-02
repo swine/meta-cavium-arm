@@ -1,0 +1,43 @@
+From cb558a21c331c2c751c7ee540ef3db8c2c8ecdb7 Mon Sep 17 00:00:00 2001
+From: Cyrille Pitchen <cyrille.pitchen@atmel.com>
+Date: Wed, 27 Jan 2016 17:48:32 +0100
+Subject: [PATCH 1162/1767] spi: atmel: fix gpio chip-select in case of non-DT
+ platform
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 70f340df24518d36eeaefb6652d492f250115c19 upstream.
+
+The non-DT platform that uses this driver (actually the AVR32) was taking a bad
+branch for determining if the IP would use gpio for CS.
+Adding the presence of DT as a condition fixes this issue.
+
+Fixes: 4820303480a1 ("spi: atmel: add support for the internal chip-select of the spi controller")
+Reported-by: Mans Rullgard <mans@mansr.com>
+Signed-off-by: Cyrille Pitchen <cyrille.pitchen@atmel.com>
+[nicolas.ferre@atmel.com: extract from ml discussion]
+Signed-off-by: Nicolas Ferre <nicolas.ferre@atmel.com>
+Tested-by: Mans Rullgard <mans@mansr.com>
+Signed-off-by: Mark Brown <broonie@kernel.org>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/spi/spi-atmel.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/spi/spi-atmel.c b/drivers/spi/spi-atmel.c
+index aebad36..8feac59 100644
+--- a/drivers/spi/spi-atmel.c
++++ b/drivers/spi/spi-atmel.c
+@@ -1571,6 +1571,7 @@ static int atmel_spi_probe(struct platform_device *pdev)
+ 
+ 	as->use_cs_gpios = true;
+ 	if (atmel_spi_is_v2(as) &&
++	    pdev->dev.of_node &&
+ 	    !of_get_property(pdev->dev.of_node, "cs-gpios", NULL)) {
+ 		as->use_cs_gpios = false;
+ 		master->num_chipselect = 4;
+-- 
+1.9.3
+

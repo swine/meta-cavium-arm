@@ -1,0 +1,15 @@
+diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
+index 4f43622..f923687 100644
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -925,6 +925,10 @@ menu "Userspace binary formats"
+ source "fs/Kconfig.binfmt"
+ 
+ config COMPAT
++	def_bool y
++	depends on AARCH32_EL0
++
++config AARCH32_EL0
+ 	bool "Kernel support for 32-bit EL0"
+ 	depends on ARM64_4K_PAGES || EXPERT
+ 	select COMPAT_BINFMT_ELF

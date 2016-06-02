@@ -1,0 +1,44 @@
+From c401d16c9873f559e978a7a7b15620e851b84d67 Mon Sep 17 00:00:00 2001
+From: Jim Snow <jim.m.snow@intel.com>
+Date: Thu, 3 Dec 2015 10:48:51 +0100
+Subject: [PATCH 0113/1767] EDAC: Add DDR4 flag
+
+BugLink: http://bugs.launchpad.net/bugs/1519631
+
+Make EDAC aware of DDR4/RDDR4 mem types.
+
+Signed-off-by: Jim Snow <jim.m.snow@intel.com>
+Cc: Mauro Carvalho Chehab <mchehab@osg.samsung.com>
+Cc: linux-edac <linux-edac@vger.kernel.org>
+Cc: lukasz.anaczkowski@intel.com
+Link: http://lkml.kernel.org/r/1449136134-23706-2-git-send-email-hubert.chrzaniuk@intel.com
+[ Rebase to 4.4-rc3. ]
+Signed-off-by: Hubert Chrzaniuk <hubert.chrzaniuk@intel.com>
+Signed-off-by: Borislav Petkov <bp@suse.de>
+
+(cherry picked from commit 255379ae9af8c04788c171fa050949ab2ac3f356)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ include/linux/edac.h | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/edac.h b/include/linux/edac.h
+index 4fe67b8..da69648 100644
+--- a/include/linux/edac.h
++++ b/include/linux/edac.h
+@@ -237,8 +237,10 @@ enum mem_type {
+ #define MEM_FLAG_FB_DDR2        BIT(MEM_FB_DDR2)
+ #define MEM_FLAG_RDDR2          BIT(MEM_RDDR2)
+ #define MEM_FLAG_XDR            BIT(MEM_XDR)
+-#define MEM_FLAG_DDR3		 BIT(MEM_DDR3)
+-#define MEM_FLAG_RDDR3		 BIT(MEM_RDDR3)
++#define MEM_FLAG_DDR3           BIT(MEM_DDR3)
++#define MEM_FLAG_RDDR3          BIT(MEM_RDDR3)
++#define MEM_FLAG_DDR4           BIT(MEM_DDR4)
++#define MEM_FLAG_RDDR4          BIT(MEM_RDDR4)
+ 
+ /**
+  * enum edac-type - Error Detection and Correction capabilities and mode
+-- 
+1.9.3
+

@@ -1,0 +1,45 @@
+From 70cbed75c43a0d6b6f47329515c43359bb6950db Mon Sep 17 00:00:00 2001
+From: Mika Kuoppala <mika.kuoppala@linux.intel.com>
+Date: Mon, 7 Dec 2015 18:29:44 +0200
+Subject: [PATCH 0351/1767] drm/i915/skl: Disable coarse power gating up until
+ F0
+
+BugLink: http://bugs.launchpad.net/bugs/1527462
+
+There is conflicting info between E0 and F0 steppings
+for this workarounds. Trust more authoritative source and
+be conservative and extend also for F0.
+
+This prevents numerous (>50) gpu hangs with SKL GT4e
+during piglit run.
+
+References: HSD: gen9lp/2134184
+Cc: Sagar Arun Kamble <sagar.a.kamble@intel.com>
+Signed-off-by: Mika Kuoppala <mika.kuoppala@intel.com>
+Reviewed-by: Sagar Arun Kamble <sagar.a.kamble@intel.com>
+Link: http://patchwork.freedesktop.org/patch/msgid/1449505785-20812-1-git-send-email-mika.kuoppala@intel.com
+(cherry picked from commit 6686ece19f7446f0e29c77d9e0402e1d0ce10c48)
+Cc: stable@vger.kernel.org # v4.3+
+Signed-off-by: Jani Nikula <jani.nikula@intel.com>
+(cherry picked from commit 344df9809f4521c8c11d67c5ef18764b54358950)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/i915/intel_pm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/i915/intel_pm.c b/drivers/gpu/drm/i915/intel_pm.c
+index 2b32369..f091ad1 100644
+--- a/drivers/gpu/drm/i915/intel_pm.c
++++ b/drivers/gpu/drm/i915/intel_pm.c
+@@ -4824,7 +4824,7 @@ static void gen9_enable_rc6(struct drm_device *dev)
+ 	 * WaRsDisableCoarsePowerGating:skl,bxt - Render/Media PG need to be disabled with RC6.
+ 	 */
+ 	if ((IS_BROXTON(dev) && (INTEL_REVID(dev) < BXT_REVID_B0)) ||
+-	    ((IS_SKL_GT3(dev) || IS_SKL_GT4(dev)) && (INTEL_REVID(dev) <= SKL_REVID_E0)))
++	    ((IS_SKL_GT3(dev) || IS_SKL_GT4(dev)) && (INTEL_REVID(dev) <= SKL_REVID_F0)))
+ 		I915_WRITE(GEN9_PG_ENABLE, 0);
+ 	else
+ 		I915_WRITE(GEN9_PG_ENABLE, (rc6_mask & GEN6_RC_CTL_RC6_ENABLE) ?
+-- 
+1.9.3
+

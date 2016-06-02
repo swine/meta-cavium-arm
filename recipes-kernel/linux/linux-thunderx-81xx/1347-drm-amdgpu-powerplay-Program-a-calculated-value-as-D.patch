@@ -1,0 +1,40 @@
+From eb6b6b351168b444ab6bdecce63e4a9d3c6cde84 Mon Sep 17 00:00:00 2001
+From: David Rokhvarg <David.Rokhvarg@amd.com>
+Date: Fri, 11 Dec 2015 12:06:25 -0500
+Subject: [PATCH 1347/1767] drm/amdgpu/powerplay: Program a calculated value as
+ Deep Sleep clock.
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+This replaces programming of a hardcoded value.
+
+Signed-off-by: David Rokhvarg <David.Rokhvarg@amd.com>
+(cherry picked from commit c90e5d20fc1bfefdeb99d5ec2cb0fb28f26d208d)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c b/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c
+index 4641095..3448065 100644
+--- a/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c
++++ b/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c
+@@ -789,9 +789,11 @@ static int cz_tf_set_deep_sleep_sclk_threshold(struct pp_hwmgr *hwmgr,
+ 		if (clks == 0)
+ 			clks = CZ_MIN_DEEP_SLEEP_SCLK;
+ 
++		PP_DBG_LOG("Setting Deep Sleep Clock: %d\n", clks);
++
+ 		smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
+-					  PPSMC_MSG_SetMinDeepSleepSclk,
+-						CZ_MIN_DEEP_SLEEP_SCLK);
++				PPSMC_MSG_SetMinDeepSleepSclk,
++				clks);
+ 	}
+ 
+ 	return 0;
+-- 
+1.9.3
+

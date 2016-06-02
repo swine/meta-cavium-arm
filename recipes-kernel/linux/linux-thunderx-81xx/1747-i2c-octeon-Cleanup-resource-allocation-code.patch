@@ -1,0 +1,65 @@
+From 807a547eac678d36be786f2554a90d6103e42c42 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Fri, 18 Mar 2016 09:46:27 +0100
+Subject: [PATCH 1747/1767] i2c: octeon: Cleanup resource allocation code
+
+Remove resource values from struct i2c_octeon and use
+devm_ioremap_resource helper.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Signed-off-by: Wolfram Sang <wsa@the-dreams.de>
+(cherry picked from commit 54108e56a8339018284c81cf8dcde66afc7e42c1)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/i2c/busses/i2c-octeon.c | 18 +++---------------
+ 1 file changed, 3 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-octeon.c b/drivers/i2c/busses/i2c-octeon.c
+index 9787379..9240037 100644
+--- a/drivers/i2c/busses/i2c-octeon.c
++++ b/drivers/i2c/busses/i2c-octeon.c
+@@ -75,9 +75,7 @@ struct octeon_i2c {
+ 	int irq;
+ 	u32 twsi_freq;
+ 	int sys_freq;
+-	resource_size_t twsi_phys;
+ 	void __iomem *twsi_base;
+-	resource_size_t regsize;
+ 	struct device *dev;
+ };
+ 
+@@ -502,14 +500,11 @@ static int octeon_i2c_probe(struct platform_device *pdev)
+ 	i2c->dev = &pdev->dev;
+ 
+ 	res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-
+-	if (res_mem == NULL) {
+-		dev_err(i2c->dev, "found no memory resource\n");
+-		result = -ENXIO;
++	i2c->twsi_base = devm_ioremap_resource(&pdev->dev, res_mem);
++	if (IS_ERR(i2c->twsi_base)) {
++		result = PTR_ERR(i2c->twsi_base);
+ 		goto out;
+ 	}
+-	i2c->twsi_phys = res_mem->start;
+-	i2c->regsize = resource_size(res_mem);
+ 
+ 	/*
+ 	 * "clock-rate" is a legacy binding, the official binding is
+@@ -526,13 +521,6 @@ static int octeon_i2c_probe(struct platform_device *pdev)
+ 
+ 	i2c->sys_freq = octeon_get_io_clock_rate();
+ 
+-	if (!devm_request_mem_region(&pdev->dev, i2c->twsi_phys, i2c->regsize,
+-				     res_mem->name)) {
+-		dev_err(i2c->dev, "request_mem_region failed\n");
+-		goto out;
+-	}
+-	i2c->twsi_base = devm_ioremap(&pdev->dev, i2c->twsi_phys, i2c->regsize);
+-
+ 	init_waitqueue_head(&i2c->queue);
+ 
+ 	i2c->irq = irq;
+-- 
+1.9.3
+

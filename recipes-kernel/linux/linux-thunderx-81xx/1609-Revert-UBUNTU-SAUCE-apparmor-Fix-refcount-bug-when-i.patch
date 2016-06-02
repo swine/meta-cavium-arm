@@ -1,0 +1,32 @@
+From a24ec0c4431b7a933082d642e0548ee41fe3ea78 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:32 -0700
+Subject: [PATCH 1609/1767] Revert "UBUNTU: SAUCE: apparmor: Fix: refcount bug
+ when inserting label update that transitions ns"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit cfc72134ff8c7fba8f3e0711f900826e817eed5c.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 9644cbb..a1482a8 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1875,8 +1875,7 @@ other_ls_insert:
+ 	if (tmp != l) {
+ 		aa_put_label(l);
+ 		l = tmp;
+-	} else
+-		aa_put_label(l);	/* extra ref */
++	}
+ 
+ 	return l;
+ }
+-- 
+1.9.3
+

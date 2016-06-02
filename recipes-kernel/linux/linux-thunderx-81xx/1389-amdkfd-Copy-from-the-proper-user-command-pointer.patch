@@ -1,0 +1,48 @@
+From 22695f4ba681cae8d66fa5062dc08b2e5a42fb7b Mon Sep 17 00:00:00 2001
+From: Borislav Petkov <bp@suse.de>
+Date: Fri, 15 Jan 2016 19:26:44 +0100
+Subject: [PATCH 1389/1767] amdkfd: Copy from the proper user command pointer
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+8f1d57c17248 ("amdkfd: don't open-code memdup_user()") mistakenly uses
+an uninitialized local pointer, gcc complains:
+
+  drivers/gpu/drm/amd/amdkfd/kfd_chardev.c: In function ‘kfd_ioctl_dbg_address_watch’:
+  drivers/gpu/drm/amd/amdkfd/kfd_chardev.c:562:12: warning: ‘args_buff’ may be used uninitialized in this function [-Wmaybe-uninitialized]
+    args_buff = memdup_user(args_buff,
+                ^
+
+Fix it.
+
+Signed-off-by: Borislav Petkov <bp@suse.de>
+Cc: Al Viro <viro@zeniv.linux.org.uk>
+Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+(cherry picked from commit 39c01bf933106296e43e46cdbd9edce13ae5a5b7)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdkfd/kfd_chardev.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdkfd/kfd_chardev.c b/drivers/gpu/drm/amd/amdkfd/kfd_chardev.c
+index d321222..d2b49c0 100644
+--- a/drivers/gpu/drm/amd/amdkfd/kfd_chardev.c
++++ b/drivers/gpu/drm/amd/amdkfd/kfd_chardev.c
+@@ -558,8 +558,7 @@ static int kfd_ioctl_dbg_address_watch(struct file *filep,
+ 		return -EINVAL;
+ 
+ 	/* this is the actual buffer to work with */
+-
+-	args_buff = memdup_user(args_buff,
++	args_buff = memdup_user(cmd_from_user,
+ 				args->buf_size_in_bytes - sizeof(*args));
+ 	if (IS_ERR(args_buff))
+ 		return PTR_ERR(args_buff);
+-- 
+1.9.3
+

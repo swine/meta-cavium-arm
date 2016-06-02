@@ -1,0 +1,43 @@
+From a9f6f9d951d63a2ad2cc4f9a7b9e6484734ed14e Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Fri, 16 Oct 2015 10:57:09 -0700
+Subject: [PATCH 0296/1767] fm10k: change default Tx ITR to 25usec
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+The current default ITR for Tx is overly restrictive. Using a simple
+netperf TCP_STREAM test, we top out at about 10Gb/s for a single thread
+when running using 1500 byte frames. By reducing the ITR value to 25usec
+(up to 40K interrupts a second from 10K), we are able to achieve 36Gb/s
+for a single thread TCP stream test.
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Tested-by: Krishneil Singh <Krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit dbf4284886c59a17dc0081cee39039ac2a546078)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k.h b/drivers/net/ethernet/intel/fm10k/fm10k.h
+index 115033f..fa26e20 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k.h
++++ b/drivers/net/ethernet/intel/fm10k/fm10k.h
+@@ -171,11 +171,12 @@ struct fm10k_ring_container {
+ #define FM10K_ITR_MAX		0x0FFF	/* maximum value for ITR */
+ #define FM10K_ITR_10K		100	/* 100us */
+ #define FM10K_ITR_20K		50	/* 50us */
++#define FM10K_ITR_40K		25	/* 25us */
+ #define FM10K_ITR_ADAPTIVE	0x8000	/* adaptive interrupt moderation flag */
+ 
+ #define ITR_IS_ADAPTIVE(itr) (!!(itr & FM10K_ITR_ADAPTIVE))
+ 
+-#define FM10K_TX_ITR_DEFAULT	FM10K_ITR_10K
++#define FM10K_TX_ITR_DEFAULT	FM10K_ITR_40K
+ #define FM10K_RX_ITR_DEFAULT	FM10K_ITR_20K
+ #define FM10K_ITR_ENABLE	(FM10K_ITR_AUTOMASK | FM10K_ITR_MASK_CLEAR)
+ 
+-- 
+1.9.3
+

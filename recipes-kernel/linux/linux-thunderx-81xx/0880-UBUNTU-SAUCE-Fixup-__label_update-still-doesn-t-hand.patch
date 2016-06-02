@@ -1,0 +1,78 @@
+From f127f107f6050879ec29af43f7aa21d5d3d9b7a7 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 20 Jan 2016 11:18:21 -0800
+Subject: [PATCH 0880/1767] UBUNTU: SAUCE: Fixup: __label_update() still
+ doesn't handle some cases correctly.
+
+The old label needs to be removed, so call label_remove on it. This is
+only needed by the inv path but that path shares code and removing
+won't hurt the non-inv path.
+
+Also the proxy redirect needs to be done at the insert or after to make
+sure the redirect target is correct.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 21 ++++++---------------
+ 1 file changed, 6 insertions(+), 15 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 76d0f48..f62de86 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1812,7 +1812,7 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 		return NULL;
+ 
+ 	if (!label->replacedby) {
+-		struct aa_replacedby *r = aa_alloc_replacedby(l, GFP_KERNEL);
++		struct aa_replacedby *r = aa_alloc_replacedby(label, GFP_KERNEL);
+ 		if (!r) {
+ 			aa_put_label(l);
+ 			return NULL;
+@@ -1824,13 +1824,8 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	/* while holding the ns_lock will stop profile replacement, removal,
+ 	 * and label updates, label merging and removal can be occuring
+ 	 */
+-
+ 	ls = labels_set(label);
+ 	write_lock_irqsave(&ls->lock, flags);
+-	/* circular ref only broken by replace or remove */
+-	l->replacedby = aa_get_replacedby(label->replacedby);
+-	__aa_update_replacedby(label, l);
+-
+ 	label_for_each(i, label, p) {
+ 		l->ent[i.i] = aa_get_newest_profile(p);
+ 		if (&l->ent[i.i]->label.replacedby != &p->label.replacedby)
+@@ -1841,23 +1836,19 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	if (invcount) {
+ 		l->size -= aa_sort_and_merge_profiles(l->size, &l->ent[0]);
+ 		if (labels_set(label) != labels_set(l)) {
+-			__aa_label_remove(labels_set(label), label, l);
+ 			write_unlock_irqrestore(&ls->lock, flags);
+ 			tmp = aa_label_insert(labels_set(l), l);
+-			if (tmp != l) {
+-				write_lock_irqsave(&ls->lock, flags);
+-				__aa_update_replacedby(label, tmp);
+-				write_unlock_irqrestore(&ls->lock, flags);
+-			}
+-			goto out;
++			write_lock_irqsave(&ls->lock, flags);
++			goto remove;
+ 		}
+ 	} else
+ 		AA_BUG(labels_ns(label) != labels_ns(l));
+ 
+ 	tmp = __aa_label_insert(labels_set(label), l, true);
++remove:
++	/* ensure label is removed, and redirected correctly */
++	__aa_label_remove(labels_set(label), label, tmp);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+-
+-out:
+ 	aa_put_label(l);
+ 
+ 	return tmp;
+-- 
+1.9.3
+

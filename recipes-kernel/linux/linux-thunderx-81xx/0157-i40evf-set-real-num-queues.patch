@@ -1,0 +1,37 @@
+From 7d36fec462c833eae789d44aea1c184aae5f56ba Mon Sep 17 00:00:00 2001
+From: Mitch Williams <mitch.a.williams@intel.com>
+Date: Fri, 6 Nov 2015 15:26:00 -0800
+Subject: [PATCH 0157/1767] i40evf: set real num queues
+
+BugLink: http://bugs.launchpad.net/bugs/1536474
+
+Use the helper function to set the real number of RX queues, and also
+set the real number of TX queues.
+
+Change-ID: I67982799de3f248fb4158ccdc9b1a74385f42ddd
+Signed-off-by: Mitch Williams <mitch.a.williams@intel.com>
+Tested-by: Andrew Bowers <andrewx.bowers@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit e6c4cf6fb9323c0f65b8fef1c0c8c9e15b51007e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/i40evf/i40evf_main.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/i40evf/i40evf_main.c b/drivers/net/ethernet/intel/i40evf/i40evf_main.c
+index 8c4309c..d44d3b2 100644
+--- a/drivers/net/ethernet/intel/i40evf/i40evf_main.c
++++ b/drivers/net/ethernet/intel/i40evf/i40evf_main.c
+@@ -1205,7 +1205,8 @@ static int i40evf_set_interrupt_capability(struct i40evf_adapter *adapter)
+ 	err = i40evf_acquire_msix_vectors(adapter, v_budget);
+ 
+ out:
+-	adapter->netdev->real_num_tx_queues = pairs;
++	netif_set_real_num_rx_queues(adapter->netdev, pairs);
++	netif_set_real_num_tx_queues(adapter->netdev, pairs);
+ 	return err;
+ }
+ 
+-- 
+1.9.3
+

@@ -1,0 +1,34 @@
+From e8cc8712788d4578486507e85546059117b504a2 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Thu, 11 Feb 2016 21:50:26 +0530
+Subject: [PATCH 0646/1767] net: thunderx: Alloc higher order pages when
+ pagesize is small
+
+Allocate higher order pages when pagesize is small, this will
+reduce number of calls to page allocator and wastage of memory.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from linux-next commit 6e4be8d6717cb63c58f6b404e63a881c76d8878c)
+Signed-off-by: Dann Frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index 50ab6f4..5adb208 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -78,7 +78,7 @@ static void nicvf_free_q_desc_mem(struct nicvf *nic, struct q_desc_mem *dmem)
+ static inline int nicvf_alloc_rcv_buffer(struct nicvf *nic, gfp_t gfp,
+ 					 u32 buf_len, u64 **rbuf)
+ {
+-	int order = get_order(buf_len);
++	int order = (PAGE_SIZE <= 4096) ?  PAGE_ALLOC_COSTLY_ORDER : 0;
+ 
+ 	/* Check if request can be accomodated in previous allocated page */
+ 	if (nic->rb_page) {
+-- 
+1.9.3
+

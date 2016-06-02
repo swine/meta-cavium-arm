@@ -1,0 +1,33 @@
+From 7c695c9d9a73ad8197a9798cca4d909a9a73fa10 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Thu, 5 Feb 2015 10:13:41 -0600
+Subject: [PATCH 0562/1767] UBUNTU: SAUCE: cred: Reject inodes with invalid ids
+ in set_create_file_as()
+
+Using INVALID_[UG]ID for the LSM file creation context doesn't
+make sense, so return an error if the inode passed to
+set_create_file_as() has an invalid id.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Acked-by: Serge Hallyn <serge.hallyn@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/cred.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/kernel/cred.c b/kernel/cred.c
+index 71179a0..ff8606f 100644
+--- a/kernel/cred.c
++++ b/kernel/cred.c
+@@ -689,6 +689,8 @@ EXPORT_SYMBOL(set_security_override_from_ctx);
+  */
+ int set_create_files_as(struct cred *new, struct inode *inode)
+ {
++	if (!uid_valid(inode->i_uid) || !gid_valid(inode->i_gid))
++		return -EINVAL;
+ 	new->fsuid = inode->i_uid;
+ 	new->fsgid = inode->i_gid;
+ 	return security_kernel_create_files_as(new, inode);
+-- 
+1.9.3
+

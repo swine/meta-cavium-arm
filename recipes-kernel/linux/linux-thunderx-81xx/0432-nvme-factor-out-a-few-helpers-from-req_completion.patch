@@ -1,0 +1,94 @@
+From 068b0749de4bb43bc30b3c84225fe516aab8d8c9 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Sat, 28 Nov 2015 15:41:58 +0100
+Subject: [PATCH 0432/1767] nvme: factor out a few helpers from req_completion
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+We'll need them in other places later.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Acked-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 7688faa6dd2c99ce5d66571d9ad65535ec39e8cb)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/core.c | 11 +++++++++++
+ drivers/nvme/host/nvme.h |  7 +++++++
+ drivers/nvme/host/pci.c  | 12 ++----------
+ 3 files changed, 20 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/nvme/host/core.c b/drivers/nvme/host/core.c
+index 875e403..b52a789 100644
+--- a/drivers/nvme/host/core.c
++++ b/drivers/nvme/host/core.c
+@@ -78,6 +78,17 @@ static struct nvme_ns *nvme_get_ns_from_disk(struct gendisk *disk)
+ 	return ns;
+ }
+ 
++void nvme_requeue_req(struct request *req)
++{
++	unsigned long flags;
++
++	blk_mq_requeue_request(req);
++	spin_lock_irqsave(req->q->queue_lock, flags);
++	if (!blk_queue_stopped(req->q))
++		blk_mq_kick_requeue_list(req->q);
++	spin_unlock_irqrestore(req->q->queue_lock, flags);
++}
++
+ struct request *nvme_alloc_request(struct request_queue *q,
+ 		struct nvme_command *cmd, unsigned int flags)
+ {
+diff --git a/drivers/nvme/host/nvme.h b/drivers/nvme/host/nvme.h
+index 662314f..865caef 100644
+--- a/drivers/nvme/host/nvme.h
++++ b/drivers/nvme/host/nvme.h
+@@ -216,6 +216,12 @@ static inline int nvme_error_status(u16 status)
+ 	}
+ }
+ 
++static inline bool nvme_req_needs_retry(struct request *req, u16 status)
++{
++	return !(status & NVME_SC_DNR || blk_noretry_request(req)) &&
++		(jiffies - req->start_time) < req->timeout;
++}
++
+ int nvme_disable_ctrl(struct nvme_ctrl *ctrl, u64 cap);
+ int nvme_enable_ctrl(struct nvme_ctrl *ctrl, u64 cap);
+ int nvme_shutdown_ctrl(struct nvme_ctrl *ctrl);
+@@ -230,6 +236,7 @@ void nvme_remove_namespaces(struct nvme_ctrl *ctrl);
+ 
+ struct request *nvme_alloc_request(struct request_queue *q,
+ 		struct nvme_command *cmd, unsigned int flags);
++void nvme_requeue_req(struct request *req);
+ int nvme_submit_sync_cmd(struct request_queue *q, struct nvme_command *cmd,
+ 		void *buf, unsigned bufflen);
+ int __nvme_submit_sync_cmd(struct request_queue *q, struct nvme_command *cmd,
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 4c744d8..48c652a 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -607,17 +607,9 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
+ 	int error = 0;
+ 
+ 	if (unlikely(status)) {
+-		if (!(status & NVME_SC_DNR || blk_noretry_request(req))
+-		    && (jiffies - req->start_time) < req->timeout) {
+-			unsigned long flags;
+-
++		if (nvme_req_needs_retry(req, status)) {
+ 			nvme_unmap_data(nvmeq->dev, iod);
+-
+-			blk_mq_requeue_request(req);
+-			spin_lock_irqsave(req->q->queue_lock, flags);
+-			if (!blk_queue_stopped(req->q))
+-				blk_mq_kick_requeue_list(req->q);
+-			spin_unlock_irqrestore(req->q->queue_lock, flags);
++			nvme_requeue_req(req);
+ 			return;
+ 		}
+ 
+-- 
+1.9.3
+

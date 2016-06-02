@@ -1,0 +1,41 @@
+From aa1cba3b012a73df337491ab7426f940271a5d62 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Fri, 6 May 2016 13:18:14 -0700
+Subject: [PATCH 07/39] net: thunderx: Don't set mac address for secondary Qset
+ VFs
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c   | 2 +-
+ drivers/net/ethernet/cavium/thunder/nicvf_main.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 26c7c68..836b2ba 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -145,7 +145,7 @@ static void nic_mbx_send_ready(struct nicpf *nic, int vf)
+ 
+ 	mbx.nic_cfg.tns_mode = NIC_TNS_BYPASS_MODE;
+ 
+-	if (vf < MAX_LMAC) {
++	if (vf < nic->num_vf_en) {
+ 		bgx_idx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+ 		lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+ 
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_main.c b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+index 63c2252..6e77c6e 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+@@ -1195,7 +1195,7 @@ int nicvf_open(struct net_device *netdev)
+ 	}
+ 
+ 	/* Check if we got MAC address from PF or else generate a radom MAC */
+-	if (is_zero_ether_addr(netdev->dev_addr)) {
++	if (!nic->sqs_mode && is_zero_ether_addr(netdev->dev_addr)) {
+ 		eth_hw_addr_random(netdev);
+ 		nicvf_hw_set_mac_addr(nic, netdev);
+ 	}
+-- 
+1.9.1
+

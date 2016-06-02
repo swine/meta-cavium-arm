@@ -1,0 +1,47 @@
+From 7382157ca380000d18a187e7dc9a36483205e383 Mon Sep 17 00:00:00 2001
+From: Amitoj Kaur Chawla <amitoj1606@gmail.com>
+Date: Mon, 25 Jan 2016 23:03:57 +0530
+Subject: [PATCH 1402/1767] drm/amdkfd: Remove unnecessary cast in kfree
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Remove an unnecassary cast in the argument to kfree.
+
+Found using Coccinelle. The semantic patch used to find this is as follows:
+
+//<smpl>
+@@
+type T;
+expression *f;
+@@
+
+- kfree((T *)(f));
++ kfree(f);
+//</smpl>
+
+Signed-off-by: Amitoj Kaur Chawla <amitoj1606@gmail.com>
+Signed-off-by: Oded Gabbay <oded.gabbay@gmail.com>
+(cherry picked from commit 642f0f2a1563b5ab6f5de896f602177ac1f06652)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdkfd/kfd_process.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdkfd/kfd_process.c b/drivers/gpu/drm/amd/amdkfd/kfd_process.c
+index 9be0070..a902ae0 100644
+--- a/drivers/gpu/drm/amd/amdkfd/kfd_process.c
++++ b/drivers/gpu/drm/amd/amdkfd/kfd_process.c
+@@ -194,7 +194,7 @@ static void kfd_process_wq_release(struct work_struct *work)
+ 
+ 	kfree(p);
+ 
+-	kfree((void *)work);
++	kfree(work);
+ }
+ 
+ static void kfd_process_destroy_delayed(struct rcu_head *rcu)
+-- 
+1.9.3
+

@@ -1,0 +1,57 @@
+From 73017e4c227c44cfd8b0832507068c05a3df9e23 Mon Sep 17 00:00:00 2001
+From: Rex Zhu <Rex.Zhu@amd.com>
+Date: Thu, 17 Dec 2015 17:20:04 +0800
+Subject: [PATCH 1350/1767] drm/amd/powerplay: show gpu load when print gpu
+ performance for Cz. (v2)
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Show GPU load in in the debugfs output.
+
+v2: integrate Tom's optimization
+
+Reviewed-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Rex Zhu <Rex.Zhu@amd.com>
+(cherry picked from commit 605ed21929fee2b39e8cb25301184c4ad9b468e5)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c b/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c
+index 3448065..5bac36b 100644
+--- a/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c
++++ b/drivers/gpu/drm/amd/powerplay/hwmgr/cz_hwmgr.c
+@@ -1494,8 +1494,9 @@ cz_print_current_perforce_level(struct pp_hwmgr *hwmgr, struct seq_file *m)
+ 	uint32_t vce_index = PHM_GET_FIELD(cgs_read_ind_register(hwmgr->device, CGS_IND_REG__SMC, ixTARGET_AND_CURRENT_PROFILE_INDEX_2),
+ 					TARGET_AND_CURRENT_PROFILE_INDEX_2, CURR_VCE_INDEX);
+ 
+-	uint32_t sclk, vclk, dclk, ecclk, tmp;
++	uint32_t sclk, vclk, dclk, ecclk, tmp, active_percent;
+ 	uint16_t vddnb, vddgfx;
++	int result;
+ 
+ 	if (sclk_index >= NUM_SCLK_LEVELS) {
+ 		seq_printf(m, "\n invalid sclk dpm profile %d\n", sclk_index);
+@@ -1532,6 +1533,16 @@ cz_print_current_perforce_level(struct pp_hwmgr *hwmgr, struct seq_file *m)
+ 			seq_printf(m, "\n index: %u vce ecclk: %u MHz\n", vce_index, ecclk/100);
+ 		}
+ 	}
++
++	result = smum_send_msg_to_smc(hwmgr->smumgr, PPSMC_MSG_GetAverageGraphicsActivity);
++	if (0 == result) {
++		active_percent = cgs_read_register(hwmgr->device, mmSMU_MP1_SRBM2P_ARG_0);
++		active_percent = active_percent > 100 ? 100 : active_percent;
++	} else {
++		active_percent = 50;
++	}
++
++	seq_printf(m, "\n [GPU load]: %u %%\n\n", active_percent);
+ }
+ 
+ static void cz_hw_print_display_cfg(
+-- 
+1.9.3
+

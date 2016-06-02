@@ -1,0 +1,32 @@
+From 1a55b0cc730e7a7a735f6f9938fd92ff32704e38 Mon Sep 17 00:00:00 2001
+From: Brian Norris <computersforpeace@gmail.com>
+Date: Fri, 8 Jan 2016 10:30:09 -0800
+Subject: [PATCH 0476/1767] cxl: fix build for GCC 4.6.x
+
+GCC 4.6.3 does not support -Wno-unused-const-variable. Instead, use the
+kbuild infrastructure that checks if this options exists.
+
+Fixes: 2cd55c68c0a4 ("cxl: Fix build failure due to -Wunused-variable behaviour change")
+Suggested-by: Michal Marek <mmarek@suse.com>
+Suggested-by: Arnd Bergmann <arnd@arndb.de>
+Signed-off-by: Brian Norris <computersforpeace@gmail.com>
+Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+(cherry picked from commit aa09545589ceeff884421d8eb38d04963190afbe)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/misc/cxl/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/misc/cxl/Makefile b/drivers/misc/cxl/Makefile
+index 6982f60..ab6f392 100644
+--- a/drivers/misc/cxl/Makefile
++++ b/drivers/misc/cxl/Makefile
+@@ -1,4 +1,4 @@
+-ccflags-y := -Werror -Wno-unused-const-variable
++ccflags-y := -Werror $(call cc-disable-warning, unused-const-variable)
+ 
+ cxl-y				+= main.o file.o irq.o fault.o native.o
+ cxl-y				+= context.o sysfs.o debugfs.o pci.o trace.o
+-- 
+1.9.3
+

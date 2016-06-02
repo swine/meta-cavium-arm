@@ -1,0 +1,39 @@
+From cc273835e905834f96a97b52a1e50ccb04c09979 Mon Sep 17 00:00:00 2001
+From: Imre Deak <imre.deak@intel.com>
+Date: Thu, 28 Jan 2016 16:04:12 +0200
+Subject: [PATCH 0830/1767] drm/i915/bxt: update list of PCIIDs
+
+BugLink: http://bugs.launchpad.net/bugs/1540390
+
+Add PCIIDs for new versions of the SOC, based on BSpec. Also add the
+name of the versions as code comment where this is available. The new
+versions don't have any changes visible to the kernel driver.
+
+Signed-off-by: Imre Deak <imre.deak@intel.com>
+Reviewed-by: Mika Kuoppala <mika.kuoppala@intel.com>
+Link: http://patchwork.freedesktop.org/patch/msgid/1453989852-13569-1-git-send-email-imre.deak@intel.com
+(cherry picked from drm-intel-next commit 985dd4360fdf2533fe48a33a4a2094f2e4718dc0)
+Signed-off-by: Timo Aaltonen <timo.aaltonen@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ include/drm/i915_pciids.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/include/drm/i915_pciids.h b/include/drm/i915_pciids.h
+index f970209..9b48ac1 100644
+--- a/include/drm/i915_pciids.h
++++ b/include/drm/i915_pciids.h
+@@ -296,7 +296,9 @@
+ #define INTEL_BXT_IDS(info) \
+ 	INTEL_VGA_DEVICE(0x0A84, info), \
+ 	INTEL_VGA_DEVICE(0x1A84, info), \
+-	INTEL_VGA_DEVICE(0x5A84, info)
++	INTEL_VGA_DEVICE(0x1A85, info), \
++	INTEL_VGA_DEVICE(0x5A84, info), /* APL HD Graphics 505 */ \
++	INTEL_VGA_DEVICE(0x5A85, info)  /* APL HD Graphics 500 */
+ 
+ #define INTEL_KBL_GT1_IDS(info)	\
+ 	INTEL_VGA_DEVICE(0x5913, info), /* ULT GT1.5 */ \
+-- 
+1.9.3
+

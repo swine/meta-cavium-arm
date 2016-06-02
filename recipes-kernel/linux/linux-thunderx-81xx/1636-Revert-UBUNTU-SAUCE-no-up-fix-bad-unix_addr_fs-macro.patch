@@ -1,0 +1,31 @@
+From f8e0aefea76279f52e6e7a229857eeb2898fe1e4 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:06:29 -0700
+Subject: [PATCH 1636/1767] Revert "UBUNTU: SAUCE: (no-up) fix: bad
+ unix_addr_fs macro"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 14bc1e2030ad4fe9fc76dbf943c34df966a8ab2b.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/include/af_unix.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/include/af_unix.h b/security/apparmor/include/af_unix.h
+index ccffd23..24902b3 100644
+--- a/security/apparmor/include/af_unix.h
++++ b/security/apparmor/include/af_unix.h
+@@ -27,7 +27,7 @@
+ 
+ #define unix_addr(A) ((struct sockaddr_un *)(A))
+ #define unix_addr_anon(A, L) ((A) && unix_addr_len(L) <= 0)
+-#define unix_addr_fs(A, L) (!unix_addr_anon(A, L) && !addr_unix_abstract_name(unix_addr(A)->sun_path))
++#define unix_addr_fs(A, L) (!unix_addr_anon(A, L) && unix_addr(A)->sun_path[0] == '/')
+ 
+ #define UNIX_ANONYMOUS(U) (!unix_sk(U)->addr)
+ /* from net/unix/af_unix.c */
+-- 
+1.9.3
+

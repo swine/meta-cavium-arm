@@ -1,0 +1,56 @@
+From 81a1ae9516d01162345b3a753cf75afec4e69dfe Mon Sep 17 00:00:00 2001
+From: Emil Tantilov <emil.s.tantilov@intel.com>
+Date: Mon, 12 Oct 2015 10:56:00 -0700
+Subject: [PATCH 0212/1767] ixgbevf: fix spoofed packets with random MAC
+
+BugLink: http://bugs.launchpad.net/bugs/1536473
+
+If ixgbevf is loaded while the corresponding PF interface is down
+and the driver assigns a random MAC address, that address can be
+overwritten with the value of hw->mac.perm_addr, which would be 0 at
+that point.
+
+To avoid this case we init hw->mac.perm_addr to the randomly generated
+address and do not set it unless we receive ACK from ixgbe.
+
+Reported-by: John Greene <jogreene@redhat.com>
+Signed-off-by: Emil Tantilov <emil.s.tantilov@intel.com>
+Tested-by: Krishneil Singh <Krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 465fc643c2dcbe08e0debac80c225f6750b40d3c)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/ixgbevf/ixgbevf_main.c | 1 +
+ drivers/net/ethernet/intel/ixgbevf/vf.c           | 4 +++-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/ixgbevf/ixgbevf_main.c b/drivers/net/ethernet/intel/ixgbevf/ixgbevf_main.c
+index 03ee46b..e2d07da 100644
+--- a/drivers/net/ethernet/intel/ixgbevf/ixgbevf_main.c
++++ b/drivers/net/ethernet/intel/ixgbevf/ixgbevf_main.c
+@@ -2667,6 +2667,7 @@ static int ixgbevf_sw_init(struct ixgbevf_adapter *adapter)
+ 		dev_info(&pdev->dev, "Assigning random MAC address\n");
+ 		eth_hw_addr_random(netdev);
+ 		ether_addr_copy(hw->mac.addr, netdev->dev_addr);
++		ether_addr_copy(hw->mac.perm_addr, netdev->dev_addr);
+ 	}
+ 
+ 	/* Enable dynamic interrupt throttling rates */
+diff --git a/drivers/net/ethernet/intel/ixgbevf/vf.c b/drivers/net/ethernet/intel/ixgbevf/vf.c
+index 427f360..61a98f4 100644
+--- a/drivers/net/ethernet/intel/ixgbevf/vf.c
++++ b/drivers/net/ethernet/intel/ixgbevf/vf.c
+@@ -117,7 +117,9 @@ static s32 ixgbevf_reset_hw_vf(struct ixgbe_hw *hw)
+ 	    msgbuf[0] != (IXGBE_VF_RESET | IXGBE_VT_MSGTYPE_NACK))
+ 		return IXGBE_ERR_INVALID_MAC_ADDR;
+ 
+-	ether_addr_copy(hw->mac.perm_addr, addr);
++	if (msgbuf[0] == (IXGBE_VF_RESET | IXGBE_VT_MSGTYPE_ACK))
++		ether_addr_copy(hw->mac.perm_addr, addr);
++
+ 	hw->mac.mc_filter_type = msgbuf[IXGBE_VF_MC_TYPE_WORD];
+ 
+ 	return 0;
+-- 
+1.9.3
+

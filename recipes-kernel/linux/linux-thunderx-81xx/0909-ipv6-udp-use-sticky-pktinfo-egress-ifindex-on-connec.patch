@@ -1,0 +1,43 @@
+From 5394156c51e8ed065ada49e81148aa7d545b969b Mon Sep 17 00:00:00 2001
+From: Paolo Abeni <pabeni@redhat.com>
+Date: Fri, 29 Jan 2016 12:30:20 +0100
+Subject: [PATCH 0909/1767] ipv6/udp: use sticky pktinfo egress ifindex on
+ connect()
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+[ Upstream commit 1cdda91871470f15e79375991bd2eddc6e86ddb1 ]
+
+Currently, the egress interface index specified via IPV6_PKTINFO
+is ignored by __ip6_datagram_connect(), so that RFC 3542 section 6.7
+can be subverted when the user space application calls connect()
+before sendmsg().
+Fix it by initializing properly flowi6_oif in connect() before
+performing the route lookup.
+
+Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+Acked-by: Hannes Frederic Sowa <hannes@stressinduktion.org>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/ipv6/datagram.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/net/ipv6/datagram.c b/net/ipv6/datagram.c
+index 517c55b..4281621 100644
+--- a/net/ipv6/datagram.c
++++ b/net/ipv6/datagram.c
+@@ -162,6 +162,9 @@ ipv4_connected:
+ 	fl6.fl6_dport = inet->inet_dport;
+ 	fl6.fl6_sport = inet->inet_sport;
+ 
++	if (!fl6.flowi6_oif)
++		fl6.flowi6_oif = np->sticky_pktinfo.ipi6_ifindex;
++
+ 	if (!fl6.flowi6_oif && (addr_type&IPV6_ADDR_MULTICAST))
+ 		fl6.flowi6_oif = np->mcast_oif;
+ 
+-- 
+1.9.3
+

@@ -1,0 +1,33 @@
+From 33edd77295033a50abec78c0f15708564ae9b970 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:30 -0700
+Subject: [PATCH 1608/1767] Revert "UBUNTU: SAUCE: apparmor: Fix: break
+ circular refcount for label that is directly freed."
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 5f63d8b8931e1e33c62793583e9e5ed66ca9cc4b.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 8c64588..9644cbb 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -227,10 +227,6 @@ void aa_label_destroy(struct aa_label *label)
+ 			label->ent[i.i] = LABEL_POISON + i.i;
+ 		}
+ 	}
+-
+-	if (rcu_dereference_protected(label->replacedby->label, true) == label)
+-		rcu_assign_pointer(label->replacedby->label, NULL);
+-
+ 	aa_free_sid(label->sid);
+ 	aa_put_replacedby(label->replacedby);
+ 	label->replacedby = REPLACEDBY_POISON + 1;
+-- 
+1.9.3
+

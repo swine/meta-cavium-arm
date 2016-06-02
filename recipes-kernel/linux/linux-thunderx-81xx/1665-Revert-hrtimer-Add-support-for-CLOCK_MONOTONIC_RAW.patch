@@ -1,0 +1,67 @@
+From 8daedc973582a157bc0dd9577a290d1b14e768fc Mon Sep 17 00:00:00 2001
+From: dann frazier <dann.frazier@canonical.com>
+Date: Mon, 21 Mar 2016 15:16:34 -0600
+Subject: [PATCH 1665/1767] Revert "hrtimer: Add support for
+ CLOCK_MONOTONIC_RAW"
+
+BugLink: http://bugs.launchpad.net/bugs/1549494
+
+This reverts commit 45b5c64b98b3ab90332bf7f256a6a1bae60c1527.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ include/linux/hrtimer.h |  1 -
+ kernel/time/hrtimer.c   | 11 +----------
+ 2 files changed, 1 insertion(+), 11 deletions(-)
+
+diff --git a/include/linux/hrtimer.h b/include/linux/hrtimer.h
+index 2f7bf18..2ead22d 100644
+--- a/include/linux/hrtimer.h
++++ b/include/linux/hrtimer.h
+@@ -153,7 +153,6 @@ enum  hrtimer_base_type {
+ 	HRTIMER_BASE_REALTIME,
+ 	HRTIMER_BASE_BOOTTIME,
+ 	HRTIMER_BASE_TAI,
+-	HRTIMER_BASE_MONOTONIC_RAW,
+ 	HRTIMER_MAX_CLOCK_BASES,
+ };
+ 
+diff --git a/kernel/time/hrtimer.c b/kernel/time/hrtimer.c
+index 9eb2eef..17f7bcf 100644
+--- a/kernel/time/hrtimer.c
++++ b/kernel/time/hrtimer.c
+@@ -90,11 +90,6 @@ DEFINE_PER_CPU(struct hrtimer_cpu_base, hrtimer_bases) =
+ 			.clockid = CLOCK_TAI,
+ 			.get_time = &ktime_get_clocktai,
+ 		},
+-		{
+-			.index = HRTIMER_BASE_MONOTONIC_RAW,
+-			.clockid = CLOCK_MONOTONIC_RAW,
+-			.get_time = &ktime_get_raw,
+-		},
+ 	}
+ };
+ 
+@@ -104,7 +99,6 @@ static const int hrtimer_clock_to_base_table[MAX_CLOCKS] = {
+ 
+ 	[CLOCK_REALTIME]	= HRTIMER_BASE_REALTIME,
+ 	[CLOCK_MONOTONIC]	= HRTIMER_BASE_MONOTONIC,
+-	[CLOCK_MONOTONIC_RAW]	= HRTIMER_BASE_MONOTONIC_RAW,
+ 	[CLOCK_BOOTTIME]	= HRTIMER_BASE_BOOTTIME,
+ 	[CLOCK_TAI]		= HRTIMER_BASE_TAI,
+ };
+@@ -1298,10 +1292,7 @@ static void __hrtimer_run_queues(struct hrtimer_cpu_base *cpu_base, ktime_t now)
+ 		if (!(active & 0x01))
+ 			continue;
+ 
+-		if (unlikely(base->index == HRTIMER_BASE_MONOTONIC_RAW))
+-			basenow = ktime_get_raw();
+-		else
+-			basenow = ktime_add(now, base->offset);
++		basenow = ktime_add(now, base->offset);
+ 
+ 		while ((node = timerqueue_getnext(&base->active))) {
+ 			struct hrtimer *timer;
+-- 
+1.9.3
+

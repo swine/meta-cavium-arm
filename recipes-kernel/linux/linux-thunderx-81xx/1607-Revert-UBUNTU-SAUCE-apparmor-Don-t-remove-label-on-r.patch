@@ -1,0 +1,32 @@
+From e193b12f9f81a514fdd2ece3673bd3dbc8084eaa Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:29 -0700
+Subject: [PATCH 1607/1767] Revert "UBUNTU: SAUCE: apparmor: Don't remove label
+ on rcu callback if the label has already been removed"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 838dc2541c639b30a25ecb484cb63c04e2848d8d.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index c09f8ff..8c64588 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -260,8 +260,7 @@ static void label_free_rcu(struct rcu_head *head)
+ {
+ 	struct aa_label *l = container_of(head, struct aa_label, rcu);
+ 
+-	if (l->flags & FLAG_IN_TREE)
+-		(void) aa_label_remove(labels_set(l), l);
++	(void) aa_label_remove(labels_set(l), l);
+ 	label_free_switch(l);
+ }
+ 
+-- 
+1.9.3
+

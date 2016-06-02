@@ -1,0 +1,30 @@
+From 3ce4a2c1ca92a10cedfc17604fba1c52f89a0778 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:25 -0700
+Subject: [PATCH 1605/1767] Revert "UBUNTU: SAUCE: apparmor: fix: ref count
+ leak when profile sha1 hash is read"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit b3df5394a0650d4135f465e3b94c0d6325f3e830.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index eba0807..c5292a0 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -490,7 +490,6 @@ static int aa_fs_seq_hash_show(struct seq_file *seq, void *v)
+ 			seq_printf(seq, "%.2x", profile->hash[i]);
+ 		seq_puts(seq, "\n");
+ 	}
+-	aa_put_label(label);
+ 
+ 	return 0;
+ }
+-- 
+1.9.3
+

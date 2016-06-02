@@ -1,0 +1,33 @@
+From 10f5c9bc113205d725785a1e428870775d379535 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Sun, 15 Feb 2015 14:05:58 -0600
+Subject: [PATCH 0566/1767] UBUNTU: SAUCE: fs: Don't remove suid for CAP_FSETID
+ in s_user_ns
+
+Expand the check in should_remove_suid() to keep privileges for
+CAP_FSETID in s_user_ns rather than init_user_ns.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Acked-by: Serge Hallyn <serge.hallyn@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/inode.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/fs/inode.c b/fs/inode.c
+index 01c036f..3e7c74d 100644
+--- a/fs/inode.c
++++ b/fs/inode.c
+@@ -1684,7 +1684,8 @@ int should_remove_suid(struct dentry *dentry)
+ 	if (unlikely((mode & S_ISGID) && (mode & S_IXGRP)))
+ 		kill |= ATTR_KILL_SGID;
+ 
+-	if (unlikely(kill && !capable(CAP_FSETID) && S_ISREG(mode)))
++	if (unlikely(kill && !ns_capable(dentry->d_sb->s_user_ns, CAP_FSETID) &&
++		     S_ISREG(mode)))
+ 		return kill;
+ 
+ 	return 0;
+-- 
+1.9.3
+

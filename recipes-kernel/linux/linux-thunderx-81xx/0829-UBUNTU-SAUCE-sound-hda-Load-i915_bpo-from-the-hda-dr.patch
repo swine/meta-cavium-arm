@@ -1,0 +1,126 @@
+From c836d6b015cfd360e2ff4d68f2651b52c0ef85cd Mon Sep 17 00:00:00 2001
+From: Timo Aaltonen <timo.aaltonen@canonical.com>
+Date: Mon, 22 Feb 2016 19:01:54 +0200
+Subject: [PATCH 0829/1767] UBUNTU: SAUCE: sound/hda: Load i915_bpo from the
+ hda driver on SKL/KBL/BXT
+
+BugLink: http://bugs.launchpad.net/bugs/1540390
+
+Signed-off-by: Timo Aaltonen <timo.aaltonen@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ include/sound/hda_i915.h  |  5 +++++
+ sound/hda/hdac_i915.c     | 48 +++++++++++++++++++++++++++++++++++++++++++++++
+ sound/pci/hda/hda_intel.c |  7 ++++++-
+ 3 files changed, 59 insertions(+), 1 deletion(-)
+
+diff --git a/include/sound/hda_i915.h b/include/sound/hda_i915.h
+index 930b41e..c65a22e 100644
+--- a/include/sound/hda_i915.h
++++ b/include/sound/hda_i915.h
+@@ -11,6 +11,7 @@ int snd_hdac_set_codec_wakeup(struct hdac_bus *bus, bool enable);
+ int snd_hdac_display_power(struct hdac_bus *bus, bool enable);
+ int snd_hdac_get_display_clk(struct hdac_bus *bus);
+ int snd_hdac_i915_init(struct hdac_bus *bus);
++int snd_hdac_i915_init_bpo(struct hdac_bus *bus);
+ int snd_hdac_i915_exit(struct hdac_bus *bus);
+ int snd_hdac_i915_register_notifier(const struct i915_audio_component_audio_ops *);
+ #else
+@@ -30,6 +31,10 @@ static inline int snd_hdac_i915_init(struct hdac_bus *bus)
+ {
+ 	return -ENODEV;
+ }
++static inline int snd_hdac_i915_init_bpo(struct hdac_bus *bus)
++{
++	return -ENODEV;
++}
+ static inline int snd_hdac_i915_exit(struct hdac_bus *bus)
+ {
+ 	return 0;
+diff --git a/sound/hda/hdac_i915.c b/sound/hda/hdac_i915.c
+index 8fef1b8..581d84a 100644
+--- a/sound/hda/hdac_i915.c
++++ b/sound/hda/hdac_i915.c
+@@ -170,6 +170,11 @@ static int hdac_component_master_match(struct device *dev, void *data)
+ 	return !strcmp(dev->driver->name, "i915");
+ }
+ 
++static int hdac_component_master_match_bpo(struct device *dev, void *data)
++{
++	return !strcmp(dev->driver->name, "i915_bpo");
++}
++
+ /**
+  * snd_hdac_i915_register_notifier - Register i915 audio component ops
+  * @aops: i915 audio component ops
+@@ -246,6 +251,49 @@ out_err:
+ }
+ EXPORT_SYMBOL_GPL(snd_hdac_i915_init);
+ 
++int snd_hdac_i915_init_bpo(struct hdac_bus *bus)
++{
++	struct component_match *match = NULL;
++	struct device *dev = bus->dev;
++	struct i915_audio_component *acomp;
++	int ret;
++
++	acomp = kzalloc(sizeof(*acomp), GFP_KERNEL);
++	if (!acomp)
++		return -ENOMEM;
++	bus->audio_component = acomp;
++	hdac_acomp = acomp;
++
++	component_match_add(dev, &match, hdac_component_master_match_bpo, bus);
++	ret = component_master_add_with_match(dev, &hdac_component_master_ops,
++					      match);
++	if (ret < 0)
++		goto out_err;
++
++	/*
++	 * Atm, we don't support deferring the component binding, so make sure
++	 * i915_bpo is loaded and that the binding successfully completes.
++	 */
++	request_module("i915_bpo");
++
++	if (!acomp->ops) {
++		ret = -ENODEV;
++		goto out_master_del;
++	}
++	dev_dbg(dev, "bound to i915_bpo component master\n");
++
++	return 0;
++out_master_del:
++	component_master_del(dev, &hdac_component_master_ops);
++out_err:
++	kfree(acomp);
++	bus->audio_component = NULL;
++	dev_err(dev, "failed to add i915_bpo component master (%d)\n", ret);
++
++	return ret;
++}
++EXPORT_SYMBOL_GPL(snd_hdac_i915_init_bpo);
++
+ /**
+  * snd_hdac_i915_exit - Finalize i915 audio component
+  * @bus: HDA core bus
+diff --git a/sound/pci/hda/hda_intel.c b/sound/pci/hda/hda_intel.c
+index 2c13298..ca73121 100644
+--- a/sound/pci/hda/hda_intel.c
++++ b/sound/pci/hda/hda_intel.c
+@@ -2061,7 +2061,12 @@ static int azx_probe_continue(struct azx *chip)
+ 		if (CONTROLLER_IN_GPU(pci))
+ 			hda->need_i915_power = 1;
+ 
+-		err = snd_hdac_i915_init(bus);
++		if (((chip->driver_caps & AZX_DCAPS_INTEL_SKYLAKE) == AZX_DCAPS_INTEL_SKYLAKE) || \
++			((chip->driver_caps & AZX_DCAPS_INTEL_BROXTON) == AZX_DCAPS_INTEL_BROXTON))
++			err = snd_hdac_i915_init_bpo(bus);
++		else
++			err = snd_hdac_i915_init(bus);
++
+ 		if (err < 0) {
+ 			/* if the controller is bound only with HDMI/DP
+ 			 * (for HSW and BDW), we need to abort the probe;
+-- 
+1.9.3
+

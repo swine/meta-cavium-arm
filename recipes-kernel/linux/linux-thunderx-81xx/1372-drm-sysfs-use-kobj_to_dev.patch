@@ -1,0 +1,35 @@
+From 1eea062ba0806e9618ef0caed5dd331c95d93936 Mon Sep 17 00:00:00 2001
+From: Geliang Tang <geliangtang@163.com>
+Date: Wed, 13 Jan 2016 22:48:41 +0800
+Subject: [PATCH 1372/1767] drm/sysfs: use kobj_to_dev()
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Use kobj_to_dev() instead of open-coding it.
+
+Link: http://patchwork.freedesktop.org/patch/msgid/3fea991541fbfc4ffece2c174adeb02cb9436c90.1452696179.git.geliangtang@163.com
+Signed-off-by: Geliang Tang <geliangtang@163.com>
+(cherry picked from commit d122cbf1a310d962cef45c2f161b8dc3ec1475a3)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/drm_sysfs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/drm_sysfs.c b/drivers/gpu/drm/drm_sysfs.c
+index 615b7e6..bebc0a5 100644
+--- a/drivers/gpu/drm/drm_sysfs.c
++++ b/drivers/gpu/drm/drm_sysfs.c
+@@ -252,7 +252,7 @@ static ssize_t edid_show(struct file *filp, struct kobject *kobj,
+ 			 struct bin_attribute *attr, char *buf, loff_t off,
+ 			 size_t count)
+ {
+-	struct device *connector_dev = container_of(kobj, struct device, kobj);
++	struct device *connector_dev = kobj_to_dev(kobj);
+ 	struct drm_connector *connector = to_drm_connector(connector_dev);
+ 	unsigned char *edid;
+ 	size_t size;
+-- 
+1.9.3
+

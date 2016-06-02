@@ -1,0 +1,34 @@
+From c83e19255c03d73ec4d4251c1135ca0eabed21e7 Mon Sep 17 00:00:00 2001
+From: Qiang Yu <Qiang.Yu@amd.com>
+Date: Wed, 2 Dec 2015 10:56:57 +0800
+Subject: [PATCH 1328/1767] drm/amdgpu: Prepare DKMS build for powerplay
+ module.
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Signed-off-by: Qiang Yu <Qiang.Yu@amd.com>
+Reviewed-by: Jammy Zhou <Jammy.Zhou@amd.com>
+(cherry picked from commit bd90dd89e53c383d1fea973721c8e7864946a254)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 4c856fe..20c9539 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -101,7 +101,7 @@ amdgpu-$(CONFIG_MMU_NOTIFIER) += amdgpu_mn.o
+ 
+ ifneq ($(CONFIG_DRM_AMD_POWERPLAY),)
+ 
+-include drivers/gpu/drm/amd/powerplay/Makefile
++include $(FULL_AMD_PATH)/powerplay/Makefile
+ 
+ amdgpu-y += $(AMD_POWERPLAY_FILES)
+ 
+-- 
+1.9.3
+

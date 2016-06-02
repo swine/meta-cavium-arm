@@ -1,0 +1,436 @@
+From 790a3168c62dce2df628f9a4775973a7abc252eb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Javier=20Gonz=C3=A1lez?= <jg@lightnvm.io>
+Date: Tue, 12 Jan 2016 07:49:33 +0100
+Subject: [PATCH 0381/1767] lightnvm: manage open and closed blocks separately
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+LightNVM targets need to know the state of the flash block when doing
+flash optimizations. An example is implementing a write buffer to
+respect the flash page size. Currently, block state is not accounted
+for; the media manager only differentiates among free, bad and in-use
+blocks.
+
+This patch adds the logic in the generic media manager to enable
+targets manage blocks into open and close separately, and it implements
+such management in rrpc. It also adds a set of flags to describe the
+state of the block (open, closed, free, bad).
+
+In order to avoid taking two locks (nvm_lun and rrpc_lun) consecutively,
+we introduce lockless get_/put_block primitives so that the open and
+close list locks and future common logic is handled within the nvm_lun
+lock.
+
+Signed-off-by: Javier González <javier@cnexlabs.com>
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit ff0e498bfa185fad5e86c4c7a2db4f9648d2344f)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c   | 14 +++++++
+ drivers/lightnvm/gennvm.c | 99 +++++++++++++++++++++++++++++------------------
+ drivers/lightnvm/rrpc.c   | 38 +++++++++++++++---
+ drivers/lightnvm/rrpc.h   | 12 +++++-
+ include/linux/lightnvm.h  | 25 ++++++++++--
+ 5 files changed, 142 insertions(+), 46 deletions(-)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index dc83e01..e5e3963 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -167,6 +167,20 @@ static struct nvm_dev *nvm_find_nvm_dev(const char *name)
+ 	return NULL;
+ }
+ 
++struct nvm_block *nvm_get_blk_unlocked(struct nvm_dev *dev, struct nvm_lun *lun,
++							unsigned long flags)
++{
++	return dev->mt->get_blk_unlocked(dev, lun, flags);
++}
++EXPORT_SYMBOL(nvm_get_blk_unlocked);
++
++/* Assumes that all valid pages have already been moved on release to bm */
++void nvm_put_blk_unlocked(struct nvm_dev *dev, struct nvm_block *blk)
++{
++	return dev->mt->put_blk_unlocked(dev, blk);
++}
++EXPORT_SYMBOL(nvm_put_blk_unlocked);
++
+ struct nvm_block *nvm_get_blk(struct nvm_dev *dev, struct nvm_lun *lun,
+ 							unsigned long flags)
+ {
+diff --git a/drivers/lightnvm/gennvm.c b/drivers/lightnvm/gennvm.c
+index 4c15846..7fb725b 100644
+--- a/drivers/lightnvm/gennvm.c
++++ b/drivers/lightnvm/gennvm.c
+@@ -60,7 +60,8 @@ static int gennvm_luns_init(struct nvm_dev *dev, struct gen_nvm *gn)
+ 		lun->vlun.lun_id = i % dev->luns_per_chnl;
+ 		lun->vlun.chnl_id = i / dev->luns_per_chnl;
+ 		lun->vlun.nr_free_blocks = dev->blks_per_lun;
+-		lun->vlun.nr_inuse_blocks = 0;
++		lun->vlun.nr_open_blocks = 0;
++		lun->vlun.nr_closed_blocks = 0;
+ 		lun->vlun.nr_bad_blocks = 0;
+ 	}
+ 	return 0;
+@@ -134,15 +135,15 @@ static int gennvm_block_map(u64 slba, u32 nlb, __le64 *entries, void *private)
+ 		pba = pba - (dev->sec_per_lun * lun_id);
+ 		blk = &lun->vlun.blocks[div_u64(pba, dev->sec_per_blk)];
+ 
+-		if (!blk->type) {
++		if (!blk->state) {
+ 			/* at this point, we don't know anything about the
+ 			 * block. It's up to the FTL on top to re-etablish the
+-			 * block state
++			 * block state. The block is assumed to be open.
+ 			 */
+ 			list_move_tail(&blk->list, &lun->used_list);
+-			blk->type = 1;
++			blk->state = NVM_BLK_ST_OPEN;
+ 			lun->vlun.nr_free_blocks--;
+-			lun->vlun.nr_inuse_blocks++;
++			lun->vlun.nr_open_blocks++;
+ 		}
+ 	}
+ 
+@@ -256,14 +257,14 @@ static void gennvm_unregister(struct nvm_dev *dev)
+ 	module_put(THIS_MODULE);
+ }
+ 
+-static struct nvm_block *gennvm_get_blk(struct nvm_dev *dev,
++static struct nvm_block *gennvm_get_blk_unlocked(struct nvm_dev *dev,
+ 				struct nvm_lun *vlun, unsigned long flags)
+ {
+ 	struct gen_lun *lun = container_of(vlun, struct gen_lun, vlun);
+ 	struct nvm_block *blk = NULL;
+ 	int is_gc = flags & NVM_IOTYPE_GC;
+ 
+-	spin_lock(&vlun->lock);
++	assert_spin_locked(&vlun->lock);
+ 
+ 	if (list_empty(&lun->free_list)) {
+ 		pr_err_ratelimited("gennvm: lun %u have no free pages available",
+@@ -276,44 +277,63 @@ static struct nvm_block *gennvm_get_blk(struct nvm_dev *dev,
+ 
+ 	blk = list_first_entry(&lun->free_list, struct nvm_block, list);
+ 	list_move_tail(&blk->list, &lun->used_list);
+-	blk->type = 1;
++	blk->state = NVM_BLK_ST_OPEN;
+ 
+ 	lun->vlun.nr_free_blocks--;
+-	lun->vlun.nr_inuse_blocks++;
++	lun->vlun.nr_open_blocks++;
+ 
+ out:
++	return blk;
++}
++
++static struct nvm_block *gennvm_get_blk(struct nvm_dev *dev,
++				struct nvm_lun *vlun, unsigned long flags)
++{
++	struct nvm_block *blk;
++
++	spin_lock(&vlun->lock);
++	blk = gennvm_get_blk_unlocked(dev, vlun, flags);
+ 	spin_unlock(&vlun->lock);
+ 	return blk;
+ }
+ 
+-static void gennvm_put_blk(struct nvm_dev *dev, struct nvm_block *blk)
++static void gennvm_put_blk_unlocked(struct nvm_dev *dev, struct nvm_block *blk)
+ {
+ 	struct nvm_lun *vlun = blk->lun;
+ 	struct gen_lun *lun = container_of(vlun, struct gen_lun, vlun);
+ 
+-	spin_lock(&vlun->lock);
++	assert_spin_locked(&vlun->lock);
+ 
+-	switch (blk->type) {
+-	case 1:
++	if (blk->state & NVM_BLK_ST_OPEN) {
+ 		list_move_tail(&blk->list, &lun->free_list);
++		lun->vlun.nr_open_blocks--;
+ 		lun->vlun.nr_free_blocks++;
+-		lun->vlun.nr_inuse_blocks--;
+-		blk->type = 0;
+-		break;
+-	case 2:
++		blk->state = NVM_BLK_ST_FREE;
++	} else if (blk->state & NVM_BLK_ST_CLOSED) {
++		list_move_tail(&blk->list, &lun->free_list);
++		lun->vlun.nr_closed_blocks--;
++		lun->vlun.nr_free_blocks++;
++		blk->state = NVM_BLK_ST_FREE;
++	} else if (blk->state & NVM_BLK_ST_BAD) {
+ 		list_move_tail(&blk->list, &lun->bb_list);
+ 		lun->vlun.nr_bad_blocks++;
+-		lun->vlun.nr_inuse_blocks--;
+-		break;
+-	default:
++		blk->state = NVM_BLK_ST_BAD;
++	} else {
+ 		WARN_ON_ONCE(1);
+ 		pr_err("gennvm: erroneous block type (%lu -> %u)\n",
+-							blk->id, blk->type);
++							blk->id, blk->state);
+ 		list_move_tail(&blk->list, &lun->bb_list);
+ 		lun->vlun.nr_bad_blocks++;
+-		lun->vlun.nr_inuse_blocks--;
++		blk->state = NVM_BLK_ST_BAD;
+ 	}
++}
+ 
++static void gennvm_put_blk(struct nvm_dev *dev, struct nvm_block *blk)
++{
++	struct nvm_lun *vlun = blk->lun;
++
++	spin_lock(&vlun->lock);
++	gennvm_put_blk_unlocked(dev, blk);
+ 	spin_unlock(&vlun->lock);
+ }
+ 
+@@ -339,7 +359,7 @@ static void gennvm_blk_set_type(struct nvm_dev *dev, struct ppa_addr *ppa,
+ 	blk = &lun->vlun.blocks[ppa->g.blk];
+ 
+ 	/* will be moved to bb list on put_blk from target */
+-	blk->type = type;
++	blk->state = type;
+ }
+ 
+ /* mark block bad. It is expected the target recover from the error. */
+@@ -358,9 +378,10 @@ static void gennvm_mark_blk_bad(struct nvm_dev *dev, struct nvm_rq *rqd)
+ 	/* look up blocks and mark them as bad */
+ 	if (rqd->nr_pages > 1)
+ 		for (i = 0; i < rqd->nr_pages; i++)
+-			gennvm_blk_set_type(dev, &rqd->ppa_list[i], 2);
++			gennvm_blk_set_type(dev, &rqd->ppa_list[i],
++						NVM_BLK_ST_BAD);
+ 	else
+-		gennvm_blk_set_type(dev, &rqd->ppa_addr, 2);
++		gennvm_blk_set_type(dev, &rqd->ppa_addr, NVM_BLK_ST_BAD);
+ }
+ 
+ static void gennvm_end_io(struct nvm_rq *rqd)
+@@ -416,10 +437,11 @@ static void gennvm_lun_info_print(struct nvm_dev *dev)
+ 	gennvm_for_each_lun(gn, lun, i) {
+ 		spin_lock(&lun->vlun.lock);
+ 
+-		pr_info("%s: lun%8u\t%u\t%u\t%u\n",
++		pr_info("%s: lun%8u\t%u\t%u\t%u\t%u\n",
+ 				dev->name, i,
+ 				lun->vlun.nr_free_blocks,
+-				lun->vlun.nr_inuse_blocks,
++				lun->vlun.nr_open_blocks,
++				lun->vlun.nr_closed_blocks,
+ 				lun->vlun.nr_bad_blocks);
+ 
+ 		spin_unlock(&lun->vlun.lock);
+@@ -427,20 +449,23 @@ static void gennvm_lun_info_print(struct nvm_dev *dev)
+ }
+ 
+ static struct nvmm_type gennvm = {
+-	.name		= "gennvm",
+-	.version	= {0, 1, 0},
++	.name			= "gennvm",
++	.version		= {0, 1, 0},
++
++	.register_mgr		= gennvm_register,
++	.unregister_mgr		= gennvm_unregister,
+ 
+-	.register_mgr	= gennvm_register,
+-	.unregister_mgr	= gennvm_unregister,
++	.get_blk_unlocked	= gennvm_get_blk_unlocked,
++	.put_blk_unlocked	= gennvm_put_blk_unlocked,
+ 
+-	.get_blk	= gennvm_get_blk,
+-	.put_blk	= gennvm_put_blk,
++	.get_blk		= gennvm_get_blk,
++	.put_blk		= gennvm_put_blk,
+ 
+-	.submit_io	= gennvm_submit_io,
+-	.erase_blk	= gennvm_erase_blk,
++	.submit_io		= gennvm_submit_io,
++	.erase_blk		= gennvm_erase_blk,
+ 
+-	.get_lun	= gennvm_get_lun,
+-	.lun_info_print = gennvm_lun_info_print,
++	.get_lun		= gennvm_get_lun,
++	.lun_info_print		= gennvm_lun_info_print,
+ };
+ 
+ static int __init gennvm_module_init(void)
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index 280350c..d8c7595 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -179,16 +179,23 @@ static void rrpc_set_lun_cur(struct rrpc_lun *rlun, struct rrpc_block *rblk)
+ static struct rrpc_block *rrpc_get_blk(struct rrpc *rrpc, struct rrpc_lun *rlun,
+ 							unsigned long flags)
+ {
++	struct nvm_lun *lun = rlun->parent;
+ 	struct nvm_block *blk;
+ 	struct rrpc_block *rblk;
+ 
+-	blk = nvm_get_blk(rrpc->dev, rlun->parent, flags);
+-	if (!blk)
++	spin_lock(&lun->lock);
++	blk = nvm_get_blk_unlocked(rrpc->dev, rlun->parent, flags);
++	if (!blk) {
++		pr_err("nvm: rrpc: cannot get new block from media manager\n");
++		spin_unlock(&lun->lock);
+ 		return NULL;
++	}
+ 
+ 	rblk = &rlun->blocks[blk->id];
+-	blk->priv = rblk;
++	list_add_tail(&rblk->list, &rlun->open_list);
++	spin_unlock(&lun->lock);
+ 
++	blk->priv = rblk;
+ 	bitmap_zero(rblk->invalid_pages, rrpc->dev->pgs_per_blk);
+ 	rblk->next_page = 0;
+ 	rblk->nr_invalid_pages = 0;
+@@ -199,7 +206,13 @@ static struct rrpc_block *rrpc_get_blk(struct rrpc *rrpc, struct rrpc_lun *rlun,
+ 
+ static void rrpc_put_blk(struct rrpc *rrpc, struct rrpc_block *rblk)
+ {
+-	nvm_put_blk(rrpc->dev, rblk->parent);
++	struct rrpc_lun *rlun = rblk->rlun;
++	struct nvm_lun *lun = rlun->parent;
++
++	spin_lock(&lun->lock);
++	nvm_put_blk_unlocked(rrpc->dev, rblk->parent);
++	list_del(&rblk->list);
++	spin_unlock(&lun->lock);
+ }
+ 
+ static void rrpc_put_blks(struct rrpc *rrpc)
+@@ -653,8 +666,20 @@ static void rrpc_end_io_write(struct rrpc *rrpc, struct rrpc_rq *rrqd,
+ 		lun = rblk->parent->lun;
+ 
+ 		cmnt_size = atomic_inc_return(&rblk->data_cmnt_size);
+-		if (unlikely(cmnt_size == rrpc->dev->pgs_per_blk))
++		if (unlikely(cmnt_size == rrpc->dev->pgs_per_blk)) {
++			struct nvm_block *blk = rblk->parent;
++			struct rrpc_lun *rlun = rblk->rlun;
++
++			spin_lock(&lun->lock);
++			lun->nr_open_blocks--;
++			lun->nr_closed_blocks++;
++			blk->state &= ~NVM_BLK_ST_OPEN;
++			blk->state |= NVM_BLK_ST_CLOSED;
++			list_move_tail(&rblk->list, &rlun->closed_list);
++			spin_unlock(&lun->lock);
++
+ 			rrpc_run_gc(rrpc, rblk);
++		}
+ 	}
+ }
+ 
+@@ -1134,6 +1159,9 @@ static int rrpc_luns_init(struct rrpc *rrpc, int lun_begin, int lun_end)
+ 		rlun->rrpc = rrpc;
+ 		rlun->parent = lun;
+ 		INIT_LIST_HEAD(&rlun->prio_list);
++		INIT_LIST_HEAD(&rlun->open_list);
++		INIT_LIST_HEAD(&rlun->closed_list);
++
+ 		INIT_WORK(&rlun->ws_gc, rrpc_lun_gc);
+ 		spin_lock_init(&rlun->lock);
+ 
+diff --git a/drivers/lightnvm/rrpc.h b/drivers/lightnvm/rrpc.h
+index 7c5fa4d..ef13ac7 100644
+--- a/drivers/lightnvm/rrpc.h
++++ b/drivers/lightnvm/rrpc.h
+@@ -56,6 +56,7 @@ struct rrpc_block {
+ 	struct nvm_block *parent;
+ 	struct rrpc_lun *rlun;
+ 	struct list_head prio;
++	struct list_head list;
+ 
+ #define MAX_INVALID_PAGES_STORAGE 8
+ 	/* Bitmap for invalid page intries */
+@@ -74,7 +75,16 @@ struct rrpc_lun {
+ 	struct nvm_lun *parent;
+ 	struct rrpc_block *cur, *gc_cur;
+ 	struct rrpc_block *blocks;	/* Reference to block allocation */
+-	struct list_head prio_list;		/* Blocks that may be GC'ed */
++
++	struct list_head prio_list;	/* Blocks that may be GC'ed */
++	struct list_head open_list;	/* In-use open blocks. These are blocks
++					 * that can be both written to and read
++					 * from
++					 */
++	struct list_head closed_list;	/* In-use closed blocks. These are
++					 * blocks that can _only_ be read from
++					 */
++
+ 	struct work_struct ws_gc;
+ 
+ 	spinlock_t lock;
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index 4a700a1..aa35907 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -229,12 +229,25 @@ struct nvm_lun {
+ 	int lun_id;
+ 	int chnl_id;
+ 
+-	unsigned int nr_inuse_blocks;	/* Number of used blocks */
++	/* It is up to the target to mark blocks as closed. If the target does
++	 * not do it, all blocks are marked as open, and nr_open_blocks
++	 * represents the number of blocks in use
++	 */
++	unsigned int nr_open_blocks;	/* Number of used, writable blocks */
++	unsigned int nr_closed_blocks;	/* Number of used, read-only blocks */
+ 	unsigned int nr_free_blocks;	/* Number of unused blocks */
+ 	unsigned int nr_bad_blocks;	/* Number of bad blocks */
+-	struct nvm_block *blocks;
+ 
+ 	spinlock_t lock;
++
++	struct nvm_block *blocks;
++};
++
++enum {
++	NVM_BLK_ST_FREE =	0x1,	/* Free block */
++	NVM_BLK_ST_OPEN =	0x2,	/* Open block - read-write */
++	NVM_BLK_ST_CLOSED =	0x4,	/* Closed block - read-only */
++	NVM_BLK_ST_BAD =	0x8,	/* Bad block */
+ };
+ 
+ struct nvm_block {
+@@ -243,7 +256,7 @@ struct nvm_block {
+ 	unsigned long id;
+ 
+ 	void *priv;
+-	int type;
++	int state;
+ };
+ 
+ struct nvm_dev {
+@@ -404,6 +417,8 @@ struct nvmm_type {
+ 	nvmm_unregister_fn *unregister_mgr;
+ 
+ 	/* Block administration callbacks */
++	nvmm_get_blk_fn *get_blk_unlocked;
++	nvmm_put_blk_fn *put_blk_unlocked;
+ 	nvmm_get_blk_fn *get_blk;
+ 	nvmm_put_blk_fn *put_blk;
+ 	nvmm_open_blk_fn *open_blk;
+@@ -424,6 +439,10 @@ struct nvmm_type {
+ extern int nvm_register_mgr(struct nvmm_type *);
+ extern void nvm_unregister_mgr(struct nvmm_type *);
+ 
++extern struct nvm_block *nvm_get_blk_unlocked(struct nvm_dev *,
++					struct nvm_lun *, unsigned long);
++extern void nvm_put_blk_unlocked(struct nvm_dev *, struct nvm_block *);
++
+ extern struct nvm_block *nvm_get_blk(struct nvm_dev *, struct nvm_lun *,
+ 								unsigned long);
+ extern void nvm_put_blk(struct nvm_dev *, struct nvm_block *);
+-- 
+1.9.3
+

@@ -1,0 +1,40 @@
+From 801f1f98ab50312ad153323a52a7b2fbd174fb98 Mon Sep 17 00:00:00 2001
+From: James Smart <james.smart@avagotech.com>
+Date: Wed, 16 Dec 2015 18:11:57 -0500
+Subject: [PATCH 0483/1767] lpfc: Fix crash in fcp command completion path.
+
+BugLink: http://bugs.launchpad.net/bugs/1541592
+
+Fix crash in fcp command completion path.
+
+Missed null check.
+
+Signed-off-by: Dick Kennedy <dick.kennedy@avagotech.com>
+Signed-off-by: James Smart <james.smart@avagotech.com>
+Reviewed-by: Hannes Reinicke <hare@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit c90261dcd86e4eb5c9c1627fde037e902db8aefa)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/lpfc/lpfc_scsi.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/scsi/lpfc/lpfc_scsi.c b/drivers/scsi/lpfc/lpfc_scsi.c
+index 4679ed4..ab446f8 100644
+--- a/drivers/scsi/lpfc/lpfc_scsi.c
++++ b/drivers/scsi/lpfc/lpfc_scsi.c
+@@ -3908,9 +3908,9 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
+ 	uint32_t logit = LOG_FCP;
+ 
+ 	/* Sanity check on return of outstanding command */
+-	if (!(lpfc_cmd->pCmd))
+-		return;
+ 	cmd = lpfc_cmd->pCmd;
++	if (!cmd)
++		return;
+ 	shost = cmd->device->host;
+ 
+ 	lpfc_cmd->result = (pIocbOut->iocb.un.ulpWord[4] & IOERR_PARAM_MASK);
+-- 
+1.9.3
+

@@ -1,0 +1,457 @@
+From ba47b69d54aceb9bc16d81cff08e407ddb590fd6 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Fri, 6 Feb 2015 15:02:57 -0600
+Subject: [PATCH 0575/1767] UBUNTU: SAUCE: quota: Convert ids relative to
+ s_user_ns
+
+When dealing with mounts from user namespaces quota user ids must
+be translated relative to s_user_ns, especially when they will be
+stored on disk. For purposes of the in-kernel hash table using
+init_user_ns is still okay and may help reduce hash collisions,
+so continue using init_user_ns there.
+
+These changes introduce the possibility that the conversion
+operations in struct qtree_fmt_operations could fail if an id
+cannot be legitimately converted. Change these operations to
+return int rather than void, and update the callers to handle
+failures.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/ocfs2/quota_global.c     |  6 +++--
+ fs/quota/dquot.c            |  2 +-
+ fs/quota/quota_tree.c       | 66 +++++++++++++++++++++++++++++----------------
+ fs/quota/quota_v1.c         | 13 +++++++--
+ fs/quota/quota_v2.c         | 43 +++++++++++++++++++----------
+ include/linux/dqblk_qtree.h |  4 +--
+ 6 files changed, 90 insertions(+), 44 deletions(-)
+
+diff --git a/fs/ocfs2/quota_global.c b/fs/ocfs2/quota_global.c
+index c93d6722..6d62a9b 100644
+--- a/fs/ocfs2/quota_global.c
++++ b/fs/ocfs2/quota_global.c
+@@ -66,7 +66,7 @@
+ 
+ static void qsync_work_fn(struct work_struct *work);
+ 
+-static void ocfs2_global_disk2memdqb(struct dquot *dquot, void *dp)
++static int ocfs2_global_disk2memdqb(struct dquot *dquot, void *dp)
+ {
+ 	struct ocfs2_global_disk_dqblk *d = dp;
+ 	struct mem_dqblk *m = &dquot->dq_dqb;
+@@ -89,9 +89,10 @@ static void ocfs2_global_disk2memdqb(struct dquot *dquot, void *dp)
+ 	if (!test_bit(DQ_LASTSET_B + QIF_ITIME_B, &dquot->dq_flags))
+ 		m->dqb_itime = le64_to_cpu(d->dqb_itime);
+ 	OCFS2_DQUOT(dquot)->dq_use_count = le32_to_cpu(d->dqb_use_count);
++	return 0;
+ }
+ 
+-static void ocfs2_global_mem2diskdqb(void *dp, struct dquot *dquot)
++static int ocfs2_global_mem2diskdqb(void *dp, struct dquot *dquot)
+ {
+ 	struct ocfs2_global_disk_dqblk *d = dp;
+ 	struct mem_dqblk *m = &dquot->dq_dqb;
+@@ -107,6 +108,7 @@ static void ocfs2_global_mem2diskdqb(void *dp, struct dquot *dquot)
+ 	d->dqb_btime = cpu_to_le64(m->dqb_btime);
+ 	d->dqb_itime = cpu_to_le64(m->dqb_itime);
+ 	d->dqb_pad1 = d->dqb_pad2 = 0;
++	return 0;
+ }
+ 
+ static int ocfs2_global_is_id(void *dp, struct dquot *dquot)
+diff --git a/fs/quota/dquot.c b/fs/quota/dquot.c
+index ef0d64b..a346bda 100644
+--- a/fs/quota/dquot.c
++++ b/fs/quota/dquot.c
+@@ -741,7 +741,7 @@ void dqput(struct dquot *dquot)
+ 	if (!atomic_read(&dquot->dq_count)) {
+ 		quota_error(dquot->dq_sb, "trying to free free dquot of %s %d",
+ 			    quotatypes[dquot->dq_id.type],
+-			    from_kqid(&init_user_ns, dquot->dq_id));
++			    from_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id));
+ 		BUG();
+ 	}
+ #endif
+diff --git a/fs/quota/quota_tree.c b/fs/quota/quota_tree.c
+index 58efb83..c1bc153 100644
+--- a/fs/quota/quota_tree.c
++++ b/fs/quota/quota_tree.c
+@@ -25,8 +25,10 @@ MODULE_LICENSE("GPL");
+ static int get_index(struct qtree_mem_dqinfo *info, struct kqid qid, int depth)
+ {
+ 	unsigned int epb = info->dqi_usable_bs >> 2;
+-	qid_t id = from_kqid(&init_user_ns, qid);
++	qid_t id = from_kqid(info->dqi_sb->s_user_ns, qid);
+ 
++	if (id == (qid_t)-1)
++		return -EOVERFLOW;
+ 	depth = info->dqi_qtree_depth - depth - 1;
+ 	while (depth--)
+ 		id /= epb;
+@@ -292,7 +294,7 @@ static int do_insert_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 			  uint *treeblk, int depth)
+ {
+ 	char *buf = getdqbuf(info->dqi_usable_bs);
+-	int ret = 0, newson = 0, newact = 0;
++	int ret = 0, newson = 0, newact = 0, index;
+ 	__le32 *ref;
+ 	uint newblk;
+ 
+@@ -314,7 +316,12 @@ static int do_insert_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 		}
+ 	}
+ 	ref = (__le32 *)buf;
+-	newblk = le32_to_cpu(ref[get_index(info, dquot->dq_id, depth)]);
++	index = get_index(info, dquot->dq_id, depth);
++	if (index < 0) {
++		ret = index;
++		goto out_buf;
++	}
++	newblk = le32_to_cpu(ref[index]);
+ 	if (!newblk)
+ 		newson = 1;
+ 	if (depth == info->dqi_qtree_depth - 1) {
+@@ -322,8 +329,7 @@ static int do_insert_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 		if (newblk) {
+ 			quota_error(dquot->dq_sb, "Inserting already present "
+ 				    "quota entry (block %u)",
+-				    le32_to_cpu(ref[get_index(info,
+-						dquot->dq_id, depth)]));
++				    le32_to_cpu(ref[index]));
+ 			ret = -EIO;
+ 			goto out_buf;
+ 		}
+@@ -333,8 +339,7 @@ static int do_insert_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 		ret = do_insert_tree(info, dquot, &newblk, depth+1);
+ 	}
+ 	if (newson && ret >= 0) {
+-		ref[get_index(info, dquot->dq_id, depth)] =
+-							cpu_to_le32(newblk);
++		ref[index] = cpu_to_le32(newblk);
+ 		ret = write_blk(info, *treeblk, buf);
+ 	} else if (newact && ret < 0) {
+ 		put_free_dqblk(info, buf, *treeblk);
+@@ -384,8 +389,10 @@ int qtree_write_dquot(struct qtree_mem_dqinfo *info, struct dquot *dquot)
+ 		}
+ 	}
+ 	spin_lock(&dq_data_lock);
+-	info->dqi_ops->mem2disk_dqblk(ddquot, dquot);
++	ret = info->dqi_ops->mem2disk_dqblk(ddquot, dquot);
+ 	spin_unlock(&dq_data_lock);
++	if (ret)
++		goto out_free;
+ 	ret = sb->s_op->quota_write(sb, type, ddquot, info->dqi_entry_size,
+ 				    dquot->dq_off);
+ 	if (ret != info->dqi_entry_size) {
+@@ -396,8 +403,9 @@ int qtree_write_dquot(struct qtree_mem_dqinfo *info, struct dquot *dquot)
+ 		ret = 0;
+ 	}
+ 	dqstats_inc(DQST_WRITES);
+-	kfree(ddquot);
+ 
++out_free:
++	kfree(ddquot);
+ 	return ret;
+ }
+ EXPORT_SYMBOL(qtree_write_dquot);
+@@ -468,7 +476,7 @@ static int remove_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 		       uint *blk, int depth)
+ {
+ 	char *buf = getdqbuf(info->dqi_usable_bs);
+-	int ret = 0;
++	int ret = 0, index;
+ 	uint newblk;
+ 	__le32 *ref = (__le32 *)buf;
+ 
+@@ -480,7 +488,12 @@ static int remove_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 			    *blk);
+ 		goto out_buf;
+ 	}
+-	newblk = le32_to_cpu(ref[get_index(info, dquot->dq_id, depth)]);
++	index = get_index(info, dquot->dq_id, depth);
++	if (index < 0) {
++		ret = index;
++		goto out_buf;
++	}
++	newblk = le32_to_cpu(ref[index]);
+ 	if (depth == info->dqi_qtree_depth - 1) {
+ 		ret = free_dqentry(info, dquot, newblk);
+ 		newblk = 0;
+@@ -489,7 +502,7 @@ static int remove_tree(struct qtree_mem_dqinfo *info, struct dquot *dquot,
+ 	}
+ 	if (ret >= 0 && !newblk) {
+ 		int i;
+-		ref[get_index(info, dquot->dq_id, depth)] = cpu_to_le32(0);
++		ref[index] = cpu_to_le32(0);
+ 		/* Block got empty? */
+ 		for (i = 0; i < (info->dqi_usable_bs >> 2) && !ref[i]; i++)
+ 			;
+@@ -548,7 +561,7 @@ static loff_t find_block_dqentry(struct qtree_mem_dqinfo *info,
+ 	if (i == qtree_dqstr_in_blk(info)) {
+ 		quota_error(dquot->dq_sb,
+ 			    "Quota for id %u referenced but not present",
+-			    from_kqid(&init_user_ns, dquot->dq_id));
++			    from_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id));
+ 		ret = -EIO;
+ 		goto out_buf;
+ 	} else {
+@@ -565,7 +578,7 @@ static loff_t find_tree_dqentry(struct qtree_mem_dqinfo *info,
+ 				struct dquot *dquot, uint blk, int depth)
+ {
+ 	char *buf = getdqbuf(info->dqi_usable_bs);
+-	loff_t ret = 0;
++	loff_t ret = 0, index;
+ 	__le32 *ref = (__le32 *)buf;
+ 
+ 	if (!buf)
+@@ -577,7 +590,12 @@ static loff_t find_tree_dqentry(struct qtree_mem_dqinfo *info,
+ 		goto out_buf;
+ 	}
+ 	ret = 0;
+-	blk = le32_to_cpu(ref[get_index(info, dquot->dq_id, depth)]);
++	index = get_index(info, dquot->dq_id, depth);
++	if (index < 0) {
++		ret = index;
++		goto out_buf;
++	}
++	blk = le32_to_cpu(ref[index]);
+ 	if (!blk)	/* No reference? */
+ 		goto out_buf;
+ 	if (depth < info->dqi_qtree_depth - 1)
+@@ -602,7 +620,7 @@ int qtree_read_dquot(struct qtree_mem_dqinfo *info, struct dquot *dquot)
+ 	struct super_block *sb = dquot->dq_sb;
+ 	loff_t offset;
+ 	char *ddquot;
+-	int ret = 0;
++	int ret = 0, err;
+ 
+ #ifdef __QUOTA_QT_PARANOIA
+ 	/* Invalidated quota? */
+@@ -618,7 +636,7 @@ int qtree_read_dquot(struct qtree_mem_dqinfo *info, struct dquot *dquot)
+ 			if (offset < 0)
+ 				quota_error(sb,"Can't read quota structure "
+ 					    "for id %u",
+-					    from_kqid(&init_user_ns,
++					    from_kqid(sb->s_user_ns,
+ 						      dquot->dq_id));
+ 			dquot->dq_off = 0;
+ 			set_bit(DQ_FAKE_B, &dquot->dq_flags);
+@@ -637,18 +655,20 @@ int qtree_read_dquot(struct qtree_mem_dqinfo *info, struct dquot *dquot)
+ 		if (ret >= 0)
+ 			ret = -EIO;
+ 		quota_error(sb, "Error while reading quota structure for id %u",
+-			    from_kqid(&init_user_ns, dquot->dq_id));
++			    from_kqid(sb->s_user_ns, dquot->dq_id));
+ 		set_bit(DQ_FAKE_B, &dquot->dq_flags);
+ 		memset(&dquot->dq_dqb, 0, sizeof(struct mem_dqblk));
+ 		kfree(ddquot);
+ 		goto out;
+ 	}
+ 	spin_lock(&dq_data_lock);
+-	info->dqi_ops->disk2mem_dqblk(dquot, ddquot);
+-	if (!dquot->dq_dqb.dqb_bhardlimit &&
+-	    !dquot->dq_dqb.dqb_bsoftlimit &&
+-	    !dquot->dq_dqb.dqb_ihardlimit &&
+-	    !dquot->dq_dqb.dqb_isoftlimit)
++	err = info->dqi_ops->disk2mem_dqblk(dquot, ddquot);
++	if (err)
++		ret = err;
++	else if (!dquot->dq_dqb.dqb_bhardlimit &&
++		 !dquot->dq_dqb.dqb_bsoftlimit &&
++		 !dquot->dq_dqb.dqb_ihardlimit &&
++		 !dquot->dq_dqb.dqb_isoftlimit)
+ 		set_bit(DQ_FAKE_B, &dquot->dq_flags);
+ 	spin_unlock(&dq_data_lock);
+ 	kfree(ddquot);
+diff --git a/fs/quota/quota_v1.c b/fs/quota/quota_v1.c
+index 8fe79be..bc89306 100644
+--- a/fs/quota/quota_v1.c
++++ b/fs/quota/quota_v1.c
+@@ -56,15 +56,20 @@ static int v1_read_dqblk(struct dquot *dquot)
+ {
+ 	int type = dquot->dq_id.type;
+ 	struct v1_disk_dqblk dqblk;
++	qid_t qid;
+ 
+ 	if (!sb_dqopt(dquot->dq_sb)->files[type])
+ 		return -EINVAL;
+ 
++	qid = from_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id);
++	if (qid == (qid_t)-1)
++		return -EOVERFLOW;
++
+ 	/* Set structure to 0s in case read fails/is after end of file */
+ 	memset(&dqblk, 0, sizeof(struct v1_disk_dqblk));
+ 	dquot->dq_sb->s_op->quota_read(dquot->dq_sb, type, (char *)&dqblk,
+ 			sizeof(struct v1_disk_dqblk),
+-			v1_dqoff(from_kqid(&init_user_ns, dquot->dq_id)));
++			v1_dqoff(qid));
+ 
+ 	v1_disk2mem_dqblk(&dquot->dq_dqb, &dqblk);
+ 	if (dquot->dq_dqb.dqb_bhardlimit == 0 &&
+@@ -82,6 +87,10 @@ static int v1_commit_dqblk(struct dquot *dquot)
+ 	short type = dquot->dq_id.type;
+ 	ssize_t ret;
+ 	struct v1_disk_dqblk dqblk;
++	qid_t qid = from_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id);
++
++	if (qid == (qid_t)-1)
++		return -EOVERFLOW;
+ 
+ 	v1_mem2disk_dqblk(&dqblk, &dquot->dq_dqb);
+ 	if (((type == USRQUOTA) && uid_eq(dquot->dq_id.uid, GLOBAL_ROOT_UID)) ||
+@@ -95,7 +104,7 @@ static int v1_commit_dqblk(struct dquot *dquot)
+ 	if (sb_dqopt(dquot->dq_sb)->files[type])
+ 		ret = dquot->dq_sb->s_op->quota_write(dquot->dq_sb, type,
+ 			(char *)&dqblk, sizeof(struct v1_disk_dqblk),
+-			v1_dqoff(from_kqid(&init_user_ns, dquot->dq_id)));
++			v1_dqoff(qid));
+ 	if (ret != sizeof(struct v1_disk_dqblk)) {
+ 		quota_error(dquot->dq_sb, "dquota write failed");
+ 		if (ret >= 0)
+diff --git a/fs/quota/quota_v2.c b/fs/quota/quota_v2.c
+index 2aa012a..7f68e2c 100644
+--- a/fs/quota/quota_v2.c
++++ b/fs/quota/quota_v2.c
+@@ -23,11 +23,11 @@ MODULE_LICENSE("GPL");
+ 
+ #define __QUOTA_V2_PARANOIA
+ 
+-static void v2r0_mem2diskdqb(void *dp, struct dquot *dquot);
+-static void v2r0_disk2memdqb(struct dquot *dquot, void *dp);
++static int v2r0_mem2diskdqb(void *dp, struct dquot *dquot);
++static int v2r0_disk2memdqb(struct dquot *dquot, void *dp);
+ static int v2r0_is_id(void *dp, struct dquot *dquot);
+-static void v2r1_mem2diskdqb(void *dp, struct dquot *dquot);
+-static void v2r1_disk2memdqb(struct dquot *dquot, void *dp);
++static int v2r1_mem2diskdqb(void *dp, struct dquot *dquot);
++static int v2r1_disk2memdqb(struct dquot *dquot, void *dp);
+ static int v2r1_is_id(void *dp, struct dquot *dquot);
+ 
+ static struct qtree_fmt_operations v2r0_qtree_ops = {
+@@ -177,7 +177,7 @@ static int v2_write_file_info(struct super_block *sb, int type)
+ 	return 0;
+ }
+ 
+-static void v2r0_disk2memdqb(struct dquot *dquot, void *dp)
++static int v2r0_disk2memdqb(struct dquot *dquot, void *dp)
+ {
+ 	struct v2r0_disk_dqblk *d = dp, empty;
+ 	struct mem_dqblk *m = &dquot->dq_dqb;
+@@ -195,14 +195,19 @@ static void v2r0_disk2memdqb(struct dquot *dquot, void *dp)
+ 	empty.dqb_itime = cpu_to_le64(1);
+ 	if (!memcmp(&empty, dp, sizeof(struct v2r0_disk_dqblk)))
+ 		m->dqb_itime = 0;
++	return 0;
+ }
+ 
+-static void v2r0_mem2diskdqb(void *dp, struct dquot *dquot)
++static int v2r0_mem2diskdqb(void *dp, struct dquot *dquot)
+ {
+ 	struct v2r0_disk_dqblk *d = dp;
+ 	struct mem_dqblk *m = &dquot->dq_dqb;
+ 	struct qtree_mem_dqinfo *info =
+ 			sb_dqinfo(dquot->dq_sb, dquot->dq_id.type)->dqi_priv;
++	qid_t qid = from_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id);
++
++	if (qid == (qid_t)-1)
++		return -EOVERFLOW;
+ 
+ 	d->dqb_ihardlimit = cpu_to_le32(m->dqb_ihardlimit);
+ 	d->dqb_isoftlimit = cpu_to_le32(m->dqb_isoftlimit);
+@@ -212,9 +217,10 @@ static void v2r0_mem2diskdqb(void *dp, struct dquot *dquot)
+ 	d->dqb_bsoftlimit = cpu_to_le32(v2_stoqb(m->dqb_bsoftlimit));
+ 	d->dqb_curspace = cpu_to_le64(m->dqb_curspace);
+ 	d->dqb_btime = cpu_to_le64(m->dqb_btime);
+-	d->dqb_id = cpu_to_le32(from_kqid(&init_user_ns, dquot->dq_id));
++	d->dqb_id = cpu_to_le32(qid);
+ 	if (qtree_entry_unused(info, dp))
+ 		d->dqb_itime = cpu_to_le64(1);
++	return 0;
+ }
+ 
+ static int v2r0_is_id(void *dp, struct dquot *dquot)
+@@ -222,15 +228,18 @@ static int v2r0_is_id(void *dp, struct dquot *dquot)
+ 	struct v2r0_disk_dqblk *d = dp;
+ 	struct qtree_mem_dqinfo *info =
+ 			sb_dqinfo(dquot->dq_sb, dquot->dq_id.type)->dqi_priv;
++	struct kqid qid;
+ 
+ 	if (qtree_entry_unused(info, dp))
+ 		return 0;
+-	return qid_eq(make_kqid(&init_user_ns, dquot->dq_id.type,
+-				le32_to_cpu(d->dqb_id)),
+-		      dquot->dq_id);
++	qid = make_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id.type,
++			le32_to_cpu(d->dqb_id));
++	if (!qid_valid(qid))
++		return 0;
++	return qid_eq(qid, dquot->dq_id);
+ }
+ 
+-static void v2r1_disk2memdqb(struct dquot *dquot, void *dp)
++static int v2r1_disk2memdqb(struct dquot *dquot, void *dp)
+ {
+ 	struct v2r1_disk_dqblk *d = dp, empty;
+ 	struct mem_dqblk *m = &dquot->dq_dqb;
+@@ -248,14 +257,19 @@ static void v2r1_disk2memdqb(struct dquot *dquot, void *dp)
+ 	empty.dqb_itime = cpu_to_le64(1);
+ 	if (!memcmp(&empty, dp, sizeof(struct v2r1_disk_dqblk)))
+ 		m->dqb_itime = 0;
++	return 0;
+ }
+ 
+-static void v2r1_mem2diskdqb(void *dp, struct dquot *dquot)
++static int v2r1_mem2diskdqb(void *dp, struct dquot *dquot)
+ {
+ 	struct v2r1_disk_dqblk *d = dp;
+ 	struct mem_dqblk *m = &dquot->dq_dqb;
+ 	struct qtree_mem_dqinfo *info =
+ 			sb_dqinfo(dquot->dq_sb, dquot->dq_id.type)->dqi_priv;
++	qid_t qid = from_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id);
++
++	if (qid == (qid_t)-1)
++		return -EOVERFLOW;
+ 
+ 	d->dqb_ihardlimit = cpu_to_le64(m->dqb_ihardlimit);
+ 	d->dqb_isoftlimit = cpu_to_le64(m->dqb_isoftlimit);
+@@ -265,9 +279,10 @@ static void v2r1_mem2diskdqb(void *dp, struct dquot *dquot)
+ 	d->dqb_bsoftlimit = cpu_to_le64(v2_stoqb(m->dqb_bsoftlimit));
+ 	d->dqb_curspace = cpu_to_le64(m->dqb_curspace);
+ 	d->dqb_btime = cpu_to_le64(m->dqb_btime);
+-	d->dqb_id = cpu_to_le32(from_kqid(&init_user_ns, dquot->dq_id));
++	d->dqb_id = cpu_to_le32(qid);
+ 	if (qtree_entry_unused(info, dp))
+ 		d->dqb_itime = cpu_to_le64(1);
++	return 0;
+ }
+ 
+ static int v2r1_is_id(void *dp, struct dquot *dquot)
+@@ -278,7 +293,7 @@ static int v2r1_is_id(void *dp, struct dquot *dquot)
+ 
+ 	if (qtree_entry_unused(info, dp))
+ 		return 0;
+-	return qid_eq(make_kqid(&init_user_ns, dquot->dq_id.type,
++	return qid_eq(make_kqid(dquot->dq_sb->s_user_ns, dquot->dq_id.type,
+ 				le32_to_cpu(d->dqb_id)),
+ 		      dquot->dq_id);
+ }
+diff --git a/include/linux/dqblk_qtree.h b/include/linux/dqblk_qtree.h
+index 82a1652..b4fb863 100644
+--- a/include/linux/dqblk_qtree.h
++++ b/include/linux/dqblk_qtree.h
+@@ -18,8 +18,8 @@ struct dquot;
+ 
+ /* Operations */
+ struct qtree_fmt_operations {
+-	void (*mem2disk_dqblk)(void *disk, struct dquot *dquot);	/* Convert given entry from in memory format to disk one */
+-	void (*disk2mem_dqblk)(struct dquot *dquot, void *disk);	/* Convert given entry from disk format to in memory one */
++	int (*mem2disk_dqblk)(void *disk, struct dquot *dquot);	/* Convert given entry from in memory format to disk one */
++	int (*disk2mem_dqblk)(struct dquot *dquot, void *disk);	/* Convert given entry from disk format to in memory one */
+ 	int (*is_id)(void *disk, struct dquot *dquot);	/* Is this structure for given id? */
+ };
+ 
+-- 
+1.9.3
+

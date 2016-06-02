@@ -1,0 +1,59 @@
+From f70ce027b47c5a8404b75be59d05b9b9c6480e7e Mon Sep 17 00:00:00 2001
+From: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+Date: Mon, 30 Nov 2015 17:11:43 +0200
+Subject: [PATCH 0341/1767] mfd: intel-lpss: Pass HSUART configuration via
+ properties
+
+BugLink: http://bugs.launchpad.net/bugs/1533035
+
+The HS-UART host controller driver needs to know certain properties like
+width of the register set if it cannot get that information from ACPI or
+DT. In order to support non-ACPI systems we pass this information to the
+driver via device properties.
+
+Signed-off-by: Mika Westerberg <mika.westerberg@linux.intel.com>
+Signed-off-by: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+(cherry picked from commit ec14c5395dfbc1d40a49c9f19d2bfde6739d89d5)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/mfd/intel-lpss-pci.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/drivers/mfd/intel-lpss-pci.c b/drivers/mfd/intel-lpss-pci.c
+index a677480..a7136c7 100644
+--- a/drivers/mfd/intel-lpss-pci.c
++++ b/drivers/mfd/intel-lpss-pci.c
+@@ -80,9 +80,21 @@ static const struct intel_lpss_platform_info spt_i2c_info = {
+ 	.pset = &spt_i2c_pset,
+ };
+ 
++static struct property_entry uart_properties[] = {
++	PROPERTY_ENTRY_U32("reg-io-width", 4),
++	PROPERTY_ENTRY_U32("reg-shift", 2),
++	PROPERTY_ENTRY_BOOL("snps,uart-16550-compatible"),
++	{ },
++};
++
++static struct property_set uart_pset = {
++	.properties = uart_properties,
++};
++
+ static const struct intel_lpss_platform_info spt_uart_info = {
+ 	.clk_rate = 120000000,
+ 	.clk_con_id = "baudclk",
++	.pset = &uart_pset,
+ };
+ 
+ static const struct intel_lpss_platform_info bxt_info = {
+@@ -92,6 +104,7 @@ static const struct intel_lpss_platform_info bxt_info = {
+ static const struct intel_lpss_platform_info bxt_uart_info = {
+ 	.clk_rate = 100000000,
+ 	.clk_con_id = "baudclk",
++	.pset = &uart_pset,
+ };
+ 
+ static const struct intel_lpss_platform_info bxt_i2c_info = {
+-- 
+1.9.3
+

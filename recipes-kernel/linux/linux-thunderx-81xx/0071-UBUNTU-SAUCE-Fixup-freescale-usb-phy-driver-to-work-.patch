@@ -1,0 +1,52 @@
+From a874782f3ad018c04d7ff810e3d34ceac140384a Mon Sep 17 00:00:00 2001
+From: Ben Collins <ben.c@servergy.com>
+Date: Tue, 17 Sep 2013 01:52:28 +0000
+Subject: [PATCH 0071/1767] UBUNTU: SAUCE: Fixup freescale usb phy driver to
+ work on ppc64
+
+Signed-off-by: Ben Collins <ben.c@servergy.com>
+---
+ drivers/usb/phy/phy-fsl-usb.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/usb/phy/phy-fsl-usb.c b/drivers/usb/phy/phy-fsl-usb.c
+index 94eb292..c52e3f2 100644
+--- a/drivers/usb/phy/phy-fsl-usb.c
++++ b/drivers/usb/phy/phy-fsl-usb.c
+@@ -75,7 +75,7 @@ static struct fsl_otg_config fsl_otg_initdata = {
+ 	.otg_port = 1,
+ };
+ 
+-#ifdef CONFIG_PPC32
++#ifdef CONFIG_PPC
+ static u32 _fsl_readl_be(const unsigned __iomem *p)
+ {
+ 	return in_be32(p);
+@@ -105,7 +105,7 @@ static void (*_fsl_writel)(u32 v, unsigned __iomem *p);
+ #else
+ #define fsl_readl(addr)		readl(addr)
+ #define fsl_writel(val, addr)	writel(val, addr)
+-#endif /* CONFIG_PPC32 */
++#endif /* CONFIG_PPC */
+ 
+ int write_ulpi(u8 addr, u8 data)
+ {
+@@ -879,6 +879,7 @@ int usb_otg_start(struct platform_device *pdev)
+ 	if (pdata->init && pdata->init(pdev) != 0)
+ 		return -EINVAL;
+ 
++#ifdef CONFIG_PPC
+ 	if (pdata->big_endian_mmio) {
+ 		_fsl_readl = _fsl_readl_be;
+ 		_fsl_writel = _fsl_writel_be;
+@@ -886,6 +887,7 @@ int usb_otg_start(struct platform_device *pdev)
+ 		_fsl_readl = _fsl_readl_le;
+ 		_fsl_writel = _fsl_writel_le;
+ 	}
++#endif
+ 
+ 	/* request irq */
+ 	p_otg->irq = platform_get_irq(pdev, 0);
+-- 
+1.9.3
+

@@ -1,0 +1,48 @@
+From 8e68f378f8837702460307a06ce8e0a76219f471 Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Tue, 2 Feb 2016 10:59:53 -0500
+Subject: [PATCH 1056/1767] drm/amdgpu: move gmc7 support out of CIK dependency
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit e42d85261680edfc350a6c2a86b7fbb44a85014b upstream.
+
+It's used by iceland which is VI.
+
+Reviewed-by: Ken Wang <Qingqing.Wang@amd.com>
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 04c2707..ca06601 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -22,7 +22,7 @@ amdgpu-y += amdgpu_device.o amdgpu_kms.o \
+ 	amdgpu_ucode.o amdgpu_bo_list.o amdgpu_ctx.o amdgpu_sync.o
+ 
+ # add asic specific block
+-amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o gmc_v7_0.o cik_ih.o kv_smc.o kv_dpm.o \
++amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o cik_ih.o kv_smc.o kv_dpm.o \
+ 	ci_smc.o ci_dpm.o dce_v8_0.o gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o \
+ 	amdgpu_amdkfd_gfx_v7.o
+ 
+@@ -31,6 +31,7 @@ amdgpu-y += \
+ 
+ # add GMC block
+ amdgpu-y += \
++	gmc_v7_0.o \
+ 	gmc_v8_0.o
+ 
+ # add IH block
+-- 
+1.9.3
+

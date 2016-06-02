@@ -1,0 +1,41 @@
+From 524cdf976c25c9eb143afd7cf966cf829a543f17 Mon Sep 17 00:00:00 2001
+From: Timothy Pearson <tpearson@raptorengineeringinc.com>
+Date: Fri, 26 Feb 2016 15:29:32 -0600
+Subject: [PATCH 1461/1767] drm/ast: Fix incorrect register check for DRAM
+ width
+
+BugLink: http://bugs.launchpad.net/bugs/1555640
+
+commit 2d02b8bdba322b527c5f5168ce1ca10c2d982a78 upstream.
+
+During DRAM initialization on certain ASpeed devices, an incorrect
+bit (bit 10) was checked in the "SDRAM Bus Width Status" register
+to determine DRAM width.
+
+Query bit 6 instead in accordance with the Aspeed AST2050 datasheet v1.05.
+
+Signed-off-by: Timothy Pearson <tpearson@raptorengineeringinc.com>
+Signed-off-by: Dave Airlie <airlied@redhat.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/ast/ast_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/ast/ast_main.c b/drivers/gpu/drm/ast/ast_main.c
+index 541a610..e0b4586 100644
+--- a/drivers/gpu/drm/ast/ast_main.c
++++ b/drivers/gpu/drm/ast/ast_main.c
+@@ -227,7 +227,7 @@ static int ast_get_dram_info(struct drm_device *dev)
+ 	} while (ast_read32(ast, 0x10000) != 0x01);
+ 	data = ast_read32(ast, 0x10004);
+ 
+-	if (data & 0x400)
++	if (data & 0x40)
+ 		ast->dram_bus_width = 16;
+ 	else
+ 		ast->dram_bus_width = 32;
+-- 
+1.9.3
+

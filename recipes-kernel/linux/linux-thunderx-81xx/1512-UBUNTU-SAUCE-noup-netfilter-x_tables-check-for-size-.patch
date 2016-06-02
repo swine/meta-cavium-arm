@@ -1,0 +1,39 @@
+From e53d55d531c5d13281b81ec6890c8d18d2198811 Mon Sep 17 00:00:00 2001
+From: Florian Westphal <fw@strlen.de>
+Date: Thu, 10 Mar 2016 08:34:10 -0700
+Subject: [PATCH 1512/1767] UBUNTU: SAUCE: (noup) netfilter: x_tables: check
+ for size overflow
+
+BugLink: http://bugs.launchpad.net/bugs/1555353
+
+http://marc.info/?l=netfilter-devel&m=145757136822750&w=2
+
+Ben Hawkes says:
+ integer overflow in xt_alloc_table_info, which on 32-bit systems can
+ lead to small structure allocation and a copy_from_user based heap
+ corruption.
+
+Reported-by: Ben Hawkes <hawkes@google.com>
+Signed-off-by: Florian Westphal <fw@strlen.de>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/netfilter/x_tables.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/net/netfilter/x_tables.c b/net/netfilter/x_tables.c
+index d4aaad7..865cf73 100644
+--- a/net/netfilter/x_tables.c
++++ b/net/netfilter/x_tables.c
+@@ -658,6 +658,9 @@ struct xt_table_info *xt_alloc_table_info(unsigned int size)
+ 	struct xt_table_info *info = NULL;
+ 	size_t sz = sizeof(*info) + size;
+ 
++	if (sz < size || sz < sizeof(*info))
++		return NULL;
++
+ 	/* Pedantry: prevent them from hitting BUG() in vmalloc.c --RR */
+ 	if ((SMP_ALIGN(size) >> PAGE_SHIFT) + 2 > totalram_pages)
+ 		return NULL;
+-- 
+1.9.3
+

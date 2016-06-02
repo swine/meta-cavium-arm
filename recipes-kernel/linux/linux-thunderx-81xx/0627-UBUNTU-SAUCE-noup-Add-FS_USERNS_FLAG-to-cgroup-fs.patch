@@ -1,0 +1,40 @@
+From 540572445f4a0791cd1e1ebdc5bd93e3ee20f7f1 Mon Sep 17 00:00:00 2001
+From: Serge Hallyn <serge.hallyn@ubuntu.com>
+Date: Wed, 18 Nov 2015 10:56:45 -0600
+Subject: [PATCH 0627/1767] UBUNTU: SAUCE: (noup) Add FS_USERNS_FLAG to cgroup
+ fs
+
+BugLink: http://bugs.launchpad.net/bugs/1546775
+
+allowing root in a non-init user namespace to mount it.  This should
+now be safe, because
+
+1. non-init-root cannot mount a previously unbound subsystem
+2. the task doing the mount must be privileged with respect to the
+   user namespace owning the cgroup namespace
+3. the mounted subsystem will have its current cgroup as the root dentry.
+   the permissions will be unchanged, so tasks will receive no new
+   privilege over the cgroups which they did not have on the original
+   mounts.
+
+Signed-off-by: Serge Hallyn <serge.hallyn@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/cgroup.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/cgroup.c b/kernel/cgroup.c
+index 22e761c..9510da9 100644
+--- a/kernel/cgroup.c
++++ b/kernel/cgroup.c
+@@ -2247,6 +2247,7 @@ static struct file_system_type cgroup_fs_type = {
+ 	.name = "cgroup",
+ 	.mount = cgroup_mount,
+ 	.kill_sb = cgroup_kill_sb,
++	.fs_flags = FS_USERNS_MOUNT,
+ };
+ 
+ static char *
+-- 
+1.9.3
+

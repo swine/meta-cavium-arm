@@ -1,0 +1,45 @@
+From 2d884313ffec80b870ef8f666fbaedaf1b070208 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Christian=20K=C3=B6nig?= <christian.koenig@amd.com>
+Date: Mon, 11 Jan 2016 15:35:22 +0100
+Subject: [PATCH 1384/1767] drm/amdgpu: validate duplicates first
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Most VM BOs end up in the duplicates list, validate it
+first make -ENOMEM less likely.
+
+Signed-off-by: Christian König <christian.koenig@amd.com>
+Reviewed-by: Chunming Zhou <David1.Zhou@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit d8e0cae645504a787b05abfb91afee8cd7fa1701)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
+index 1fffc33..6f89f8e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
+@@ -421,11 +421,11 @@ static int amdgpu_cs_parser_relocs(struct amdgpu_cs_parser *p)
+ 
+ 	amdgpu_vm_get_pt_bos(&fpriv->vm, &duplicates);
+ 
+-	r = amdgpu_cs_list_validate(p->adev, &fpriv->vm, &p->validated);
++	r = amdgpu_cs_list_validate(p->adev, &fpriv->vm, &duplicates);
+ 	if (r)
+ 		goto error_validate;
+ 
+-	r = amdgpu_cs_list_validate(p->adev, &fpriv->vm, &duplicates);
++	r = amdgpu_cs_list_validate(p->adev, &fpriv->vm, &p->validated);
+ 
+ error_validate:
+ 	if (r) {
+-- 
+1.9.3
+

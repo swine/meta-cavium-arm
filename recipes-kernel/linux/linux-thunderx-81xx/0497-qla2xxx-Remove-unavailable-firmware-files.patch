@@ -1,0 +1,51 @@
+From c2fd0f0bb1f42cb4a072130c61eadaf0961d4073 Mon Sep 17 00:00:00 2001
+From: Himanshu Madhani <himanshu.madhani@qlogic.com>
+Date: Tue, 17 Nov 2015 15:44:48 -0500
+Subject: [PATCH 0497/1767] qla2xxx: Remove unavailable firmware files
+
+BugLink: http://bugs.launchpad.net/bugs/1541456
+
+Remove firmware binary names for the ISPs, which are not submitted to
+linux-firmware.
+
+Signed-off-by: Himanshu Madhani <himanshu.madhani@qlogic.com>
+Signed-off-by: Giridhar Malavali <giridhar.malavali@qlogic.com>
+Reviewed-by: Julian Calaby <julian.calaby@gmail.com>
+Reviewed-by: Xose Vazquez Perez <xose.vazquez@gmail.com>
+Cc: Hannes Reinecke <hare@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit 940a7f09ad645b6be7ff85b034499fcffdfe0ebc)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/qla2xxx/Kconfig  | 3 ---
+ drivers/scsi/qla2xxx/qla_os.c | 3 ---
+ 2 files changed, 6 deletions(-)
+
+diff --git a/drivers/scsi/qla2xxx/Kconfig b/drivers/scsi/qla2xxx/Kconfig
+index a0f732b..10aa18b 100644
+--- a/drivers/scsi/qla2xxx/Kconfig
++++ b/drivers/scsi/qla2xxx/Kconfig
+@@ -18,9 +18,6 @@ config SCSI_QLA_FC
+ 	2322, 6322        ql2322_fw.bin
+ 	24xx, 54xx        ql2400_fw.bin
+ 	25xx              ql2500_fw.bin
+-	2031              ql2600_fw.bin
+-	8031              ql8300_fw.bin
+-	27xx              ql2700_fw.bin
+ 
+ 	Upon request, the driver caches the firmware image until
+ 	the driver is unloaded.
+diff --git a/drivers/scsi/qla2xxx/qla_os.c b/drivers/scsi/qla2xxx/qla_os.c
+index bfa9a64..6be32fd 100644
+--- a/drivers/scsi/qla2xxx/qla_os.c
++++ b/drivers/scsi/qla2xxx/qla_os.c
+@@ -5843,6 +5843,3 @@ MODULE_FIRMWARE(FW_FILE_ISP2300);
+ MODULE_FIRMWARE(FW_FILE_ISP2322);
+ MODULE_FIRMWARE(FW_FILE_ISP24XX);
+ MODULE_FIRMWARE(FW_FILE_ISP25XX);
+-MODULE_FIRMWARE(FW_FILE_ISP2031);
+-MODULE_FIRMWARE(FW_FILE_ISP8031);
+-MODULE_FIRMWARE(FW_FILE_ISP27XX);
+-- 
+1.9.3
+

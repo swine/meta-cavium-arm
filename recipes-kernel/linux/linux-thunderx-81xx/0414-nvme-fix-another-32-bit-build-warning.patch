@@ -1,0 +1,43 @@
+From 2a0f7f9925d34816e5a5ff0a3274fa21bfecad06 Mon Sep 17 00:00:00 2001
+From: Arnd Bergmann <arnd@arndb.de>
+Date: Tue, 8 Dec 2015 16:22:17 +0100
+Subject: [PATCH 0414/1767] nvme: fix another 32-bit build warning
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+The nvme_user_cmd function was recently moved around from one file
+to another, which made a warning reappear that I had fixed before
+at some point:
+
+drivers/nvme/host/core.c: In function 'nvme_user_cmd':
+drivers/nvme/host/core.c:424:4: warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+
+This applies the same workaround that we have elsewhere in the
+driver with an extra type cast to uintptr_t.
+
+Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+Fixes: 1673f1f08c88 ("nvme: move block_device_operations and ns/ctrl freeing to common code")
+Link: https://lkml.org/lkml/2015/10/9/611
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit d1ea7be5f755bf1a4d4fdccc35880fcf5069df60)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/core.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/nvme/host/core.c b/drivers/nvme/host/core.c
+index f9c4e80..47ebfb8 100644
+--- a/drivers/nvme/host/core.c
++++ b/drivers/nvme/host/core.c
+@@ -421,7 +421,7 @@ static int nvme_user_cmd(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
+ 		timeout = msecs_to_jiffies(cmd.timeout_ms);
+ 
+ 	status = nvme_submit_user_cmd(ns ? ns->queue : ctrl->admin_q, &c,
+-			(void __user *)cmd.addr, cmd.data_len,
++			(void __user *)(uintptr_t)cmd.addr, cmd.data_len,
+ 			&cmd.result, timeout);
+ 	if (status >= 0) {
+ 		if (put_user(cmd.result, &ucmd->result))
+-- 
+1.9.3
+

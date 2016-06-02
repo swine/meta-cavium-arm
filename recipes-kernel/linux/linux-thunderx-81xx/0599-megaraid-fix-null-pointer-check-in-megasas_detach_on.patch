@@ -1,0 +1,45 @@
+From aa08b6729e828234177bc32e987a7afd41fecda4 Mon Sep 17 00:00:00 2001
+From: Maurizio Lombardi <mlombard@redhat.com>
+Date: Fri, 22 Jan 2016 13:41:42 +0100
+Subject: [PATCH 0599/1767] megaraid: fix null pointer check in
+ megasas_detach_one().
+
+BugLink: http://bugs.launchpad.net/bugs/1544679
+
+The pd_seq_sync pointer can't be NULL, we have to check its entries
+instead.
+
+Signed-off-by: Maurizio Lombardi <mlombard@redhat.com>
+Acked-by: Sumit Saxena <sumit.saxena@broadcom.com>
+Reviewed-by: Tomas Henzl <thenzl@redhat.com>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from linux-next commit bd27c97fae40ff3a96e91750304296d851b3c5f2)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/megaraid/megaraid_sas_base.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/scsi/megaraid/megaraid_sas_base.c b/drivers/scsi/megaraid/megaraid_sas_base.c
+index 54922e5..a831327 100644
+--- a/drivers/scsi/megaraid/megaraid_sas_base.c
++++ b/drivers/scsi/megaraid/megaraid_sas_base.c
+@@ -6294,11 +6294,11 @@ static void megasas_detach_one(struct pci_dev *pdev)
+ 			if (fusion->ld_drv_map[i])
+ 				free_pages((ulong)fusion->ld_drv_map[i],
+ 					fusion->drv_map_pages);
+-				if (fusion->pd_seq_sync)
+-					dma_free_coherent(&instance->pdev->dev,
+-						pd_seq_map_sz,
+-						fusion->pd_seq_sync[i],
+-						fusion->pd_seq_phys[i]);
++			if (fusion->pd_seq_sync[i])
++				dma_free_coherent(&instance->pdev->dev,
++					pd_seq_map_sz,
++					fusion->pd_seq_sync[i],
++					fusion->pd_seq_phys[i]);
+ 		}
+ 		free_pages((ulong)instance->ctrl_context,
+ 			instance->ctrl_context_pages);
+-- 
+1.9.3
+

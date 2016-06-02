@@ -1,0 +1,53 @@
+From a309993dbe1d6abe657522a2c29ad513947fbb30 Mon Sep 17 00:00:00 2001
+From: Ganapatrao Kulkarni <gkulkarni@caviumnetworks.com>
+Date: Thu, 12 May 2016 11:21:55 -0400
+Subject: [PATCH 28/39] arm64: Enable workaround for Cavium erratum 27456 for
+ 81xx
+
+enabling fix a2ce725 arm64: Add workaround for Cavium erratum 27456
+to thunderx cn81xx as well.
+
+Signed-off-by: Ganapatrao Kulkarni <gkulkarni@caviumnetworks.com>
+---
+ arch/arm64/include/asm/cputype.h | 2 ++
+ arch/arm64/kernel/cpu_errata.c   | 7 +++++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/arch/arm64/include/asm/cputype.h b/arch/arm64/include/asm/cputype.h
+index 7540284..e3341d0 100644
+--- a/arch/arm64/include/asm/cputype.h
++++ b/arch/arm64/include/asm/cputype.h
+@@ -85,10 +85,12 @@
+ #define APM_CPU_PART_POTENZA		0x000
+ 
+ #define CAVIUM_CPU_PART_THUNDERX	0x0A1
++#define CAVIUM_CPU_PART_THUNDERX_81XX	0x0A2
+ 
+ #define MIDR_CORTEX_A53 MIDR_CPU_MODEL(ARM_CPU_IMP_ARM, ARM_CPU_PART_CORTEX_A53)
+ #define MIDR_CORTEX_A57 MIDR_CPU_MODEL(ARM_CPU_IMP_ARM, ARM_CPU_PART_CORTEX_A57)
+ #define MIDR_THUNDERX	MIDR_CPU_MODEL(ARM_CPU_IMP_CAVIUM, CAVIUM_CPU_PART_THUNDERX)
++#define MIDR_THUNDERX_81XX	MIDR_CPU_MODEL(ARM_CPU_IMP_CAVIUM, CAVIUM_CPU_PART_THUNDERX_81XX)
+ 
+ #ifndef __ASSEMBLY__
+ 
+diff --git a/arch/arm64/kernel/cpu_errata.c b/arch/arm64/kernel/cpu_errata.c
+index 06afd04..1b3600a 100644
+--- a/arch/arm64/kernel/cpu_errata.c
++++ b/arch/arm64/kernel/cpu_errata.c
+@@ -96,6 +96,13 @@ const struct arm64_cpu_capabilities arm64_errata[] = {
+ 		MIDR_RANGE(MIDR_THUNDERX, 0x00,
+ 			   (1 << MIDR_VARIANT_SHIFT) | 1),
+ 	},
++	{
++	/* Cavium ThunderX, T81 pass 1.x */
++		.desc = "Cavium erratum 27456",
++		.capability = ARM64_WORKAROUND_CAVIUM_27456,
++		MIDR_RANGE(MIDR_THUNDERX_81XX, 0x00,
++			   (1 << MIDR_VARIANT_SHIFT) | 1),
++	},
+ #endif
+ 	{
+ 	}
+-- 
+1.9.1
+

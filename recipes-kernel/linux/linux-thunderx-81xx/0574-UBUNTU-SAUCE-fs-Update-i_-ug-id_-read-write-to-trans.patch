@@ -1,0 +1,94 @@
+From bbdfd36ce6b1be6ea2aadd6f2dc0aa8ac6af2720 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Thu, 11 Dec 2014 10:15:45 -0600
+Subject: [PATCH 0574/1767] UBUNTU: SAUCE: fs: Update i_[ug]id_(read|write) to
+ translate relative to s_user_ns
+
+For filesystems mounted from a user namespace on-disk ids should
+be translated relative to s_users_ns rather than init_user_ns.
+
+When an id in the filesystem doesn't exist in s_user_ns the
+associated id in the inode will be set to INVALID_[UG]ID, which
+turns these into de facto "nobody" ids. This actually maps pretty
+well into the way most code already works, and those places where
+it didn't were fixed in previous patches. Moving forward vfs code
+needs to be careful to handle instances where ids in inodes may
+be invalid.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ include/linux/fs.h | 50 +++++++++++++++++++++++++-------------------------
+ 1 file changed, 25 insertions(+), 25 deletions(-)
+
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index fb98e14..a868532 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -768,31 +768,6 @@ static inline void i_size_write(struct inode *inode, loff_t i_size)
+ #endif
+ }
+ 
+-/* Helper functions so that in most cases filesystems will
+- * not need to deal directly with kuid_t and kgid_t and can
+- * instead deal with the raw numeric values that are stored
+- * in the filesystem.
+- */
+-static inline uid_t i_uid_read(const struct inode *inode)
+-{
+-	return from_kuid(&init_user_ns, inode->i_uid);
+-}
+-
+-static inline gid_t i_gid_read(const struct inode *inode)
+-{
+-	return from_kgid(&init_user_ns, inode->i_gid);
+-}
+-
+-static inline void i_uid_write(struct inode *inode, uid_t uid)
+-{
+-	inode->i_uid = make_kuid(&init_user_ns, uid);
+-}
+-
+-static inline void i_gid_write(struct inode *inode, gid_t gid)
+-{
+-	inode->i_gid = make_kgid(&init_user_ns, gid);
+-}
+-
+ static inline unsigned iminor(const struct inode *inode)
+ {
+ 	return MINOR(inode->i_rdev);
+@@ -1382,6 +1357,31 @@ struct super_block {
+ 	struct list_head	s_inodes;	/* all inodes */
+ };
+ 
++/* Helper functions so that in most cases filesystems will
++ * not need to deal directly with kuid_t and kgid_t and can
++ * instead deal with the raw numeric values that are stored
++ * in the filesystem.
++ */
++static inline uid_t i_uid_read(const struct inode *inode)
++{
++	return from_kuid_munged(inode->i_sb->s_user_ns, inode->i_uid);
++}
++
++static inline gid_t i_gid_read(const struct inode *inode)
++{
++	return from_kgid_munged(inode->i_sb->s_user_ns, inode->i_gid);
++}
++
++static inline void i_uid_write(struct inode *inode, uid_t uid)
++{
++	inode->i_uid = make_kuid(inode->i_sb->s_user_ns, uid);
++}
++
++static inline void i_gid_write(struct inode *inode, gid_t gid)
++{
++	inode->i_gid = make_kgid(inode->i_sb->s_user_ns, gid);
++}
++
+ extern struct timespec current_fs_time(struct super_block *sb);
+ 
+ /*
+-- 
+1.9.3
+

@@ -1,0 +1,64 @@
+From 1e0338f3d1b30e0addf0490a3288dc2ef369a502 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Thu, 11 Sep 2014 13:12:12 -0500
+Subject: [PATCH 0565/1767] UBUNTU: SAUCE: fs: Ensure the mounter of a
+ filesystem is privileged towards its inodes
+
+The mounter of a filesystem should be privileged towards the
+inodes of that filesystem. Extend the checks in
+inode_owner_or_capable() and capable_wrt_inode_uidgid() to
+permit access by users priviliged in the user namespace of the
+inode's superblock.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Acked-by: Serge Hallyn <serge.hallyn@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/inode.c          |  3 +++
+ kernel/capability.c | 13 +++++++++----
+ 2 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/fs/inode.c b/fs/inode.c
+index 1be5f90..01c036f 100644
+--- a/fs/inode.c
++++ b/fs/inode.c
+@@ -1962,6 +1962,9 @@ bool inode_owner_or_capable(const struct inode *inode)
+ 	ns = current_user_ns();
+ 	if (ns_capable(ns, CAP_FOWNER) && kuid_has_mapping(ns, inode->i_uid))
+ 		return true;
++
++	if (ns_capable(inode->i_sb->s_user_ns, CAP_FOWNER))
++		return true;
+ 	return false;
+ }
+ EXPORT_SYMBOL(inode_owner_or_capable);
+diff --git a/kernel/capability.c b/kernel/capability.c
+index 45432b5..5137a38 100644
+--- a/kernel/capability.c
++++ b/kernel/capability.c
+@@ -437,13 +437,18 @@ EXPORT_SYMBOL(file_ns_capable);
+  *
+  * Return true if the current task has the given capability targeted at
+  * its own user namespace and that the given inode's uid and gid are
+- * mapped into the current user namespace.
++ * mapped into the current user namespace, or if the current task has
++ * the capability towards the user namespace of the inode's superblock.
+  */
+ bool capable_wrt_inode_uidgid(const struct inode *inode, int cap)
+ {
+-	struct user_namespace *ns = current_user_ns();
++	struct user_namespace *ns;
+ 
+-	return ns_capable(ns, cap) && kuid_has_mapping(ns, inode->i_uid) &&
+-		kgid_has_mapping(ns, inode->i_gid);
++	ns = current_user_ns();
++	if (ns_capable(ns, cap) && kuid_has_mapping(ns, inode->i_uid) &&
++	    kgid_has_mapping(ns, inode->i_gid))
++		return true;
++
++	return ns_capable(inode->i_sb->s_user_ns, cap);
+ }
+ EXPORT_SYMBOL(capable_wrt_inode_uidgid);
+-- 
+1.9.3
+

@@ -1,0 +1,36 @@
+From a5228da0f606316f6a2c121ed1c61a5607b1ff74 Mon Sep 17 00:00:00 2001
+From: Jesse Brandeburg <jesse.brandeburg@intel.com>
+Date: Mon, 4 Jan 2016 10:33:02 -0800
+Subject: [PATCH 0727/1767] i40e: trivial: fix missing space
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+Missing space in comment, fixed.
+
+Change-ID: I8cdf3ce5994b4a97dcc3eeb33422533918546667
+Reported-by: Sergei Shtylyov <sergei.shtylyov@cogentembedded.com>
+Signed-off-by: Jesse Brandeburg <jesse.brandeburg@intel.com>
+Tested-by: Andrew Bowers <andrewx.bowers@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit d89d967f7188438cf9a3ffb9ce74e9ecc2795619)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/i40e/i40e_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_main.c b/drivers/net/ethernet/intel/i40e/i40e_main.c
+index 5866174..da7e38f 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_main.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_main.c
+@@ -3754,7 +3754,7 @@ static int i40e_vsi_request_irq(struct i40e_vsi *vsi, char *basename)
+ 
+ #ifdef CONFIG_NET_POLL_CONTROLLER
+ /**
+- * i40e_netpoll - A Polling 'interrupt'handler
++ * i40e_netpoll - A Polling 'interrupt' handler
+  * @netdev: network interface device structure
+  *
+  * This is used by netconsole to send skbs without having to re-enable
+-- 
+1.9.3
+

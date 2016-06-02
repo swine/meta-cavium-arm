@@ -1,0 +1,40 @@
+From 5f76a4bd90168199abf573a85d50dc3b36e1e3f2 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Wed, 25 May 2016 12:02:02 -0700
+Subject: [PATCH 35/39] net: thunderx: Fix for spurious mailbox interrupt
+
+Clear PF mailbox interrupts before enabling to avoid spurious
+interrupt beign seen immediately after enabling them.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index dea3102..ca8a44d 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -111,12 +111,18 @@ static void nic_enable_mbx_intr(struct nicpf *nic)
+ 
+ #define INTR_MASK(vfs) ((vfs < 64) ? (BIT_ULL(vfs) - 1) : (~0ull))
+ 
++	/* Clear it, to avoid spurious interrupts (if any) */
++	nic_reg_write(nic, NIC_PF_MAILBOX_INT, INTR_MASK(vf_cnt));
++
+ 	/* Enable mailbox interrupt for all VFs */
+ 	nic_reg_write(nic, NIC_PF_MAILBOX_ENA_W1S, INTR_MASK(vf_cnt));
+ 	/* One mailbox intr enable reg per 64 VFs */
+-	if (vf_cnt > 64)
++	if (vf_cnt > 64) {
++		nic_reg_write(nic, NIC_PF_MAILBOX_INT + sizeof(u64),
++			      INTR_MASK(vf_cnt - 64));
+ 		nic_reg_write(nic, NIC_PF_MAILBOX_ENA_W1S + sizeof(u64),
+ 			      INTR_MASK(vf_cnt - 64));
++	}
+ }
+ 
+ static void nic_clear_mbx_intr(struct nicpf *nic, int vf, int mbx_reg)
+-- 
+1.9.1
+

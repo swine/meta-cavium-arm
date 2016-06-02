@@ -1,0 +1,2696 @@
+From 1ccca2ca80f7ddb6c984e2b4af3e2f3a07e99a3b Mon Sep 17 00:00:00 2001
+From: James Smart <james.smart@avagotech.com>
+Date: Wed, 16 Dec 2015 18:11:58 -0500
+Subject: [PATCH 0484/1767] lpfc: Modularize and cleanup FDMI code in driver
+
+BugLink: http://bugs.launchpad.net/bugs/1541592
+
+Modularize, cleanup, add comments - for FDMI code in driver
+
+Note: I don't like the comments with leading # - but as we have a lot if
+present, I'm deferring to handle it in one big fix later.
+
+Signed-off-by: Dick Kennedy <dick.kennedy@avagotech.com>
+Signed-off-by: James Smart <james.smart@avagotech.com>
+Reviewed-by: Hannes Reinicke <hare@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit 4258e98ee3862ca7036654b43c839ab7668043e0)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/lpfc/lpfc.h         |   16 +-
+ drivers/scsi/lpfc/lpfc_attr.c    |   46 +-
+ drivers/scsi/lpfc/lpfc_crtn.h    |    5 +-
+ drivers/scsi/lpfc/lpfc_ct.c      | 1794 ++++++++++++++++++++++++--------------
+ drivers/scsi/lpfc/lpfc_els.c     |   99 ++-
+ drivers/scsi/lpfc/lpfc_hbadisc.c |   16 +-
+ drivers/scsi/lpfc/lpfc_hw.h      |  184 +++-
+ drivers/scsi/lpfc/lpfc_init.c    |   27 +-
+ drivers/scsi/lpfc/lpfc_vport.c   |    8 +
+ 9 files changed, 1450 insertions(+), 745 deletions(-)
+
+diff --git a/drivers/scsi/lpfc/lpfc.h b/drivers/scsi/lpfc/lpfc.h
+index ceee9a3..90a3ca5 100644
+--- a/drivers/scsi/lpfc/lpfc.h
++++ b/drivers/scsi/lpfc/lpfc.h
+@@ -386,7 +386,6 @@ struct lpfc_vport {
+ 	uint32_t work_port_events; /* Timeout to be handled  */
+ #define WORKER_DISC_TMO                0x1	/* vport: Discovery timeout */
+ #define WORKER_ELS_TMO                 0x2	/* vport: ELS timeout */
+-#define WORKER_FDMI_TMO                0x4	/* vport: FDMI timeout */
+ #define WORKER_DELAYED_DISC_TMO        0x8	/* vport: delayed discovery */
+ 
+ #define WORKER_MBOX_TMO                0x100	/* hba: MBOX timeout */
+@@ -396,7 +395,6 @@ struct lpfc_vport {
+ #define WORKER_RAMP_UP_QUEUE           0x1000	/* hba: Increase Q depth */
+ #define WORKER_SERVICE_TXQ             0x2000	/* hba: IOCBs on the txq */
+ 
+-	struct timer_list fc_fdmitmo;
+ 	struct timer_list els_tmofunc;
+ 	struct timer_list delayed_disc_tmo;
+ 
+@@ -405,6 +403,7 @@ struct lpfc_vport {
+ 	uint8_t load_flag;
+ #define FC_LOADING		0x1	/* HBA in process of loading drvr */
+ #define FC_UNLOADING		0x2	/* HBA in process of unloading drvr */
++#define FC_ALLOW_FDMI		0x4	/* port is ready for FDMI requests */
+ 	/* Vport Config Parameters */
+ 	uint32_t cfg_scan_down;
+ 	uint32_t cfg_lun_queue_depth;
+@@ -414,10 +413,6 @@ struct lpfc_vport {
+ 	uint32_t cfg_peer_port_login;
+ 	uint32_t cfg_fcp_class;
+ 	uint32_t cfg_use_adisc;
+-	uint32_t cfg_fdmi_on;
+-#define LPFC_FDMI_SUPPORT	1	/* bit 0 - FDMI supported? */
+-#define LPFC_FDMI_REG_DELAY	2	/* bit 1 - 60 sec registration delay */
+-#define LPFC_FDMI_ALL_ATTRIB	4	/* bit 2 - register ALL attributes? */
+ 	uint32_t cfg_discovery_threads;
+ 	uint32_t cfg_log_verbose;
+ 	uint32_t cfg_max_luns;
+@@ -443,6 +438,10 @@ struct lpfc_vport {
+ 	unsigned long rcv_buffer_time_stamp;
+ 	uint32_t vport_flag;
+ #define STATIC_VPORT	1
++
++	uint16_t fdmi_num_disc;
++	uint32_t fdmi_hba_mask;
++	uint32_t fdmi_port_mask;
+ };
+ 
+ struct hbq_s {
+@@ -755,6 +754,11 @@ struct lpfc_hba {
+ #define LPFC_DELAY_INIT_LINK              1	/* layered driver hold off */
+ #define LPFC_DELAY_INIT_LINK_INDEFINITELY 2	/* wait, manual intervention */
+ 	uint32_t cfg_enable_dss;
++	uint32_t cfg_fdmi_on;
++#define LPFC_FDMI_NO_SUPPORT	0	/* FDMI not supported */
++#define LPFC_FDMI_SUPPORT	1	/* FDMI supported? */
++#define LPFC_FDMI_SMART_SAN	2	/* SmartSAN supported */
++	uint32_t cfg_enable_SmartSAN;
+ 	lpfc_vpd_t vpd;		/* vital product data */
+ 
+ 	struct pci_dev *pcidev;
+diff --git a/drivers/scsi/lpfc/lpfc_attr.c b/drivers/scsi/lpfc/lpfc_attr.c
+index f6446d7..5739c26 100644
+--- a/drivers/scsi/lpfc/lpfc_attr.c
++++ b/drivers/scsi/lpfc/lpfc_attr.c
+@@ -4572,19 +4572,27 @@ LPFC_ATTR_R(multi_ring_type, FC_TYPE_IP, 1,
+ 	     255, "Identifies TYPE for additional ring configuration");
+ 
+ /*
+-# lpfc_fdmi_on: controls FDMI support.
+-#               Set                NOT Set
+-#       bit 0 = FDMI support       no FDMI support
+-#           LPFC_FDMI_SUPPORT just turns basic support on/off
+-#       bit 1 = Register delay     no register delay  (60 seconds)
+-#           LPFC_FDMI_REG_DELAY	60 sec registration delay after FDMI login
+-#       bit 2 = All attributes     Use a attribute subset
+-#           LPFC_FDMI_ALL_ATTRIB applies to both port and HBA attributes
+-#           Port attrutes subset: 1 thru 6 OR all: 1 thru 0xd 0x101 0x102 0x103
+-#           HBA attributes subset: 1 thru 0xb OR all: 1 thru 0xc
+-# Value range [0,7]. Default value is 0.
++# lpfc_enable_SmartSAN: Sets up FDMI support for SmartSAN
++#       0  = SmartSAN functionality disabled (default)
++#       1  = SmartSAN functionality enabled
++# This parameter will override the value of lpfc_fdmi_on module parameter.
++# Value range is [0,1]. Default value is 0.
+ */
+-LPFC_VPORT_ATTR_RW(fdmi_on, 0, 0, 7, "Enable FDMI support");
++LPFC_ATTR_R(enable_SmartSAN, 0, 0, 1, "Enable SmartSAN functionality");
++
++/*
++# lpfc_fdmi_on: Controls FDMI support.
++#       0       No FDMI support (default)
++#       1       Traditional FDMI support
++#       2       Smart SAN support
++# If lpfc_enable_SmartSAN is set 1, the driver sets lpfc_fdmi_on to value 2
++# overwriting the current value.  If lpfc_enable_SmartSAN is set 0, the
++# driver uses the current value of lpfc_fdmi_on provided it has value 0 or 1.
++# A value of 2 with lpfc_enable_SmartSAN set to 0 causes the driver to
++# set lpfc_fdmi_on back to 1.
++# Value range [0,2]. Default value is 0.
++*/
++LPFC_ATTR_R(fdmi_on, 0, 0, 2, "Enable FDMI support");
+ 
+ /*
+ # Specifies the maximum number of ELS cmds we can have outstanding (for
+@@ -4815,6 +4823,7 @@ struct device_attribute *lpfc_hba_attrs[] = {
+ 	&dev_attr_lpfc_multi_ring_rctl,
+ 	&dev_attr_lpfc_multi_ring_type,
+ 	&dev_attr_lpfc_fdmi_on,
++	&dev_attr_lpfc_enable_SmartSAN,
+ 	&dev_attr_lpfc_max_luns,
+ 	&dev_attr_lpfc_enable_npiv,
+ 	&dev_attr_lpfc_fcf_failover_policy,
+@@ -4887,7 +4896,6 @@ struct device_attribute *lpfc_vport_attrs[] = {
+ 	&dev_attr_lpfc_fcp_class,
+ 	&dev_attr_lpfc_use_adisc,
+ 	&dev_attr_lpfc_first_burst_size,
+-	&dev_attr_lpfc_fdmi_on,
+ 	&dev_attr_lpfc_max_luns,
+ 	&dev_attr_nport_evt_cnt,
+ 	&dev_attr_npiv_info,
+@@ -5826,6 +5834,8 @@ lpfc_get_cfgparam(struct lpfc_hba *phba)
+ 	lpfc_enable_npiv_init(phba, lpfc_enable_npiv);
+ 	lpfc_fcf_failover_policy_init(phba, lpfc_fcf_failover_policy);
+ 	lpfc_enable_rrq_init(phba, lpfc_enable_rrq);
++	lpfc_fdmi_on_init(phba, lpfc_fdmi_on);
++	lpfc_enable_SmartSAN_init(phba, lpfc_enable_SmartSAN);
+ 	lpfc_use_msi_init(phba, lpfc_use_msi);
+ 	lpfc_fcp_imax_init(phba, lpfc_fcp_imax);
+ 	lpfc_fcp_cpu_map_init(phba, lpfc_fcp_cpu_map);
+@@ -5846,6 +5856,15 @@ lpfc_get_cfgparam(struct lpfc_hba *phba)
+ 		phba->cfg_poll = 0;
+ 	else
+ 		phba->cfg_poll = lpfc_poll;
++
++	/* Ensure fdmi_on and enable_SmartSAN don't conflict */
++	if (phba->cfg_enable_SmartSAN) {
++		phba->cfg_fdmi_on = LPFC_FDMI_SMART_SAN;
++	} else {
++		if (phba->cfg_fdmi_on == LPFC_FDMI_SMART_SAN)
++			phba->cfg_fdmi_on = LPFC_FDMI_SUPPORT;
++	}
++
+ 	phba->cfg_soft_wwnn = 0L;
+ 	phba->cfg_soft_wwpn = 0L;
+ 	lpfc_sg_seg_cnt_init(phba, lpfc_sg_seg_cnt);
+@@ -5879,7 +5898,6 @@ lpfc_get_vport_cfgparam(struct lpfc_vport *vport)
+ 	lpfc_use_adisc_init(vport, lpfc_use_adisc);
+ 	lpfc_first_burst_size_init(vport, lpfc_first_burst_size);
+ 	lpfc_max_scsicmpl_time_init(vport, lpfc_max_scsicmpl_time);
+-	lpfc_fdmi_on_init(vport, lpfc_fdmi_on);
+ 	lpfc_discovery_threads_init(vport, lpfc_discovery_threads);
+ 	lpfc_max_luns_init(vport, lpfc_max_luns);
+ 	lpfc_scan_down_init(vport, lpfc_scan_down);
+diff --git a/drivers/scsi/lpfc/lpfc_crtn.h b/drivers/scsi/lpfc/lpfc_crtn.h
+index 80d3c74..4e55b35 100644
+--- a/drivers/scsi/lpfc/lpfc_crtn.h
++++ b/drivers/scsi/lpfc/lpfc_crtn.h
+@@ -168,9 +168,8 @@ void lpfc_ct_unsol_event(struct lpfc_hba *, struct lpfc_sli_ring *,
+ 			 struct lpfc_iocbq *);
+ int lpfc_ct_handle_unsol_abort(struct lpfc_hba *, struct hbq_dmabuf *);
+ int lpfc_ns_cmd(struct lpfc_vport *, int, uint8_t, uint32_t);
+-int lpfc_fdmi_cmd(struct lpfc_vport *, struct lpfc_nodelist *, int);
+-void lpfc_fdmi_tmo(unsigned long);
+-void lpfc_fdmi_timeout_handler(struct lpfc_vport *);
++int lpfc_fdmi_cmd(struct lpfc_vport *, struct lpfc_nodelist *, int, uint32_t);
++void lpfc_fdmi_num_disc_check(struct lpfc_vport *);
+ void lpfc_delayed_disc_tmo(unsigned long);
+ void lpfc_delayed_disc_timeout_handler(struct lpfc_vport *);
+ 
+diff --git a/drivers/scsi/lpfc/lpfc_ct.c b/drivers/scsi/lpfc/lpfc_ct.c
+index 8fded1f..ac6e087 100644
+--- a/drivers/scsi/lpfc/lpfc_ct.c
++++ b/drivers/scsi/lpfc/lpfc_ct.c
+@@ -287,6 +287,17 @@ lpfc_ct_free_iocb(struct lpfc_hba *phba, struct lpfc_iocbq *ctiocb)
+ 	return 0;
+ }
+ 
++/**
++ * lpfc_gen_req - Build and issue a GEN_REQUEST command  to the SLI Layer
++ * @vport: pointer to a host virtual N_Port data structure.
++ * @bmp: Pointer to BPL for SLI command
++ * @inp: Pointer to data buffer for response data.
++ * @outp: Pointer to data buffer that hold the CT command.
++ * @cmpl: completion routine to call when command completes
++ * @ndlp: Destination NPort nodelist entry
++ *
++ * This function as the final part for issuing a CT command.
++ */
+ static int
+ lpfc_gen_req(struct lpfc_vport *vport, struct lpfc_dmabuf *bmp,
+ 	     struct lpfc_dmabuf *inp, struct lpfc_dmabuf *outp,
+@@ -311,7 +322,7 @@ lpfc_gen_req(struct lpfc_vport *vport, struct lpfc_dmabuf *bmp,
+ 	icmd->un.genreq64.bdl.addrHigh = putPaddrHigh(bmp->phys);
+ 	icmd->un.genreq64.bdl.addrLow = putPaddrLow(bmp->phys);
+ 	icmd->un.genreq64.bdl.bdeFlags = BUFF_TYPE_BLP_64;
+-	icmd->un.genreq64.bdl.bdeSize = (num_entry * sizeof (struct ulp_bde64));
++	icmd->un.genreq64.bdl.bdeSize = (num_entry * sizeof(struct ulp_bde64));
+ 
+ 	if (usr_flg)
+ 		geniocb->context3 = NULL;
+@@ -370,6 +381,16 @@ lpfc_gen_req(struct lpfc_vport *vport, struct lpfc_dmabuf *bmp,
+ 	return 0;
+ }
+ 
++/**
++ * lpfc_ct_cmd - Build and issue a CT command
++ * @vport: pointer to a host virtual N_Port data structure.
++ * @inmp: Pointer to data buffer for response data.
++ * @bmp: Pointer to BPL for SLI command
++ * @ndlp: Destination NPort nodelist entry
++ * @cmpl: completion routine to call when command completes
++ *
++ * This function is called for issuing a CT command.
++ */
+ static int
+ lpfc_ct_cmd(struct lpfc_vport *vport, struct lpfc_dmabuf *inmp,
+ 	    struct lpfc_dmabuf *bmp, struct lpfc_nodelist *ndlp,
+@@ -453,7 +474,7 @@ lpfc_ns_rsp(struct lpfc_vport *vport, struct lpfc_dmabuf *mp, uint32_t Size)
+ 			Cnt -= 16;	/* subtract length of CT header */
+ 
+ 		/* Loop through entire NameServer list of DIDs */
+-		while (Cnt >= sizeof (uint32_t)) {
++		while (Cnt >= sizeof(uint32_t)) {
+ 			/* Get next DID from NameServer List */
+ 			CTentry = *ctptr++;
+ 			Did = ((be32_to_cpu(CTentry)) & Mask_DID);
+@@ -558,7 +579,7 @@ lpfc_ns_rsp(struct lpfc_vport *vport, struct lpfc_dmabuf *mp, uint32_t Size)
+ 			}
+ 			if (CTentry & (cpu_to_be32(SLI_CT_LAST_ENTRY)))
+ 				goto nsout1;
+-			Cnt -= sizeof (uint32_t);
++			Cnt -= sizeof(uint32_t);
+ 		}
+ 		ctptr = NULL;
+ 
+@@ -1146,7 +1167,7 @@ lpfc_ns_cmd(struct lpfc_vport *vport, int cmdcode,
+ 
+ 	/* fill in BDEs for command */
+ 	/* Allocate buffer for command payload */
+-	mp = kmalloc(sizeof (struct lpfc_dmabuf), GFP_KERNEL);
++	mp = kmalloc(sizeof(struct lpfc_dmabuf), GFP_KERNEL);
+ 	if (!mp) {
+ 		rc=2;
+ 		goto ns_cmd_exit;
+@@ -1160,7 +1181,7 @@ lpfc_ns_cmd(struct lpfc_vport *vport, int cmdcode,
+ 	}
+ 
+ 	/* Allocate buffer for Buffer ptr list */
+-	bmp = kmalloc(sizeof (struct lpfc_dmabuf), GFP_KERNEL);
++	bmp = kmalloc(sizeof(struct lpfc_dmabuf), GFP_KERNEL);
+ 	if (!bmp) {
+ 		rc=4;
+ 		goto ns_cmd_free_mpvirt;
+@@ -1204,7 +1225,7 @@ lpfc_ns_cmd(struct lpfc_vport *vport, int cmdcode,
+ 	bpl->tus.w = le32_to_cpu(bpl->tus.w);
+ 
+ 	CtReq = (struct lpfc_sli_ct_request *) mp->virt;
+-	memset(CtReq, 0, sizeof (struct lpfc_sli_ct_request));
++	memset(CtReq, 0, sizeof(struct lpfc_sli_ct_request));
+ 	CtReq->RevisionId.bits.Revision = SLI_CT_REVISION;
+ 	CtReq->RevisionId.bits.InId = 0;
+ 	CtReq->FsType = SLI_CT_DIRECTORY_SERVICE;
+@@ -1244,7 +1265,7 @@ lpfc_ns_cmd(struct lpfc_vport *vport, int cmdcode,
+ 		    cpu_to_be16(SLI_CTNS_RNN_ID);
+ 		CtReq->un.rnn.PortId = cpu_to_be32(vport->fc_myDID);
+ 		memcpy(CtReq->un.rnn.wwnn,  &vport->fc_nodename,
+-		       sizeof (struct lpfc_name));
++		       sizeof(struct lpfc_name));
+ 		cmpl = lpfc_cmpl_ct_cmd_rnn_id;
+ 		break;
+ 
+@@ -1264,7 +1285,7 @@ lpfc_ns_cmd(struct lpfc_vport *vport, int cmdcode,
+ 		CtReq->CommandResponse.bits.CmdRsp =
+ 		    cpu_to_be16(SLI_CTNS_RSNN_NN);
+ 		memcpy(CtReq->un.rsnn.wwnn, &vport->fc_nodename,
+-		       sizeof (struct lpfc_name));
++		       sizeof(struct lpfc_name));
+ 		size = sizeof(CtReq->un.rsnn.symbname);
+ 		CtReq->un.rsnn.len =
+ 			lpfc_vport_symbolic_node_name(vport,
+@@ -1319,20 +1340,29 @@ ns_cmd_exit:
+ 	return 1;
+ }
+ 
++/**
++ * lpfc_cmpl_ct_disc_fdmi - Handle a discovery FDMI completion
++ * @phba: Pointer to HBA context object.
++ * @cmdiocb: Pointer to the command IOCBQ.
++ * @rspiocb: Pointer to the response IOCBQ.
++ *
++ * This function to handle the completion of a driver initiated FDMI
++ * CT command issued during discovery.
++ */
+ static void
+-lpfc_cmpl_ct_cmd_fdmi(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
+-		      struct lpfc_iocbq * rspiocb)
++lpfc_cmpl_ct_disc_fdmi(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
++		       struct lpfc_iocbq *rspiocb)
+ {
++	struct lpfc_vport *vport = cmdiocb->vport;
+ 	struct lpfc_dmabuf *inp = cmdiocb->context1;
+ 	struct lpfc_dmabuf *outp = cmdiocb->context2;
+-	struct lpfc_sli_ct_request *CTrsp = outp->virt;
+ 	struct lpfc_sli_ct_request *CTcmd = inp->virt;
+-	struct lpfc_nodelist *ndlp;
++	struct lpfc_sli_ct_request *CTrsp = outp->virt;
+ 	uint16_t fdmi_cmd = CTcmd->CommandResponse.bits.CmdRsp;
+ 	uint16_t fdmi_rsp = CTrsp->CommandResponse.bits.CmdRsp;
+-	struct lpfc_vport *vport = cmdiocb->vport;
+ 	IOCB_t *irsp = &rspiocb->iocb;
+-	uint32_t latt;
++	struct lpfc_nodelist *ndlp;
++	uint32_t latt, cmd, err;
+ 
+ 	latt = lpfc_els_chk_latt(vport);
+ 	lpfc_debugfs_disc_trc(vport, LPFC_DISC_TRC_CT,
+@@ -1340,91 +1370,1076 @@ lpfc_cmpl_ct_cmd_fdmi(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
+ 		irsp->ulpStatus, irsp->un.ulpWord[4], latt);
+ 
+ 	if (latt || irsp->ulpStatus) {
++
++		/* Look for a retryable error */
++		if (irsp->ulpStatus == IOSTAT_LOCAL_REJECT) {
++			switch ((irsp->un.ulpWord[4] & IOERR_PARAM_MASK)) {
++			case IOERR_SLI_ABORTED:
++			case IOERR_ABORT_IN_PROGRESS:
++			case IOERR_SEQUENCE_TIMEOUT:
++			case IOERR_ILLEGAL_FRAME:
++			case IOERR_NO_RESOURCES:
++			case IOERR_ILLEGAL_COMMAND:
++				cmdiocb->retry++;
++				if (cmdiocb->retry >= LPFC_FDMI_MAX_RETRY)
++					break;
++
++				/* Retry the same FDMI command */
++				err = lpfc_sli_issue_iocb(phba, LPFC_ELS_RING,
++							  cmdiocb, 0);
++				if (err == IOCB_ERROR)
++					break;
++				return;
++			default:
++				break;
++			}
++		}
++
+ 		lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+ 				 "0229 FDMI cmd %04x failed, latt = %d "
+ 				 "ulpStatus: x%x, rid x%x\n",
+ 				 be16_to_cpu(fdmi_cmd), latt, irsp->ulpStatus,
+ 				 irsp->un.ulpWord[4]);
+-		goto fail_out;
+ 	}
++	lpfc_ct_free_iocb(phba, cmdiocb);
+ 
+ 	ndlp = lpfc_findnode_did(vport, FDMI_DID);
+ 	if (!ndlp || !NLP_CHK_NODE_ACT(ndlp))
+-		goto fail_out;
++		return;
+ 
++	/* Check for a CT LS_RJT response */
++	cmd =  be16_to_cpu(fdmi_cmd);
+ 	if (fdmi_rsp == cpu_to_be16(SLI_CT_RESPONSE_FS_RJT)) {
+ 		/* FDMI rsp failed */
+ 		lpfc_printf_vlog(vport, KERN_INFO, LOG_DISCOVERY,
+-				 "0220 FDMI rsp failed Data: x%x\n",
+-				 be16_to_cpu(fdmi_cmd));
++				 "0220 FDMI cmd failed FS_RJT Data: x%x", cmd);
++
++		/* Should we fallback to FDMI-2 / FDMI-1 ? */
++		switch (cmd) {
++		case SLI_MGMT_RHBA:
++			if (vport->fdmi_hba_mask == LPFC_FDMI2_HBA_ATTR) {
++				/* Fallback to FDMI-1 */
++				vport->fdmi_hba_mask = LPFC_FDMI1_HBA_ATTR;
++				vport->fdmi_port_mask = LPFC_FDMI1_PORT_ATTR;
++				/* Start over */
++				lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DHBA, 0);
++			}
++			return;
++
++		case SLI_MGMT_RPRT:
++			if (vport->fdmi_port_mask == LPFC_FDMI2_PORT_ATTR) {
++				/* Fallback to FDMI-1 */
++				vport->fdmi_port_mask = LPFC_FDMI1_PORT_ATTR;
++				/* Start over */
++				lpfc_fdmi_cmd(vport, ndlp, cmd, 0);
++			}
++			if (vport->fdmi_port_mask == LPFC_FDMI2_SMART_ATTR) {
++				vport->fdmi_port_mask = LPFC_FDMI2_PORT_ATTR;
++				/* Retry the same command */
++				lpfc_fdmi_cmd(vport, ndlp, cmd, 0);
++			}
++			return;
++
++		case SLI_MGMT_RPA:
++			if (vport->fdmi_port_mask == LPFC_FDMI2_PORT_ATTR) {
++				/* Fallback to FDMI-1 */
++				vport->fdmi_hba_mask = LPFC_FDMI1_HBA_ATTR;
++				vport->fdmi_port_mask = LPFC_FDMI1_PORT_ATTR;
++				/* Start over */
++				lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DHBA, 0);
++			}
++			if (vport->fdmi_port_mask == LPFC_FDMI2_SMART_ATTR) {
++				vport->fdmi_port_mask = LPFC_FDMI2_PORT_ATTR;
++				/* Retry the same command */
++				lpfc_fdmi_cmd(vport, ndlp, cmd, 0);
++			}
++			return;
++		}
+ 	}
+ 
+-fail_out:
+-	lpfc_ct_free_iocb(phba, cmdiocb);
++	/*
++	 * On success, need to cycle thru FDMI registration for discovery
++	 * DHBA -> DPRT -> RHBA -> RPA  (physical port)
++	 * DPRT -> RPRT (vports)
++	 */
++	switch (cmd) {
++	case SLI_MGMT_RHBA:
++		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RPA, 0);
++		break;
++
++	case SLI_MGMT_DHBA:
++		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DPRT, 0);
++		break;
++
++	case SLI_MGMT_DPRT:
++		if (vport->port_type == LPFC_PHYSICAL_PORT)
++			lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RHBA, 0);
++		else
++			lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RPRT, 0);
++		break;
++	}
++	return;
+ }
+ 
+-static void
+-lpfc_cmpl_ct_disc_fdmi(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
+-		       struct lpfc_iocbq *rspiocb)
++
++/**
++ * lpfc_fdmi_num_disc_check - Check how many mapped NPorts we are connected to
++ * @vport: pointer to a host virtual N_Port data structure.
++ *
++ * Called from hbeat timeout routine to check if the number of discovered
++ * ports has changed. If so, re-register thar port Attribute.
++ */
++void
++lpfc_fdmi_num_disc_check(struct lpfc_vport *vport)
+ {
+-	struct lpfc_vport *vport = cmdiocb->vport;
+-	struct lpfc_dmabuf *inp = cmdiocb->context1;
+-	struct lpfc_sli_ct_request *CTcmd = inp->virt;
+-	uint16_t fdmi_cmd = CTcmd->CommandResponse.bits.CmdRsp;
++	struct lpfc_hba *phba = vport->phba;
+ 	struct lpfc_nodelist *ndlp;
++	uint16_t cnt;
+ 
+-	lpfc_cmpl_ct_cmd_fdmi(phba, cmdiocb, rspiocb);
++	if (!lpfc_is_link_up(phba))
++		return;
++
++	if (!(vport->fdmi_port_mask & LPFC_FDMI_PORT_ATTR_num_disc))
++		return;
++
++	cnt = lpfc_find_map_node(vport);
++	if (cnt == vport->fdmi_num_disc)
++		return;
+ 
+ 	ndlp = lpfc_findnode_did(vport, FDMI_DID);
+ 	if (!ndlp || !NLP_CHK_NODE_ACT(ndlp))
+ 		return;
+ 
+-	/*
+-	 * Need to cycle thru FDMI registration for discovery
+-	 * DHBA -> DPRT -> RHBA -> RPA
+-	 */
+-	switch (be16_to_cpu(fdmi_cmd)) {
+-	case SLI_MGMT_RHBA:
+-		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RPA);
+-		break;
++	if (vport->port_type == LPFC_PHYSICAL_PORT) {
++		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RPA,
++			      LPFC_FDMI_PORT_ATTR_num_disc);
++	} else {
++		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RPRT,
++			      LPFC_FDMI_PORT_ATTR_num_disc);
++	}
++}
+ 
+-	case SLI_MGMT_DHBA:
+-		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DPRT);
+-		break;
++/* Routines for all individual HBA attributes */
++int
++lpfc_fdmi_hba_attr_wwnn(struct lpfc_vport *vport, struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
+ 
+-	case SLI_MGMT_DPRT:
+-		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_RHBA);
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, sizeof(struct lpfc_name));
++
++	memcpy(&ae->un.AttrWWN, &vport->fc_sparam.nodeName,
++	       sizeof(struct lpfc_name));
++	size = FOURBYTES + sizeof(struct lpfc_name);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_NODENAME);
++	return size;
++}
++int
++lpfc_fdmi_hba_attr_manufacturer(struct lpfc_vport *vport,
++				struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString,
++		"Emulex Corporation",
++		       sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_MANUFACTURER);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_sn(struct lpfc_vport *vport, struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, phba->SerialNumber,
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_SERIAL_NUMBER);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_model(struct lpfc_vport *vport,
++			 struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, phba->ModelName,
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString, sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_MODEL);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_description(struct lpfc_vport *vport,
++			       struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, phba->ModelDesc,
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++				  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_MODEL_DESCRIPTION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_hdw_ver(struct lpfc_vport *vport,
++			   struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	lpfc_vpd_t *vp = &phba->vpd;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t i, j, incr, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	/* Convert JEDEC ID to ascii for hardware version */
++	incr = vp->rev.biuRev;
++	for (i = 0; i < 8; i++) {
++		j = (incr & 0xf);
++		if (j <= 9)
++			ae->un.AttrString[7 - i] =
++			    (char)((uint8_t) 0x30 +
++				   (uint8_t) j);
++		else
++			ae->un.AttrString[7 - i] =
++			    (char)((uint8_t) 0x61 +
++				   (uint8_t) (j - 10));
++		incr = (incr >> 4);
++	}
++	size = FOURBYTES + 8;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_HARDWARE_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_drvr_ver(struct lpfc_vport *vport,
++			    struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, lpfc_release_version,
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_DRIVER_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_rom_ver(struct lpfc_vport *vport,
++			   struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	if (phba->sli_rev == LPFC_SLI_REV4)
++		lpfc_decode_firmware_rev(phba, ae->un.AttrString, 1);
++	else
++		strncpy(ae->un.AttrString, phba->OptionROMVersion,
++			sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_OPTION_ROM_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_fmw_ver(struct lpfc_vport *vport,
++			   struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	lpfc_decode_firmware_rev(phba, ae->un.AttrString, 1);
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_FIRMWARE_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_os_ver(struct lpfc_vport *vport,
++			  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	snprintf(ae->un.AttrString, sizeof(ae->un.AttrString), "%s %s %s",
++		 init_utsname()->sysname,
++		 init_utsname()->release,
++		 init_utsname()->version);
++
++	len = strnlen(ae->un.AttrString, sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_OS_NAME_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_ct_len(struct lpfc_vport *vport,
++			  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	ae->un.AttrInt =  cpu_to_be32(LPFC_MAX_CT_SIZE);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_MAX_CT_PAYLOAD_LEN);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_symbolic_name(struct lpfc_vport *vport,
++				 struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	len = lpfc_vport_symbolic_node_name(vport,
++				ae->un.AttrString, 256);
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_SYM_NODENAME);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_vendor_info(struct lpfc_vport *vport,
++			       struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	/* Nothing is defined for this currently */
++	ae->un.AttrInt =  cpu_to_be32(0);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_VENDOR_INFO);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_num_ports(struct lpfc_vport *vport,
++			     struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	/* Each driver instance corresponds to a single port */
++	ae->un.AttrInt =  cpu_to_be32(1);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_NUM_PORTS);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_fabric_wwnn(struct lpfc_vport *vport,
++			       struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, sizeof(struct lpfc_name));
++
++	memcpy(&ae->un.AttrWWN, &vport->fabric_nodename,
++	       sizeof(struct lpfc_name));
++	size = FOURBYTES + sizeof(struct lpfc_name);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_FABRIC_WWNN);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_bios_ver(struct lpfc_vport *vport,
++			    struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	lpfc_decode_firmware_rev(phba, ae->un.AttrString, 1);
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_BIOS_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_bios_state(struct lpfc_vport *vport,
++			      struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	/* Driver doesn't have access to this information */
++	ae->un.AttrInt =  cpu_to_be32(0);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_BIOS_STATE);
++	return size;
++}
++
++int
++lpfc_fdmi_hba_attr_vendor_id(struct lpfc_vport *vport,
++			     struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, "EMULEX",
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RHBA_VENDOR_ID);
++	return size;
++}
++
++/* Routines for all individual PORT attributes */
++int
++lpfc_fdmi_port_attr_fc4type(struct lpfc_vport *vport,
++			    struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 32);
++
++	ae->un.AttrTypes[3] = 0x02; /* Type 1 - ELS */
++	ae->un.AttrTypes[2] = 0x01; /* Type 8 - FCP */
++	ae->un.AttrTypes[7] = 0x01; /* Type 32 - CT */
++	size = FOURBYTES + 32;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SUPPORTED_FC4_TYPES);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_support_speed(struct lpfc_vport *vport,
++				  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba   *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	ae->un.AttrInt = 0;
++	if (phba->lmt & LMT_32Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_32GBIT;
++	if (phba->lmt & LMT_16Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_16GBIT;
++	if (phba->lmt & LMT_10Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_10GBIT;
++	if (phba->lmt & LMT_8Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_8GBIT;
++	if (phba->lmt & LMT_4Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_4GBIT;
++	if (phba->lmt & LMT_2Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_2GBIT;
++	if (phba->lmt & LMT_1Gb)
++		ae->un.AttrInt |= HBA_PORTSPEED_1GBIT;
++	ae->un.AttrInt = cpu_to_be32(ae->un.AttrInt);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SUPPORTED_SPEED);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_speed(struct lpfc_vport *vport,
++			  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba   *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	switch (phba->fc_linkspeed) {
++	case LPFC_LINK_SPEED_1GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_1GBIT;
++		break;
++	case LPFC_LINK_SPEED_2GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_2GBIT;
++		break;
++	case LPFC_LINK_SPEED_4GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_4GBIT;
++		break;
++	case LPFC_LINK_SPEED_8GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_8GBIT;
++		break;
++	case LPFC_LINK_SPEED_10GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_10GBIT;
++		break;
++	case LPFC_LINK_SPEED_16GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_16GBIT;
++		break;
++	case LPFC_LINK_SPEED_32GHZ:
++		ae->un.AttrInt = HBA_PORTSPEED_32GBIT;
++		break;
++	default:
++		ae->un.AttrInt = HBA_PORTSPEED_UNKNOWN;
+ 		break;
+ 	}
++	ae->un.AttrInt = cpu_to_be32(ae->un.AttrInt);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_PORT_SPEED);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_max_frame(struct lpfc_vport *vport,
++			      struct lpfc_fdmi_attr_def *ad)
++{
++	struct serv_parm *hsp;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	hsp = (struct serv_parm *)&vport->fc_sparam;
++	ae->un.AttrInt = (((uint32_t) hsp->cmn.bbRcvSizeMsb) << 8) |
++			  (uint32_t) hsp->cmn.bbRcvSizeLsb;
++	ae->un.AttrInt = cpu_to_be32(ae->un.AttrInt);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_MAX_FRAME_SIZE);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_os_devname(struct lpfc_vport *vport,
++			       struct lpfc_fdmi_attr_def *ad)
++{
++	struct Scsi_Host *shost = lpfc_shost_from_vport(vport);
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	snprintf(ae->un.AttrString, sizeof(ae->un.AttrString),
++		 "/sys/class/scsi_host/host%d", shost->host_no);
++	len = strnlen((char *)ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_OS_DEVICE_NAME);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_host_name(struct lpfc_vport *vport,
++			      struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	snprintf(ae->un.AttrString, sizeof(ae->un.AttrString), "%s",
++		 init_utsname()->nodename);
++
++	len = strnlen(ae->un.AttrString, sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_HOST_NAME);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_wwnn(struct lpfc_vport *vport,
++			 struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0,  sizeof(struct lpfc_name));
++
++	memcpy(&ae->un.AttrWWN, &vport->fc_sparam.nodeName,
++	       sizeof(struct lpfc_name));
++	size = FOURBYTES + sizeof(struct lpfc_name);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_NODENAME);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_wwpn(struct lpfc_vport *vport,
++			 struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0,  sizeof(struct lpfc_name));
++
++	memcpy(&ae->un.AttrWWN, &vport->fc_sparam.portName,
++	       sizeof(struct lpfc_name));
++	size = FOURBYTES + sizeof(struct lpfc_name);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_PORTNAME);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_symbolic_name(struct lpfc_vport *vport,
++				  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	len = lpfc_vport_symbolic_port_name(vport, ae->un.AttrString, 256);
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SYM_PORTNAME);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_port_type(struct lpfc_vport *vport,
++			      struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	if (phba->fc_topology == LPFC_TOPOLOGY_LOOP)
++		ae->un.AttrInt =  cpu_to_be32(LPFC_FDMI_PORTTYPE_NLPORT);
++	else
++		ae->un.AttrInt =  cpu_to_be32(LPFC_FDMI_PORTTYPE_NPORT);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_PORT_TYPE);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_class(struct lpfc_vport *vport,
++			  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	ae->un.AttrInt = cpu_to_be32(FC_COS_CLASS2 | FC_COS_CLASS3);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SUPPORTED_CLASS);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_fabric_wwpn(struct lpfc_vport *vport,
++				struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0,  sizeof(struct lpfc_name));
++
++	memcpy(&ae->un.AttrWWN, &vport->fabric_portname,
++	       sizeof(struct lpfc_name));
++	size = FOURBYTES + sizeof(struct lpfc_name);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_FABRICNAME);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_active_fc4type(struct lpfc_vport *vport,
++				   struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 32);
++
++	ae->un.AttrTypes[3] = 0x02; /* Type 1 - ELS */
++	ae->un.AttrTypes[2] = 0x01; /* Type 8 - FCP */
++	ae->un.AttrTypes[7] = 0x01; /* Type 32 - CT */
++	size = FOURBYTES + 32;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_ACTIVE_FC4_TYPES);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_port_state(struct lpfc_vport *vport,
++			       struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	/* Link Up - operational */
++	ae->un.AttrInt =  cpu_to_be32(LPFC_FDMI_PORTSTATE_ONLINE);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_PORT_STATE);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_num_disc(struct lpfc_vport *vport,
++			     struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	vport->fdmi_num_disc = lpfc_find_map_node(vport);
++	ae->un.AttrInt = cpu_to_be32(vport->fdmi_num_disc);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_DISC_PORT);
++	return size;
++}
++
++int
++lpfc_fdmi_port_attr_nportid(struct lpfc_vport *vport,
++			    struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	ae->un.AttrInt =  cpu_to_be32(vport->fc_myDID);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_PORT_ID);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_service(struct lpfc_vport *vport,
++			     struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, "Smart SAN Initiator",
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_SERVICE);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_guid(struct lpfc_vport *vport,
++			  struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	memcpy(&ae->un.AttrString, &vport->fc_sparam.nodeName,
++	       sizeof(struct lpfc_name));
++	memcpy((((uint8_t *)&ae->un.AttrString) +
++		sizeof(struct lpfc_name)),
++		&vport->fc_sparam.portName, sizeof(struct lpfc_name));
++	size = FOURBYTES + (2 * sizeof(struct lpfc_name));
++	ad->AttrLen =  cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_GUID);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_version(struct lpfc_vport *vport,
++			     struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, "Smart SAN Version 1.0",
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString,
++			  sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen =  cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_VERSION);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_model(struct lpfc_vport *vport,
++			   struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t len, size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	memset(ae, 0, 256);
++
++	strncpy(ae->un.AttrString, phba->ModelName,
++		sizeof(ae->un.AttrString));
++	len = strnlen(ae->un.AttrString, sizeof(ae->un.AttrString));
++	len += (len & 3) ? (4 - (len & 3)) : 4;
++	size = FOURBYTES + len;
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_MODEL);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_port_info(struct lpfc_vport *vport,
++			       struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++
++	/* SRIOV (type 3) is not supported */
++	if (vport->vpi)
++		ae->un.AttrInt =  cpu_to_be32(2);  /* NPIV */
++	else
++		ae->un.AttrInt =  cpu_to_be32(1);  /* Physical */
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_PORT_INFO);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_qos(struct lpfc_vport *vport,
++			 struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	ae->un.AttrInt =  cpu_to_be32(0);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_QOS);
++	return size;
++}
++
++int
++lpfc_fdmi_smart_attr_security(struct lpfc_vport *vport,
++			      struct lpfc_fdmi_attr_def *ad)
++{
++	struct lpfc_fdmi_attr_entry *ae;
++	uint32_t size;
++
++	ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
++	ae->un.AttrInt =  cpu_to_be32(0);
++	size = FOURBYTES + sizeof(uint32_t);
++	ad->AttrLen = cpu_to_be16(size);
++	ad->AttrType = cpu_to_be16(RPRT_SMART_SECURITY);
++	return size;
+ }
+ 
++/* RHBA attribute jump table */
++int (*lpfc_fdmi_hba_action[])
++	(struct lpfc_vport *vport, struct lpfc_fdmi_attr_def *ad) = {
++	/* Action routine                 Mask bit     Attribute type */
++	lpfc_fdmi_hba_attr_wwnn,	  /* bit0     RHBA_NODENAME           */
++	lpfc_fdmi_hba_attr_manufacturer,  /* bit1     RHBA_MANUFACTURER       */
++	lpfc_fdmi_hba_attr_sn,		  /* bit2     RHBA_SERIAL_NUMBER      */
++	lpfc_fdmi_hba_attr_model,	  /* bit3     RHBA_MODEL              */
++	lpfc_fdmi_hba_attr_description,	  /* bit4     RHBA_MODEL_DESCRIPTION  */
++	lpfc_fdmi_hba_attr_hdw_ver,	  /* bit5     RHBA_HARDWARE_VERSION   */
++	lpfc_fdmi_hba_attr_drvr_ver,	  /* bit6     RHBA_DRIVER_VERSION     */
++	lpfc_fdmi_hba_attr_rom_ver,	  /* bit7     RHBA_OPTION_ROM_VERSION */
++	lpfc_fdmi_hba_attr_fmw_ver,	  /* bit8     RHBA_FIRMWARE_VERSION   */
++	lpfc_fdmi_hba_attr_os_ver,	  /* bit9     RHBA_OS_NAME_VERSION    */
++	lpfc_fdmi_hba_attr_ct_len,	  /* bit10    RHBA_MAX_CT_PAYLOAD_LEN */
++	lpfc_fdmi_hba_attr_symbolic_name, /* bit11    RHBA_SYM_NODENAME       */
++	lpfc_fdmi_hba_attr_vendor_info,	  /* bit12    RHBA_VENDOR_INFO        */
++	lpfc_fdmi_hba_attr_num_ports,	  /* bit13    RHBA_NUM_PORTS          */
++	lpfc_fdmi_hba_attr_fabric_wwnn,	  /* bit14    RHBA_FABRIC_WWNN        */
++	lpfc_fdmi_hba_attr_bios_ver,	  /* bit15    RHBA_BIOS_VERSION       */
++	lpfc_fdmi_hba_attr_bios_state,	  /* bit16    RHBA_BIOS_STATE         */
++	lpfc_fdmi_hba_attr_vendor_id,	  /* bit17    RHBA_VENDOR_ID          */
++};
++
++/* RPA / RPRT attribute jump table */
++int (*lpfc_fdmi_port_action[])
++	(struct lpfc_vport *vport, struct lpfc_fdmi_attr_def *ad) = {
++	/* Action routine                   Mask bit   Attribute type */
++	lpfc_fdmi_port_attr_fc4type,        /* bit0   RPRT_SUPPORT_FC4_TYPES  */
++	lpfc_fdmi_port_attr_support_speed,  /* bit1   RPRT_SUPPORTED_SPEED    */
++	lpfc_fdmi_port_attr_speed,          /* bit2   RPRT_PORT_SPEED         */
++	lpfc_fdmi_port_attr_max_frame,      /* bit3   RPRT_MAX_FRAME_SIZE     */
++	lpfc_fdmi_port_attr_os_devname,     /* bit4   RPRT_OS_DEVICE_NAME     */
++	lpfc_fdmi_port_attr_host_name,      /* bit5   RPRT_HOST_NAME          */
++	lpfc_fdmi_port_attr_wwnn,           /* bit6   RPRT_NODENAME           */
++	lpfc_fdmi_port_attr_wwpn,           /* bit7   RPRT_PORTNAME           */
++	lpfc_fdmi_port_attr_symbolic_name,  /* bit8   RPRT_SYM_PORTNAME       */
++	lpfc_fdmi_port_attr_port_type,      /* bit9   RPRT_PORT_TYPE          */
++	lpfc_fdmi_port_attr_class,          /* bit10  RPRT_SUPPORTED_CLASS    */
++	lpfc_fdmi_port_attr_fabric_wwpn,    /* bit11  RPRT_FABRICNAME         */
++	lpfc_fdmi_port_attr_active_fc4type, /* bit12  RPRT_ACTIVE_FC4_TYPES   */
++	lpfc_fdmi_port_attr_port_state,     /* bit13  RPRT_PORT_STATE         */
++	lpfc_fdmi_port_attr_num_disc,       /* bit14  RPRT_DISC_PORT          */
++	lpfc_fdmi_port_attr_nportid,        /* bit15  RPRT_PORT_ID            */
++	lpfc_fdmi_smart_attr_service,       /* bit16  RPRT_SMART_SERVICE      */
++	lpfc_fdmi_smart_attr_guid,          /* bit17  RPRT_SMART_GUID         */
++	lpfc_fdmi_smart_attr_version,       /* bit18  RPRT_SMART_VERSION      */
++	lpfc_fdmi_smart_attr_model,         /* bit19  RPRT_SMART_MODEL        */
++	lpfc_fdmi_smart_attr_port_info,     /* bit20  RPRT_SMART_PORT_INFO    */
++	lpfc_fdmi_smart_attr_qos,           /* bit21  RPRT_SMART_QOS          */
++	lpfc_fdmi_smart_attr_security,      /* bit22  RPRT_SMART_SECURITY     */
++};
+ 
++/**
++ * lpfc_fdmi_cmd - Build and send a FDMI cmd to the specified NPort
++ * @vport: pointer to a host virtual N_Port data structure.
++ * @ndlp: ndlp to send FDMI cmd to (if NULL use FDMI_DID)
++ * cmdcode: FDMI command to send
++ * mask: Mask of HBA or PORT Attributes to send
++ *
++ * Builds and sends a FDMI command using the CT subsystem.
++ */
+ int
+-lpfc_fdmi_cmd(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp, int cmdcode)
++lpfc_fdmi_cmd(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
++	      int cmdcode, uint32_t new_mask)
+ {
+ 	struct lpfc_hba *phba = vport->phba;
+ 	struct lpfc_dmabuf *mp, *bmp;
+ 	struct lpfc_sli_ct_request *CtReq;
+ 	struct ulp_bde64 *bpl;
++	uint32_t bit_pos;
+ 	uint32_t size;
+ 	uint32_t rsp_size;
++	uint32_t mask;
+ 	struct lpfc_fdmi_reg_hba *rh;
+ 	struct lpfc_fdmi_port_entry *pe;
+ 	struct lpfc_fdmi_reg_portattr *pab = NULL;
+ 	struct lpfc_fdmi_attr_block *ab = NULL;
+-	struct lpfc_fdmi_attr_entry *ae;
+-	struct lpfc_fdmi_attr_def *ad;
+-	void (*cmpl) (struct lpfc_hba *, struct lpfc_iocbq *,
+-		      struct lpfc_iocbq *);
++	int  (*func)(struct lpfc_vport *vport, struct lpfc_fdmi_attr_def *ad);
++	void (*cmpl)(struct lpfc_hba *, struct lpfc_iocbq *,
++		     struct lpfc_iocbq *);
+ 
+-	if (ndlp == NULL) {
+-		ndlp = lpfc_findnode_did(vport, FDMI_DID);
+-		if (!ndlp || !NLP_CHK_NODE_ACT(ndlp))
+-			return 0;
+-		cmpl = lpfc_cmpl_ct_cmd_fdmi; /* cmd interface */
+-	} else {
+-		cmpl = lpfc_cmpl_ct_disc_fdmi; /* called from discovery */
+-	}
++	if (!ndlp || !NLP_CHK_NODE_ACT(ndlp))
++		return 0;
++
++	cmpl = lpfc_cmpl_ct_disc_fdmi; /* called from discovery */
+ 
+ 	/* fill in BDEs for command */
+ 	/* Allocate buffer for command payload */
+@@ -1470,573 +2485,99 @@ lpfc_fdmi_cmd(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp, int cmdcode)
+ 	switch (cmdcode) {
+ 	case SLI_MGMT_RHAT:
+ 	case SLI_MGMT_RHBA:
+-		{
+-			lpfc_vpd_t *vp = &phba->vpd;
+-			uint32_t i, j, incr;
+-			int len = 0;
++		rh = (struct lpfc_fdmi_reg_hba *)&CtReq->un.PortID;
++		/* HBA Identifier */
++		memcpy(&rh->hi.PortName, &phba->pport->fc_sparam.portName,
++		       sizeof(struct lpfc_name));
+ 
+-			rh = (struct lpfc_fdmi_reg_hba *)&CtReq->un.PortID;
+-			/* HBA Identifier */
+-			memcpy(&rh->hi.PortName, &vport->fc_sparam.portName,
++		if (cmdcode == SLI_MGMT_RHBA) {
++			/* Registered Port List */
++			/* One entry (port) per adapter */
++			rh->rpl.EntryCnt = cpu_to_be32(1);
++			memcpy(&rh->rpl.pe, &phba->pport->fc_sparam.portName,
+ 			       sizeof(struct lpfc_name));
+ 
+-			if (cmdcode == SLI_MGMT_RHBA) {
+-				/* Registered Port List */
+-				/* One entry (port) per adapter */
+-				rh->rpl.EntryCnt = cpu_to_be32(1);
+-				memcpy(&rh->rpl.pe, &vport->fc_sparam.portName,
+-				       sizeof(struct lpfc_name));
+-
+-				/* point to the HBA attribute block */
+-				size = 2 * sizeof(struct lpfc_name) +
+-					FOURBYTES;
+-			} else {
+-				size = sizeof(struct lpfc_name);
+-			}
+-			ab = (struct lpfc_fdmi_attr_block *)
+-				((uint8_t *)rh + size);
+-			ab->EntryCnt = 0;
+-			size += FOURBYTES;
+-
+-			/*
+-			 * Point to beginning of first HBA attribute entry
+-			 */
+-			/* #1 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(struct lpfc_name));
+-			ad->AttrType = cpu_to_be16(RHBA_NODENAME);
+-			ad->AttrLen =  cpu_to_be16(FOURBYTES
+-						+ sizeof(struct lpfc_name));
+-			memcpy(&ae->un.NodeName, &vport->fc_sparam.nodeName,
+-			       sizeof(struct lpfc_name));
+-			ab->EntryCnt++;
+-			size += FOURBYTES + sizeof(struct lpfc_name);
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #2 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.Manufacturer));
+-			ad->AttrType = cpu_to_be16(RHBA_MANUFACTURER);
+-			strncpy(ae->un.Manufacturer, "Emulex Corporation",
+-				sizeof(ae->un.Manufacturer));
+-			len = strnlen(ae->un.Manufacturer,
+-					  sizeof(ae->un.Manufacturer));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #3 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.SerialNumber));
+-			ad->AttrType = cpu_to_be16(RHBA_SERIAL_NUMBER);
+-			strncpy(ae->un.SerialNumber, phba->SerialNumber,
+-				sizeof(ae->un.SerialNumber));
+-			len = strnlen(ae->un.SerialNumber,
+-					  sizeof(ae->un.SerialNumber));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #4 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.Model));
+-			ad->AttrType = cpu_to_be16(RHBA_MODEL);
+-			strncpy(ae->un.Model, phba->ModelName,
+-				sizeof(ae->un.Model));
+-			len = strnlen(ae->un.Model, sizeof(ae->un.Model));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #5 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.ModelDescription));
+-			ad->AttrType = cpu_to_be16(RHBA_MODEL_DESCRIPTION);
+-			strncpy(ae->un.ModelDescription, phba->ModelDesc,
+-				sizeof(ae->un.ModelDescription));
+-			len = strnlen(ae->un.ModelDescription,
+-					  sizeof(ae->un.ModelDescription));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + 8) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #6 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, 8);
+-			ad->AttrType = cpu_to_be16(RHBA_HARDWARE_VERSION);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 8);
+-			/* Convert JEDEC ID to ascii for hardware version */
+-			incr = vp->rev.biuRev;
+-			for (i = 0; i < 8; i++) {
+-				j = (incr & 0xf);
+-				if (j <= 9)
+-					ae->un.HardwareVersion[7 - i] =
+-					    (char)((uint8_t)0x30 +
+-						   (uint8_t)j);
+-				else
+-					ae->un.HardwareVersion[7 - i] =
+-					    (char)((uint8_t)0x61 +
+-						   (uint8_t)(j - 10));
+-				incr = (incr >> 4);
++			/* point to the HBA attribute block */
++			size = 2 * sizeof(struct lpfc_name) +
++				FOURBYTES;
++		} else {
++			size = sizeof(struct lpfc_name);
++		}
++		ab = (struct lpfc_fdmi_attr_block *)((uint8_t *)rh + size);
++		ab->EntryCnt = 0;
++		size += FOURBYTES;
++		bit_pos = 0;
++		if (new_mask)
++			mask = new_mask;
++		else
++			mask = vport->fdmi_hba_mask;
++
++		/* Mask will dictate what attributes to build in the request */
++		while (mask) {
++			if (mask & 0x1) {
++				func = lpfc_fdmi_hba_action[bit_pos];
++				size += func(vport,
++					     (struct lpfc_fdmi_attr_def *)
++					     ((uint8_t *)rh + size));
++				ab->EntryCnt++;
++				if ((size + 256) >
++				    (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
++					goto hba_out;
+ 			}
+-			ab->EntryCnt++;
+-			size += FOURBYTES + 8;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #7 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.DriverVersion));
+-			ad->AttrType = cpu_to_be16(RHBA_DRIVER_VERSION);
+-			strncpy(ae->un.DriverVersion, lpfc_release_version,
+-				sizeof(ae->un.DriverVersion));
+-			len = strnlen(ae->un.DriverVersion,
+-					sizeof(ae->un.DriverVersion));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #8 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.OptionROMVersion));
+-			ad->AttrType = cpu_to_be16(RHBA_OPTION_ROM_VERSION);
+-			strncpy(ae->un.OptionROMVersion, phba->OptionROMVersion,
+-				sizeof(ae->un.OptionROMVersion));
+-			len = strnlen(ae->un.OptionROMVersion,
+-				      sizeof(ae->un.OptionROMVersion));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #9 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.FirmwareVersion));
+-			ad->AttrType = cpu_to_be16(RHBA_FIRMWARE_VERSION);
+-			lpfc_decode_firmware_rev(phba, ae->un.FirmwareVersion,
+-				1);
+-			len = strnlen(ae->un.FirmwareVersion,
+-					sizeof(ae->un.FirmwareVersion));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #10 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.OsNameVersion));
+-			ad->AttrType = cpu_to_be16(RHBA_OS_NAME_VERSION);
+-			snprintf(ae->un.OsNameVersion,
+-				 sizeof(ae->un.OsNameVersion),
+-				 "%s %s %s",
+-				 init_utsname()->sysname,
+-				 init_utsname()->release,
+-				 init_utsname()->version);
+-			len = strnlen(ae->un.OsNameVersion,
+-				      sizeof(ae->un.OsNameVersion));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + 4) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/* #11 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType =
+-				cpu_to_be16(RHBA_MAX_CT_PAYLOAD_LEN);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			ae->un.MaxCTPayloadLen = cpu_to_be32(LPFC_MAX_CT_SIZE);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + 4;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto hba_out;
+-
+-			/*
+-			 * Currently switches don't seem to support the
+-			 * following extended HBA attributes.
+-			 */
+-			if (!(vport->cfg_fdmi_on & LPFC_FDMI_ALL_ATTRIB))
+-				goto hba_out;
+-
+-			/* #12 HBA attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)rh + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.NodeSymName));
+-			ad->AttrType = cpu_to_be16(RHBA_SYM_NODENAME);
+-			len = lpfc_vport_symbolic_node_name(vport,
+-				ae->un.NodeSymName, sizeof(ae->un.NodeSymName));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			ab->EntryCnt++;
+-			size += FOURBYTES + len;
+-hba_out:
+-			ab->EntryCnt = cpu_to_be32(ab->EntryCnt);
+-			/* Total size */
+-			size = GID_REQUEST_SZ - 4 + size;
++			mask = mask >> 1;
++			bit_pos++;
+ 		}
++hba_out:
++		ab->EntryCnt = cpu_to_be32(ab->EntryCnt);
++		/* Total size */
++		size = GID_REQUEST_SZ - 4 + size;
+ 		break;
+ 
+ 	case SLI_MGMT_RPRT:
+ 	case SLI_MGMT_RPA:
+-		{
+-			struct serv_parm *hsp;
+-			int len = 0;
+-
+-			if (cmdcode == SLI_MGMT_RPRT) {
+-				rh = (struct lpfc_fdmi_reg_hba *)
+-					&CtReq->un.PortID;
+-				/* HBA Identifier */
+-				memcpy(&rh->hi.PortName,
+-				       &vport->fc_sparam.portName,
+-				       sizeof(struct lpfc_name));
+-				pab = (struct lpfc_fdmi_reg_portattr *)
+-					&rh->rpl.EntryCnt;
+-			} else
+-				pab = (struct lpfc_fdmi_reg_portattr *)
+-					&CtReq->un.PortID;
+-			size = sizeof(struct lpfc_name) + FOURBYTES;
+-			memcpy((uint8_t *)&pab->PortName,
+-			       (uint8_t *)&vport->fc_sparam.portName,
++		pab = (struct lpfc_fdmi_reg_portattr *)&CtReq->un.PortID;
++		if (cmdcode == SLI_MGMT_RPRT) {
++			rh = (struct lpfc_fdmi_reg_hba *)pab;
++			/* HBA Identifier */
++			memcpy(&rh->hi.PortName,
++			       &phba->pport->fc_sparam.portName,
+ 			       sizeof(struct lpfc_name));
+-			pab->ab.EntryCnt = 0;
+-
+-			/* #1 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.FC4Types));
+-			ad->AttrType =
+-				cpu_to_be16(RPRT_SUPPORTED_FC4_TYPES);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 32);
+-			ae->un.FC4Types[0] = 0x40; /* Type 1 - ELS */
+-			ae->un.FC4Types[1] = 0x80; /* Type 8 - FCP */
+-			ae->un.FC4Types[4] = 0x80; /* Type 32 - CT */
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 32;
+-
+-			/* #2 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_SUPPORTED_SPEED);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			ae->un.SupportSpeed = 0;
+-			if (phba->lmt & LMT_32Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_32GBIT;
+-			if (phba->lmt & LMT_16Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_16GBIT;
+-			if (phba->lmt & LMT_10Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_10GBIT;
+-			if (phba->lmt & LMT_8Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_8GBIT;
+-			if (phba->lmt & LMT_4Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_4GBIT;
+-			if (phba->lmt & LMT_2Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_2GBIT;
+-			if (phba->lmt & LMT_1Gb)
+-				ae->un.SupportSpeed |= HBA_PORTSPEED_1GBIT;
+-			ae->un.SupportSpeed =
+-				cpu_to_be32(ae->un.SupportSpeed);
+-
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-
+-			/* #3 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_PORT_SPEED);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			switch (phba->fc_linkspeed) {
+-			case LPFC_LINK_SPEED_1GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_1GBIT;
+-				break;
+-			case LPFC_LINK_SPEED_2GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_2GBIT;
+-				break;
+-			case LPFC_LINK_SPEED_4GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_4GBIT;
+-				break;
+-			case LPFC_LINK_SPEED_8GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_8GBIT;
+-				break;
+-			case LPFC_LINK_SPEED_10GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_10GBIT;
+-				break;
+-			case LPFC_LINK_SPEED_16GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_16GBIT;
+-				break;
+-			case LPFC_LINK_SPEED_32GHZ:
+-				ae->un.PortSpeed = HBA_PORTSPEED_32GBIT;
+-				break;
+-			default:
+-				ae->un.PortSpeed = HBA_PORTSPEED_UNKNOWN;
+-				break;
+-			}
+-			ae->un.PortSpeed = cpu_to_be32(ae->un.PortSpeed);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-
+-			/* #4 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_MAX_FRAME_SIZE);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			hsp = (struct serv_parm *)&vport->fc_sparam;
+-			ae->un.MaxFrameSize =
+-			    (((uint32_t)hsp->cmn.
+-			      bbRcvSizeMsb) << 8) | (uint32_t)hsp->cmn.
+-			    bbRcvSizeLsb;
+-			ae->un.MaxFrameSize =
+-				cpu_to_be32(ae->un.MaxFrameSize);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #5 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.OsDeviceName));
+-			ad->AttrType = cpu_to_be16(RPRT_OS_DEVICE_NAME);
+-			strncpy((char *)ae->un.OsDeviceName, LPFC_DRIVER_NAME,
+-				sizeof(ae->un.OsDeviceName));
+-			len = strnlen((char *)ae->un.OsDeviceName,
+-					  sizeof(ae->un.OsDeviceName));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #6 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.HostName));
+-			snprintf(ae->un.HostName, sizeof(ae->un.HostName), "%s",
+-				 init_utsname()->nodename);
+-			ad->AttrType = cpu_to_be16(RPRT_HOST_NAME);
+-			len = strnlen(ae->un.HostName,
+-					sizeof(ae->un.HostName));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen =
+-				cpu_to_be16(FOURBYTES + len);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + sizeof(struct lpfc_name)) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
++			pab = (struct lpfc_fdmi_reg_portattr *)
++				((uint8_t *)pab +  sizeof(struct lpfc_name));
++		}
+ 
+-			/*
+-			 * Currently switches don't seem to support the
+-			 * following extended Port attributes.
+-			 */
+-			if (!(vport->cfg_fdmi_on & LPFC_FDMI_ALL_ATTRIB))
+-				goto port_out;
+-
+-			/* #7 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0,  sizeof(struct lpfc_name));
+-			ad->AttrType = cpu_to_be16(RPRT_NODENAME);
+-			ad->AttrLen =  cpu_to_be16(FOURBYTES
+-						+ sizeof(struct lpfc_name));
+-			memcpy(&ae->un.NodeName, &vport->fc_sparam.nodeName,
+-			       sizeof(struct lpfc_name));
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + sizeof(struct lpfc_name);
+-			if ((size + sizeof(struct lpfc_name)) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #8 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0,  sizeof(struct lpfc_name));
+-			ad->AttrType = cpu_to_be16(RPRT_PORTNAME);
+-			ad->AttrLen =  cpu_to_be16(FOURBYTES
+-						+ sizeof(struct lpfc_name));
+-			memcpy(&ae->un.PortName, &vport->fc_sparam.portName,
+-			       sizeof(struct lpfc_name));
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + sizeof(struct lpfc_name);
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #9 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.NodeSymName));
+-			ad->AttrType = cpu_to_be16(RPRT_SYM_PORTNAME);
+-			len = lpfc_vport_symbolic_port_name(vport,
+-				ae->un.NodeSymName, sizeof(ae->un.NodeSymName));
+-			len += (len & 3) ? (4 - (len & 3)) : 4;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + len);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + len;
+-			if ((size + 4) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #10 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_PORT_TYPE);
+-			ae->un.PortState = 0;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-			if ((size + 4) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #11 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_SUPPORTED_CLASS);
+-			ae->un.SupportClass =
+-				cpu_to_be32(FC_COS_CLASS2 | FC_COS_CLASS3);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-			if ((size + sizeof(struct lpfc_name)) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #12 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(struct lpfc_name));
+-			ad->AttrType = cpu_to_be16(RPRT_FABRICNAME);
+-			ad->AttrLen =  cpu_to_be16(FOURBYTES
+-						+ sizeof(struct lpfc_name));
+-			memcpy(&ae->un.FabricName, &vport->fabric_nodename,
+-			       sizeof(struct lpfc_name));
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + sizeof(struct lpfc_name);
+-			if ((size + LPFC_FDMI_MAX_AE_SIZE) >
+-					(LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #13 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			memset(ae, 0, sizeof(ae->un.FC4Types));
+-			ad->AttrType =
+-				cpu_to_be16(RPRT_ACTIVE_FC4_TYPES);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 32);
+-			ae->un.FC4Types[0] = 0x40; /* Type 1 - ELS */
+-			ae->un.FC4Types[1] = 0x80; /* Type 8 - FCP */
+-			ae->un.FC4Types[4] = 0x80; /* Type 32 - CT */
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 32;
+-			if ((size + 4) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #257 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_PORT_STATE);
+-			ae->un.PortState = 0;
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-			if ((size + 4) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #258 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_DISC_PORT);
+-			ae->un.PortState = lpfc_find_map_node(vport);
+-			ae->un.PortState = cpu_to_be32(ae->un.PortState);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-			if ((size + 4) > (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
+-				goto port_out;
+-
+-			/* #259 Port attribute entry */
+-			ad = (struct lpfc_fdmi_attr_def *)
+-				((uint8_t *)pab + size);
+-			ae = (struct lpfc_fdmi_attr_entry *)&ad->AttrValue;
+-			ad->AttrType = cpu_to_be16(RPRT_PORT_ID);
+-			ae->un.PortId =  cpu_to_be32(vport->fc_myDID);
+-			ad->AttrLen = cpu_to_be16(FOURBYTES + 4);
+-			pab->ab.EntryCnt++;
+-			size += FOURBYTES + 4;
+-port_out:
+-			pab->ab.EntryCnt = cpu_to_be32(pab->ab.EntryCnt);
+-			/* Total size */
+-			size = GID_REQUEST_SZ - 4 + size;
++		memcpy((uint8_t *)&pab->PortName,
++		       (uint8_t *)&vport->fc_sparam.portName,
++		       sizeof(struct lpfc_name));
++		size += sizeof(struct lpfc_name) + FOURBYTES;
++		pab->ab.EntryCnt = 0;
++		bit_pos = 0;
++		if (new_mask)
++			mask = new_mask;
++		else
++			mask = vport->fdmi_port_mask;
++
++		/* Mask will dictate what attributes to build in the request */
++		while (mask) {
++			if (mask & 0x1) {
++				func = lpfc_fdmi_port_action[bit_pos];
++				size += func(vport,
++					     (struct lpfc_fdmi_attr_def *)
++					     ((uint8_t *)pab + size));
++				pab->ab.EntryCnt++;
++				if ((size + 256) >
++				    (LPFC_BPL_SIZE - LPFC_CT_PREAMBLE))
++					goto port_out;
++			}
++			mask = mask >> 1;
++			bit_pos++;
+ 		}
++port_out:
++		pab->ab.EntryCnt = cpu_to_be32(pab->ab.EntryCnt);
++		/* Total size */
++		if (cmdcode == SLI_MGMT_RPRT)
++			size += sizeof(struct lpfc_name);
++		size = GID_REQUEST_SZ - 4 + size;
+ 		break;
+ 
+ 	case SLI_MGMT_GHAT:
+@@ -2158,41 +2699,6 @@ lpfc_delayed_disc_timeout_handler(struct lpfc_vport *vport)
+ }
+ 
+ void
+-lpfc_fdmi_tmo(unsigned long ptr)
+-{
+-	struct lpfc_vport *vport = (struct lpfc_vport *)ptr;
+-	struct lpfc_hba   *phba = vport->phba;
+-	uint32_t tmo_posted;
+-	unsigned long iflag;
+-
+-	spin_lock_irqsave(&vport->work_port_lock, iflag);
+-	tmo_posted = vport->work_port_events & WORKER_FDMI_TMO;
+-	if (!tmo_posted)
+-		vport->work_port_events |= WORKER_FDMI_TMO;
+-	spin_unlock_irqrestore(&vport->work_port_lock, iflag);
+-
+-	if (!tmo_posted)
+-		lpfc_worker_wake_up(phba);
+-	return;
+-}
+-
+-void
+-lpfc_fdmi_timeout_handler(struct lpfc_vport *vport)
+-{
+-	struct lpfc_nodelist *ndlp;
+-
+-	ndlp = lpfc_findnode_did(vport, FDMI_DID);
+-	if (ndlp && NLP_CHK_NODE_ACT(ndlp)) {
+-		if (init_utsname()->nodename[0] != '\0')
+-			lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DHBA);
+-		else
+-			mod_timer(&vport->fc_fdmitmo, jiffies +
+-				  msecs_to_jiffies(1000 * 60));
+-	}
+-	return;
+-}
+-
+-void
+ lpfc_decode_firmware_rev(struct lpfc_hba *phba, char *fwrevision, int flag)
+ {
+ 	struct lpfc_sli *psli = &phba->sli;
+diff --git a/drivers/scsi/lpfc/lpfc_els.c b/drivers/scsi/lpfc/lpfc_els.c
+index d508378..3394648 100644
+--- a/drivers/scsi/lpfc/lpfc_els.c
++++ b/drivers/scsi/lpfc/lpfc_els.c
+@@ -688,6 +688,21 @@ lpfc_cmpl_els_flogi_fabric(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
+ 				sp->cmn.bbRcvSizeLsb;
+ 
+ 	fabric_param_changed = lpfc_check_clean_addr_bit(vport, sp);
++	if (fabric_param_changed) {
++		/* Reset FDMI attribute masks based on config parameter */
++		if (phba->cfg_fdmi_on == LPFC_FDMI_NO_SUPPORT) {
++			vport->fdmi_hba_mask = 0;
++			vport->fdmi_port_mask = 0;
++		} else {
++			/* Setup appropriate attribute masks */
++			vport->fdmi_hba_mask = LPFC_FDMI2_HBA_ATTR;
++			if (phba->cfg_fdmi_on == LPFC_FDMI_SMART_SAN)
++				vport->fdmi_port_mask = LPFC_FDMI2_SMART_ATTR;
++			else
++				vport->fdmi_port_mask = LPFC_FDMI2_PORT_ATTR;
++		}
++
++	}
+ 	memcpy(&vport->fabric_portname, &sp->portName,
+ 			sizeof(struct lpfc_name));
+ 	memcpy(&vport->fabric_nodename, &sp->nodeName,
+@@ -4690,6 +4705,23 @@ lpfc_rdp_res_link_error(struct fc_rdp_link_error_status_desc *desc,
+ 	desc->length = cpu_to_be32(sizeof(desc->info));
+ }
+ 
++int
++lpfc_rdp_res_fec_desc(struct fc_fec_rdp_desc *desc, READ_LNK_VAR *stat)
++{
++	if (bf_get(lpfc_read_link_stat_gec2, stat) == 0)
++		return 0;
++	desc->tag = cpu_to_be32(RDP_FEC_DESC_TAG);
++
++	desc->info.CorrectedBlocks =
++		cpu_to_be32(stat->fecCorrBlkCount);
++	desc->info.UncorrectableBlocks =
++		cpu_to_be32(stat->fecUncorrBlkCount);
++
++	desc->length = cpu_to_be32(sizeof(desc->info));
++
++	return sizeof(struct fc_fec_rdp_desc);
++}
++
+ void
+ lpfc_rdp_res_speed(struct fc_rdp_port_speed_desc *desc, struct lpfc_hba *phba)
+ {
+@@ -4800,7 +4832,7 @@ lpfc_els_rdp_cmpl(struct lpfc_hba *phba, struct lpfc_rdp_context *rdp_context,
+ 	struct ls_rjt *stat;
+ 	struct fc_rdp_res_frame *rdp_res;
+ 	uint32_t cmdsize;
+-	int rc;
++	int rc, fec_size;
+ 
+ 	if (status != SUCCESS)
+ 		goto error;
+@@ -4840,8 +4872,9 @@ lpfc_els_rdp_cmpl(struct lpfc_hba *phba, struct lpfc_rdp_context *rdp_context,
+ 	lpfc_rdp_res_diag_port_names(&rdp_res->diag_port_names_desc, phba);
+ 	lpfc_rdp_res_attach_port_names(&rdp_res->attached_port_names_desc,
+ 			vport, ndlp);
+-	rdp_res->length = cpu_to_be32(RDP_DESC_PAYLOAD_SIZE);
+-
++	fec_size = lpfc_rdp_res_fec_desc(&rdp_res->fec_desc,
++			&rdp_context->link_stat);
++	rdp_res->length = cpu_to_be32(fec_size + RDP_DESC_PAYLOAD_SIZE);
+ 	elsiocb->iocb_cmpl = lpfc_cmpl_els_rsp;
+ 
+ 	phba->fc_stat.elsXmitACC++;
+@@ -7704,6 +7737,35 @@ lpfc_els_unsol_event(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
+ 	}
+ }
+ 
++void
++lpfc_start_fdmi(struct lpfc_vport *vport)
++{
++	struct lpfc_hba *phba = vport->phba;
++	struct lpfc_nodelist *ndlp;
++
++	/* If this is the first time, allocate an ndlp and initialize
++	 * it. Otherwise, make sure the node is enabled and then do the
++	 * login.
++	 */
++	ndlp = lpfc_findnode_did(vport, FDMI_DID);
++	if (!ndlp) {
++		ndlp = mempool_alloc(phba->nlp_mem_pool, GFP_KERNEL);
++		if (ndlp) {
++			lpfc_nlp_init(vport, ndlp, FDMI_DID);
++			ndlp->nlp_type |= NLP_FABRIC;
++		} else {
++			return;
++		}
++	}
++	if (!NLP_CHK_NODE_ACT(ndlp))
++		ndlp = lpfc_enable_node(vport, ndlp, NLP_STE_NPR_NODE);
++
++	if (ndlp) {
++		lpfc_nlp_set_state(vport, ndlp, NLP_STE_PLOGI_ISSUE);
++		lpfc_issue_els_plogi(vport, ndlp->nlp_DID, 0);
++	}
++}
++
+ /**
+  * lpfc_do_scr_ns_plogi - Issue a plogi to the name server for scr
+  * @phba: pointer to lpfc hba data structure.
+@@ -7720,7 +7782,7 @@ lpfc_els_unsol_event(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
+ void
+ lpfc_do_scr_ns_plogi(struct lpfc_hba *phba, struct lpfc_vport *vport)
+ {
+-	struct lpfc_nodelist *ndlp, *ndlp_fdmi;
++	struct lpfc_nodelist *ndlp;
+ 	struct Scsi_Host *shost = lpfc_shost_from_vport(vport);
+ 
+ 	/*
+@@ -7778,32 +7840,9 @@ lpfc_do_scr_ns_plogi(struct lpfc_hba *phba, struct lpfc_vport *vport)
+ 		return;
+ 	}
+ 
+-	if (vport->cfg_fdmi_on & LPFC_FDMI_SUPPORT) {
+-		/* If this is the first time, allocate an ndlp and initialize
+-		 * it. Otherwise, make sure the node is enabled and then do the
+-		 * login.
+-		 */
+-		ndlp_fdmi = lpfc_findnode_did(vport, FDMI_DID);
+-		if (!ndlp_fdmi) {
+-			ndlp_fdmi = mempool_alloc(phba->nlp_mem_pool,
+-						  GFP_KERNEL);
+-			if (ndlp_fdmi) {
+-				lpfc_nlp_init(vport, ndlp_fdmi, FDMI_DID);
+-				ndlp_fdmi->nlp_type |= NLP_FABRIC;
+-			} else
+-				return;
+-		}
+-		if (!NLP_CHK_NODE_ACT(ndlp_fdmi))
+-			ndlp_fdmi = lpfc_enable_node(vport,
+-						     ndlp_fdmi,
+-						     NLP_STE_NPR_NODE);
+-
+-		if (ndlp_fdmi) {
+-			lpfc_nlp_set_state(vport, ndlp_fdmi,
+-					   NLP_STE_PLOGI_ISSUE);
+-			lpfc_issue_els_plogi(vport, ndlp_fdmi->nlp_DID, 0);
+-		}
+-	}
++	if ((phba->cfg_fdmi_on > LPFC_FDMI_NO_SUPPORT) &&
++	    (vport->load_flag & FC_ALLOW_FDMI))
++		lpfc_start_fdmi(vport);
+ }
+ 
+ /**
+diff --git a/drivers/scsi/lpfc/lpfc_hbadisc.c b/drivers/scsi/lpfc/lpfc_hbadisc.c
+index d3668aa..1bad678 100644
+--- a/drivers/scsi/lpfc/lpfc_hbadisc.c
++++ b/drivers/scsi/lpfc/lpfc_hbadisc.c
+@@ -674,8 +674,6 @@ lpfc_work_done(struct lpfc_hba *phba)
+ 				lpfc_mbox_timeout_handler(phba);
+ 			if (work_port_events & WORKER_FABRIC_BLOCK_TMO)
+ 				lpfc_unblock_fabric_iocbs(phba);
+-			if (work_port_events & WORKER_FDMI_TMO)
+-				lpfc_fdmi_timeout_handler(vport);
+ 			if (work_port_events & WORKER_RAMP_DOWN_QUEUE)
+ 				lpfc_ramp_down_queue_handler(phba);
+ 			if (work_port_events & WORKER_DELAYED_DISC_TMO)
+@@ -5554,15 +5552,15 @@ lpfc_mbx_cmpl_fdmi_reg_login(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
+ 			 ndlp->nlp_usg_map, ndlp);
+ 	/*
+ 	 * Start issuing Fabric-Device Management Interface (FDMI) command to
+-	 * 0xfffffa (FDMI well known port) or Delay issuing FDMI command if
+-	 * fdmi-on=2 (supporting RPA/hostnmae)
++	 * 0xfffffa (FDMI well known port).
++	 * DHBA -> DPRT -> RHBA -> RPA  (physical port)
++	 * DPRT -> RPRT (vports)
+ 	 */
+-
+-	if (vport->cfg_fdmi_on & LPFC_FDMI_REG_DELAY)
+-		mod_timer(&vport->fc_fdmitmo,
+-			  jiffies + msecs_to_jiffies(1000 * 60));
++	if (vport->port_type == LPFC_PHYSICAL_PORT)
++		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DHBA, 0);
+ 	else
+-		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DHBA);
++		lpfc_fdmi_cmd(vport, ndlp, SLI_MGMT_DPRT, 0);
++
+ 
+ 	/* decrement the node reference count held for this callback
+ 	 * function.
+diff --git a/drivers/scsi/lpfc/lpfc_hw.h b/drivers/scsi/lpfc/lpfc_hw.h
+index 2cce88e..dd20412 100644
+--- a/drivers/scsi/lpfc/lpfc_hw.h
++++ b/drivers/scsi/lpfc/lpfc_hw.h
+@@ -1097,6 +1097,18 @@ struct fc_rdp_port_name_desc {
+ };
+ 
+ 
++struct fc_rdp_fec_info {
++	uint32_t CorrectedBlocks;
++	uint32_t UncorrectableBlocks;
++};
++
++#define RDP_FEC_DESC_TAG  0x00010005
++struct fc_fec_rdp_desc {
++	uint32_t tag;
++	uint32_t length;
++	struct fc_rdp_fec_info info;
++};
++
+ struct fc_rdp_link_error_status_payload_info {
+ 	struct fc_link_status link_status; /* 24 bytes */
+ 	uint32_t  port_type;             /* bits 31-30 only */
+@@ -1196,14 +1208,15 @@ struct fc_rdp_res_frame {
+ 	struct fc_rdp_link_error_status_desc link_error_desc; /* Word 13-21 */
+ 	struct fc_rdp_port_name_desc diag_port_names_desc;    /* Word 22-27 */
+ 	struct fc_rdp_port_name_desc attached_port_names_desc;/* Word 28-33 */
++	struct fc_fec_rdp_desc fec_desc;	      /* FC Word 34 - 37 */
+ };
+ 
+ 
+ #define RDP_DESC_PAYLOAD_SIZE (sizeof(struct fc_rdp_link_service_desc) \
+-			+ sizeof(struct fc_rdp_sfp_desc) \
+-			+ sizeof(struct fc_rdp_port_speed_desc) \
+-			+ sizeof(struct fc_rdp_link_error_status_desc) \
+-			+ (sizeof(struct fc_rdp_port_name_desc) * 2))
++				+ sizeof(struct fc_rdp_sfp_desc) \
++				+ sizeof(struct fc_rdp_port_speed_desc) \
++				+ sizeof(struct fc_rdp_link_error_status_desc) \
++				+ (sizeof(struct fc_rdp_port_name_desc) * 2))
+ 
+ 
+ /******** FDMI ********/
+@@ -1233,31 +1246,10 @@ struct lpfc_fdmi_attr_def { /* Defined in TLV format */
+ /* Attribute Entry */
+ struct lpfc_fdmi_attr_entry {
+ 	union {
+-		uint32_t VendorSpecific;
+-		uint32_t SupportClass;
+-		uint32_t SupportSpeed;
+-		uint32_t PortSpeed;
+-		uint32_t MaxFrameSize;
+-		uint32_t MaxCTPayloadLen;
+-		uint32_t PortState;
+-		uint32_t PortId;
+-		struct lpfc_name NodeName;
+-		struct lpfc_name PortName;
+-		struct lpfc_name FabricName;
+-		uint8_t FC4Types[32];
+-		uint8_t Manufacturer[64];
+-		uint8_t SerialNumber[64];
+-		uint8_t Model[256];
+-		uint8_t ModelDescription[256];
+-		uint8_t HardwareVersion[256];
+-		uint8_t DriverVersion[256];
+-		uint8_t OptionROMVersion[256];
+-		uint8_t FirmwareVersion[256];
+-		uint8_t OsHostName[256];
+-		uint8_t NodeSymName[256];
+-		uint8_t OsDeviceName[256];
+-		uint8_t OsNameVersion[256];
+-		uint8_t HostName[256];
++		uint32_t AttrInt;
++		uint8_t  AttrTypes[32];
++		uint8_t  AttrString[256];
++		struct lpfc_name AttrWWN;
+ 	} un;
+ };
+ 
+@@ -1327,6 +1319,8 @@ struct lpfc_fdmi_reg_portattr {
+ #define  SLI_MGMT_DPRT     0x310	/* De-register Port */
+ #define  SLI_MGMT_DPA      0x311	/* De-register Port attributes */
+ 
++#define LPFC_FDMI_MAX_RETRY     3  /* Max retries for a FDMI command */
++
+ /*
+  * HBA Attribute Types
+  */
+@@ -1342,6 +1336,39 @@ struct lpfc_fdmi_reg_portattr {
+ #define  RHBA_OS_NAME_VERSION	 0xa /* 4 to 256 byte ASCII string */
+ #define  RHBA_MAX_CT_PAYLOAD_LEN 0xb /* 32-bit unsigned int */
+ #define  RHBA_SYM_NODENAME       0xc /* 4 to 256 byte ASCII string */
++#define  RHBA_VENDOR_INFO        0xd  /* 32-bit unsigned int */
++#define  RHBA_NUM_PORTS          0xe  /* 32-bit unsigned int */
++#define  RHBA_FABRIC_WWNN        0xf  /* 8 byte WWNN */
++#define  RHBA_BIOS_VERSION       0x10 /* 4 to 256 byte ASCII string */
++#define  RHBA_BIOS_STATE         0x11 /* 32-bit unsigned int */
++#define  RHBA_VENDOR_ID          0xe0 /* 8 byte ASCII string */
++
++/* Bit mask for all individual HBA attributes */
++#define LPFC_FDMI_HBA_ATTR_wwnn			0x00000001
++#define LPFC_FDMI_HBA_ATTR_manufacturer		0x00000002
++#define LPFC_FDMI_HBA_ATTR_sn			0x00000004
++#define LPFC_FDMI_HBA_ATTR_model		0x00000008
++#define LPFC_FDMI_HBA_ATTR_description		0x00000010
++#define LPFC_FDMI_HBA_ATTR_hdw_ver		0x00000020
++#define LPFC_FDMI_HBA_ATTR_drvr_ver		0x00000040
++#define LPFC_FDMI_HBA_ATTR_rom_ver		0x00000080
++#define LPFC_FDMI_HBA_ATTR_fmw_ver		0x00000100
++#define LPFC_FDMI_HBA_ATTR_os_ver		0x00000200
++#define LPFC_FDMI_HBA_ATTR_ct_len		0x00000400
++#define LPFC_FDMI_HBA_ATTR_symbolic_name	0x00000800
++#define LPFC_FDMI_HBA_ATTR_vendor_info		0x00001000 /* Not used */
++#define LPFC_FDMI_HBA_ATTR_num_ports		0x00002000
++#define LPFC_FDMI_HBA_ATTR_fabric_wwnn		0x00004000
++#define LPFC_FDMI_HBA_ATTR_bios_ver		0x00008000
++#define LPFC_FDMI_HBA_ATTR_bios_state		0x00010000 /* Not used */
++#define LPFC_FDMI_HBA_ATTR_vendor_id		0x00020000
++
++/* Bit mask for FDMI-1 defined HBA attributes */
++#define LPFC_FDMI1_HBA_ATTR			0x000007ff
++
++/* Bit mask for FDMI-2 defined HBA attributes */
++/* Skip vendor_info and bios_state */
++#define LPFC_FDMI2_HBA_ATTR			0x0002efff
+ 
+ /*
+  * Port Attrubute Types
+@@ -1353,15 +1380,65 @@ struct lpfc_fdmi_reg_portattr {
+ #define  RPRT_OS_DEVICE_NAME          0x5 /* 4 to 256 byte ASCII string */
+ #define  RPRT_HOST_NAME               0x6 /* 4 to 256 byte ASCII string */
+ #define  RPRT_NODENAME                0x7 /* 8 byte WWNN */
+-#define  RPRT_PORTNAME                0x8 /* 8 byte WWNN */
++#define  RPRT_PORTNAME                0x8 /* 8 byte WWPN */
+ #define  RPRT_SYM_PORTNAME            0x9 /* 4 to 256 byte ASCII string */
+ #define  RPRT_PORT_TYPE               0xa /* 32-bit unsigned int */
+ #define  RPRT_SUPPORTED_CLASS         0xb /* 32-bit unsigned int */
+-#define  RPRT_FABRICNAME              0xc /* 8 byte Fabric WWNN */
++#define  RPRT_FABRICNAME              0xc /* 8 byte Fabric WWPN */
+ #define  RPRT_ACTIVE_FC4_TYPES        0xd /* 32 byte binary array */
+ #define  RPRT_PORT_STATE              0x101 /* 32-bit unsigned int */
+ #define  RPRT_DISC_PORT               0x102 /* 32-bit unsigned int */
+ #define  RPRT_PORT_ID                 0x103 /* 32-bit unsigned int */
++#define  RPRT_SMART_SERVICE           0xf100 /* 4 to 256 byte ASCII string */
++#define  RPRT_SMART_GUID              0xf101 /* 8 byte WWNN + 8 byte WWPN */
++#define  RPRT_SMART_VERSION           0xf102 /* 4 to 256 byte ASCII string */
++#define  RPRT_SMART_MODEL             0xf103 /* 4 to 256 byte ASCII string */
++#define  RPRT_SMART_PORT_INFO         0xf104 /* 32-bit unsigned int */
++#define  RPRT_SMART_QOS               0xf105 /* 32-bit unsigned int */
++#define  RPRT_SMART_SECURITY          0xf106 /* 32-bit unsigned int */
++
++/* Bit mask for all individual PORT attributes */
++#define LPFC_FDMI_PORT_ATTR_fc4type		0x00000001
++#define LPFC_FDMI_PORT_ATTR_support_speed	0x00000002
++#define LPFC_FDMI_PORT_ATTR_speed		0x00000004
++#define LPFC_FDMI_PORT_ATTR_max_frame		0x00000008
++#define LPFC_FDMI_PORT_ATTR_os_devname		0x00000010
++#define LPFC_FDMI_PORT_ATTR_host_name		0x00000020
++#define LPFC_FDMI_PORT_ATTR_wwnn		0x00000040
++#define LPFC_FDMI_PORT_ATTR_wwpn		0x00000080
++#define LPFC_FDMI_PORT_ATTR_symbolic_name	0x00000100
++#define LPFC_FDMI_PORT_ATTR_port_type		0x00000200
++#define LPFC_FDMI_PORT_ATTR_class		0x00000400
++#define LPFC_FDMI_PORT_ATTR_fabric_wwpn		0x00000800
++#define LPFC_FDMI_PORT_ATTR_port_state		0x00001000
++#define LPFC_FDMI_PORT_ATTR_active_fc4type	0x00002000
++#define LPFC_FDMI_PORT_ATTR_num_disc		0x00004000
++#define LPFC_FDMI_PORT_ATTR_nportid		0x00008000
++#define LPFC_FDMI_SMART_ATTR_service		0x00010000 /* Vendor specific */
++#define LPFC_FDMI_SMART_ATTR_guid		0x00020000 /* Vendor specific */
++#define LPFC_FDMI_SMART_ATTR_version		0x00040000 /* Vendor specific */
++#define LPFC_FDMI_SMART_ATTR_model		0x00080000 /* Vendor specific */
++#define LPFC_FDMI_SMART_ATTR_port_info		0x00100000 /* Vendor specific */
++#define LPFC_FDMI_SMART_ATTR_qos		0x00200000 /* Vendor specific */
++#define LPFC_FDMI_SMART_ATTR_security		0x00400000 /* Vendor specific */
++
++/* Bit mask for FDMI-1 defined PORT attributes */
++#define LPFC_FDMI1_PORT_ATTR			0x0000003f
++
++/* Bit mask for FDMI-2 defined PORT attributes */
++#define LPFC_FDMI2_PORT_ATTR			0x0000ffff
++
++/* Bit mask for Smart SAN defined PORT attributes */
++#define LPFC_FDMI2_SMART_ATTR			0x007fffff
++
++/* Defines for PORT port state attribute */
++#define LPFC_FDMI_PORTSTATE_UNKNOWN	1
++#define LPFC_FDMI_PORTSTATE_ONLINE	2
++
++/* Defines for PORT port type attribute */
++#define LPFC_FDMI_PORTTYPE_UNKNOWN	0
++#define LPFC_FDMI_PORTTYPE_NPORT	1
++#define LPFC_FDMI_PORTTYPE_NLPORT	2
+ 
+ /*
+  *  Begin HBA configuration parameters.
+@@ -2498,10 +2575,38 @@ typedef struct {
+ /* Structure for MB Command READ_LINK_STAT (18) */
+ 
+ typedef struct {
+-	uint32_t rsvd1;
++	uint32_t word0;
++
++#define lpfc_read_link_stat_rec_SHIFT   0
++#define lpfc_read_link_stat_rec_MASK   0x1
++#define lpfc_read_link_stat_rec_WORD   word0
++
++#define lpfc_read_link_stat_gec_SHIFT	1
++#define lpfc_read_link_stat_gec_MASK   0x1
++#define lpfc_read_link_stat_gec_WORD   word0
++
++#define lpfc_read_link_stat_w02oftow23of_SHIFT	2
++#define lpfc_read_link_stat_w02oftow23of_MASK   0x3FFFFF
++#define lpfc_read_link_stat_w02oftow23of_WORD   word0
++
++#define lpfc_read_link_stat_rsvd_SHIFT	24
++#define lpfc_read_link_stat_rsvd_MASK   0x1F
++#define lpfc_read_link_stat_rsvd_WORD   word0
++
++#define lpfc_read_link_stat_gec2_SHIFT  29
++#define lpfc_read_link_stat_gec2_MASK   0x1
++#define lpfc_read_link_stat_gec2_WORD   word0
++
++#define lpfc_read_link_stat_clrc_SHIFT  30
++#define lpfc_read_link_stat_clrc_MASK   0x1
++#define lpfc_read_link_stat_clrc_WORD   word0
++
++#define lpfc_read_link_stat_clof_SHIFT  31
++#define lpfc_read_link_stat_clof_MASK   0x1
++#define lpfc_read_link_stat_clof_WORD   word0
++
+ 	uint32_t linkFailureCnt;
+ 	uint32_t lossSyncCnt;
+-
+ 	uint32_t lossSignalCnt;
+ 	uint32_t primSeqErrCnt;
+ 	uint32_t invalidXmitWord;
+@@ -2509,6 +2614,19 @@ typedef struct {
+ 	uint32_t primSeqTimeout;
+ 	uint32_t elasticOverrun;
+ 	uint32_t arbTimeout;
++	uint32_t advRecBufCredit;
++	uint32_t curRecBufCredit;
++	uint32_t advTransBufCredit;
++	uint32_t curTransBufCredit;
++	uint32_t recEofCount;
++	uint32_t recEofdtiCount;
++	uint32_t recEofniCount;
++	uint32_t recSofcount;
++	uint32_t rsvd1;
++	uint32_t rsvd2;
++	uint32_t recDrpXriCount;
++	uint32_t fecCorrBlkCount;
++	uint32_t fecUncorrBlkCount;
+ } READ_LNK_VAR;
+ 
+ /* Structure for MB Command REG_LOGIN (19) */
+diff --git a/drivers/scsi/lpfc/lpfc_init.c b/drivers/scsi/lpfc/lpfc_init.c
+index 5915407..d9753e3 100644
+--- a/drivers/scsi/lpfc/lpfc_init.c
++++ b/drivers/scsi/lpfc/lpfc_init.c
+@@ -1184,8 +1184,10 @@ lpfc_hb_timeout_handler(struct lpfc_hba *phba)
+ 
+ 	vports = lpfc_create_vport_work_array(phba);
+ 	if (vports != NULL)
+-		for (i = 0; i <= phba->max_vports && vports[i] != NULL; i++)
++		for (i = 0; i <= phba->max_vports && vports[i] != NULL; i++) {
+ 			lpfc_rcv_seq_check_edtov(vports[i]);
++			lpfc_fdmi_num_disc_check(vports[i]);
++		}
+ 	lpfc_destroy_vport_work_array(phba, vports);
+ 
+ 	if ((phba->link_state == LPFC_HBA_ERROR) ||
+@@ -1290,6 +1292,10 @@ lpfc_hb_timeout_handler(struct lpfc_hba *phba)
+ 				jiffies +
+ 				msecs_to_jiffies(1000 * LPFC_HB_MBOX_TIMEOUT));
+ 		}
++	} else {
++			mod_timer(&phba->hb_tmofunc,
++				jiffies +
++				msecs_to_jiffies(1000 * LPFC_HB_MBOX_INTERVAL));
+ 	}
+ }
+ 
+@@ -2621,7 +2627,6 @@ void
+ lpfc_stop_vport_timers(struct lpfc_vport *vport)
+ {
+ 	del_timer_sync(&vport->els_tmofunc);
+-	del_timer_sync(&vport->fc_fdmitmo);
+ 	del_timer_sync(&vport->delayed_disc_tmo);
+ 	lpfc_can_disctmo(vport);
+ 	return;
+@@ -3340,10 +3345,6 @@ lpfc_create_port(struct lpfc_hba *phba, int instance, struct device *dev)
+ 	vport->fc_disctmo.function = lpfc_disc_timeout;
+ 	vport->fc_disctmo.data = (unsigned long)vport;
+ 
+-	init_timer(&vport->fc_fdmitmo);
+-	vport->fc_fdmitmo.function = lpfc_fdmi_tmo;
+-	vport->fc_fdmitmo.data = (unsigned long)vport;
+-
+ 	init_timer(&vport->els_tmofunc);
+ 	vport->els_tmofunc.function = lpfc_els_timeout;
+ 	vport->els_tmofunc.data = (unsigned long)vport;
+@@ -6159,6 +6160,20 @@ lpfc_create_shost(struct lpfc_hba *phba)
+ 	/* Put reference to SCSI host to driver's device private data */
+ 	pci_set_drvdata(phba->pcidev, shost);
+ 
++	/*
++	 * At this point we are fully registered with PSA. In addition,
++	 * any initial discovery should be completed.
++	 */
++	vport->load_flag |= FC_ALLOW_FDMI;
++	if (phba->cfg_fdmi_on > LPFC_FDMI_NO_SUPPORT) {
++
++		/* Setup appropriate attribute masks */
++		vport->fdmi_hba_mask = LPFC_FDMI2_HBA_ATTR;
++		if (phba->cfg_fdmi_on == LPFC_FDMI_SMART_SAN)
++			vport->fdmi_port_mask = LPFC_FDMI2_SMART_ATTR;
++		else
++			vport->fdmi_port_mask = LPFC_FDMI2_PORT_ATTR;
++	}
+ 	return 0;
+ }
+ 
+diff --git a/drivers/scsi/lpfc/lpfc_vport.c b/drivers/scsi/lpfc/lpfc_vport.c
+index 7690126..b3f85de 100644
+--- a/drivers/scsi/lpfc/lpfc_vport.c
++++ b/drivers/scsi/lpfc/lpfc_vport.c
+@@ -393,6 +393,14 @@ lpfc_vport_create(struct fc_vport *fc_vport, bool disable)
+ 	*(struct lpfc_vport **)fc_vport->dd_data = vport;
+ 	vport->fc_vport = fc_vport;
+ 
++	/* At this point we are fully registered with SCSI Layer.  */
++	vport->load_flag |= FC_ALLOW_FDMI;
++	if (phba->cfg_fdmi_on > LPFC_FDMI_NO_SUPPORT) {
++		/* Setup appropriate attribute masks */
++		vport->fdmi_hba_mask = phba->pport->fdmi_hba_mask;
++		vport->fdmi_port_mask = phba->pport->fdmi_port_mask;
++	}
++
+ 	/*
+ 	 * In SLI4, the vpi must be activated before it can be used
+ 	 * by the port.
+-- 
+1.9.3
+

@@ -1,0 +1,47 @@
+From ce481eb6cb4e6da89fde13a68a9d851bdc386f4f Mon Sep 17 00:00:00 2001
+From: Punit Vara <punitvara@gmail.com>
+Date: Wed, 16 Dec 2015 18:12:07 -0500
+Subject: [PATCH 0493/1767] lpfc: Use kzalloc instead of kmalloc
+
+BugLink: http://bugs.launchpad.net/bugs/1541592
+
+This patch is to the lpfc_els.c which resolves following warning
+reported by coccicheck:
+
+WARNING: kzalloc should be used for rdp_context, instead of
+kmalloc/memset
+
+Signed-off-by: Punit Vara <punitvara@gmail.com>
+Signed-off-by: James Smart <james.smart@avagotech.com>
+Reviewed-by: Hannes Reinicke <hare@suse.de>
+Reviewed-by: Matthew R. Ochs <mrochs@linux.vnet.ibm.com>
+Reviewed-by: Sebastian Herbszt <herbszt@gmx.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit 699acd6220ea5b20b25d5eec0ab448827d745357)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/lpfc/lpfc_els.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/scsi/lpfc/lpfc_els.c b/drivers/scsi/lpfc/lpfc_els.c
+index 273a1db..7f5abb8 100644
+--- a/drivers/scsi/lpfc/lpfc_els.c
++++ b/drivers/scsi/lpfc/lpfc_els.c
+@@ -5016,13 +5016,12 @@ lpfc_els_rcv_rdp(struct lpfc_vport *vport, struct lpfc_iocbq *cmdiocb,
+ 	if (RDP_NPORT_ID_SIZE !=
+ 			be32_to_cpu(rdp_req->nport_id_desc.length))
+ 		goto rjt_logerr;
+-	rdp_context = kmalloc(sizeof(struct lpfc_rdp_context), GFP_KERNEL);
++	rdp_context = kzalloc(sizeof(struct lpfc_rdp_context), GFP_KERNEL);
+ 	if (!rdp_context) {
+ 		rjt_err = LSRJT_UNABLE_TPC;
+ 		goto error;
+ 	}
+ 
+-	memset(rdp_context, 0, sizeof(struct lpfc_rdp_context));
+ 	cmd = &cmdiocb->iocb;
+ 	rdp_context->ndlp = lpfc_nlp_get(ndlp);
+ 	rdp_context->ox_id = cmd->unsli3.rcvsli3.ox_id;
+-- 
+1.9.3
+

@@ -1,0 +1,46 @@
+From 92b57b282b13b73444c688c5f55382f90887ab80 Mon Sep 17 00:00:00 2001
+From: Will Deacon <will.deacon@arm.com>
+Date: Wed, 10 Feb 2016 10:07:30 +0000
+Subject: [PATCH 0640/1767] arm64: prefetch: add missing #include for
+ spin_lock_prefetch
+
+As of 52e662326e1e ("arm64: prefetch: don't provide spin_lock_prefetch
+with LSE"), spin_lock_prefetch is patched at runtime when the LSE atomics
+are in use. This relies on the ARM64_LSE_ATOMIC_INSN macro to drive
+the alternatives framework, but that macro is only available via
+asm/lse.h, which isn't explicitly included in processor.h. Consequently,
+drivers can run into build failures such as:
+
+   In file included from include/linux/prefetch.h:14:0,
+                    from drivers/net/ethernet/intel/i40e/i40e_txrx.c:27:
+   arch/arm64/include/asm/processor.h: In function 'spin_lock_prefetch':
+   arch/arm64/include/asm/processor.h:183:15: error: expected string literal before 'ARM64_LSE_ATOMIC_INSN'
+     asm volatile(ARM64_LSE_ATOMIC_INSN(
+
+This patch add the missing include and gets things building again.
+
+Reported-by: kbuild test robot <fengguang.wu@intel.com>
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+(cherry picked from linux-next commit afb83cc3f0e4f86ea0e1cc3db7a90f58f1abd4d5)
+Signed-off-by: Dann Frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/arm64/include/asm/processor.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/include/asm/processor.h b/arch/arm64/include/asm/processor.h
+index 31b76fc..5bb1d76 100644
+--- a/arch/arm64/include/asm/processor.h
++++ b/arch/arm64/include/asm/processor.h
+@@ -32,6 +32,7 @@
+ #include <asm/alternative.h>
+ #include <asm/fpsimd.h>
+ #include <asm/hw_breakpoint.h>
++#include <asm/lse.h>
+ #include <asm/pgtable-hwdef.h>
+ #include <asm/ptrace.h>
+ #include <asm/types.h>
+-- 
+1.9.3
+

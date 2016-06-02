@@ -1,0 +1,56 @@
+From b43df2ce3e06484ddf7914754ef596789acc45a8 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Fri, 22 Apr 2016 17:48:54 +0530
+Subject: [PATCH 08/39] net: thunderx: Fix TL4 configuration for secondary
+ Qsets
+
+TL4 calculation for a given SQ of secondary Qsets is incorrect
+and goes out of bounds and also for some SQ's TL4 chosen will
+transmit data via a different BGX interface and not same as
+primary Qset's interface.
+
+This patch fixes this issue.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 836b2ba..4cbc77b 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -508,6 +508,7 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
+ 	u32 rr_quantum;
+ 	u8 sq_idx = sq->sq_num;
+ 	u8 pqs_vnic;
++	int svf;
+ 
+ 	if (sq->sqs_mode)
+ 		pqs_vnic = nic->pqs_vf[vnic];
+@@ -520,10 +521,19 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
+ 	/* 24 bytes for FCS, IPG and preamble */
+ 	rr_quantum = ((NIC_HW_MAX_FRS + 24) / 4);
+ 
+-	tl4 = (lmac * NIC_TL4_PER_LMAC) + (bgx * NIC_TL4_PER_BGX);
++	if (!sq->sqs_mode) {
++		tl4 = (lmac * NIC_TL4_PER_LMAC) + (bgx * NIC_TL4_PER_BGX);
++	} else {
++		for (svf = 0; svf < MAX_SQS_PER_VF; svf++) {
++			if (nic->vf_sqs[pqs_vnic][svf] == vnic)
++				break;
++		}
++		tl4 = (MAX_LMAC_PER_BGX * NIC_TL4_PER_LMAC);
++		tl4 += (lmac * NIC_TL4_PER_LMAC * MAX_SQS_PER_VF);
++		tl4 += (svf * NIC_TL4_PER_LMAC);
++		tl4 += (bgx * NIC_TL4_PER_BGX);
++	}
+ 	tl4 += sq_idx;
+-	if (sq->sqs_mode)
+-		tl4 += vnic * 8;
+ 
+ 	tl3 = tl4 / (NIC_MAX_TL4 / NIC_MAX_TL3);
+ 	nic_reg_write(nic, NIC_PF_QSET_0_127_SQ_0_7_CFG2 |
+-- 
+1.9.1
+

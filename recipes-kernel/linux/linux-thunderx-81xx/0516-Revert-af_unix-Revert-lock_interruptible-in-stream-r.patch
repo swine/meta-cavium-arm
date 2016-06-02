@@ -1,0 +1,53 @@
+From 155112f39188d0fb156651b553a219770304f40b Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Fri, 5 Feb 2016 13:20:56 +0000
+Subject: [PATCH 0516/1767] Revert "af_unix: Revert 'lock_interruptible' in
+ stream receive code"
+
+This reverts commit 3822b5c2fc62e3de8a0f33806ff279fb7df92432.
+
+BugLink: http://bugs.launchpad.net/bugs/1540731
+Signed-off-by: Joseph Salisbury <joseph.salisbury@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ net/unix/af_unix.c | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
+index e3f85bc..7793b09 100644
+--- a/net/unix/af_unix.c
++++ b/net/unix/af_unix.c
+@@ -2286,7 +2286,14 @@ static int unix_stream_read_generic(struct unix_stream_read_state *state)
+ 	/* Lock the socket to prevent queue disordering
+ 	 * while sleeps in memcpy_tomsg
+ 	 */
+-	mutex_lock(&u->readlock);
++	err = mutex_lock_interruptible(&u->readlock);
++	if (unlikely(err)) {
++		/* recvmsg() in non blocking mode is supposed to return -EAGAIN
++		 * sk_rcvtimeo is not honored by mutex_lock_interruptible()
++		 */
++		err = noblock ? -EAGAIN : -ERESTARTSYS;
++		goto out;
++	}
+ 
+ 	if (flags & MSG_PEEK)
+ 		skip = sk_peek_offset(sk, flags);
+@@ -2330,12 +2337,12 @@ again:
+ 			timeo = unix_stream_data_wait(sk, timeo, last,
+ 						      last_len);
+ 
+-			if (signal_pending(current)) {
++			if (signal_pending(current) ||
++			    mutex_lock_interruptible(&u->readlock)) {
+ 				err = sock_intr_errno(timeo);
+ 				goto out;
+ 			}
+ 
+-			mutex_lock(&u->readlock);
+ 			continue;
+ unlock:
+ 			unix_state_unlock(sk);
+-- 
+1.9.3
+

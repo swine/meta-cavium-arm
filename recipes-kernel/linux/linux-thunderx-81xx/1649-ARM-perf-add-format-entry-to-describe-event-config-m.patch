@@ -1,0 +1,88 @@
+From 8cf0c5d0a37cef31a0e43102cd30b8d66ff981ff Mon Sep 17 00:00:00 2001
+From: Will Deacon <will.deacon@arm.com>
+Date: Tue, 22 Dec 2015 14:42:57 +0000
+Subject: [PATCH 1649/1767] ARM: perf: add format entry to describe event ->
+ config mapping
+
+BugLink: http://bugs.launchpad.net/bugs/1559350
+
+It's all very well providing an events directory to userspace that
+details our events in terms of "event=0xNN", but if we don't define how
+to encode the "event" field in the perf attr.config, then it's a waste
+of time.
+
+This patch adds a single format entry to describe that the event field
+occupies the bottom 8 bits of our config field on ARMv7.
+
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+(cherry picked from commit abff083ce2046b4d55211c1db5992ec2dd391f3d)
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/arm/kernel/perf_event_v7.c | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm/kernel/perf_event_v7.c b/arch/arm/kernel/perf_event_v7.c
+index 970e136..4152158 100644
+--- a/arch/arm/kernel/perf_event_v7.c
++++ b/arch/arm/kernel/perf_event_v7.c
+@@ -531,6 +531,18 @@ static const unsigned scorpion_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
+ 	[C(BPU)][C(OP_WRITE)][C(RESULT_MISS)] = ARMV7_PERFCTR_PC_BRANCH_MIS_PRED,
+ };
+ 
++PMU_FORMAT_ATTR(event, "config:0-7");
++
++static struct attribute *armv7_pmu_format_attrs[] = {
++	&format_attr_event.attr,
++	NULL,
++};
++
++static struct attribute_group armv7_pmu_format_attr_group = {
++	.name = "format",
++	.attrs = armv7_pmu_format_attrs,
++};
++
+ #define ARMV7_EVENT_ATTR_RESOLVE(m) #m
+ #define ARMV7_EVENT_ATTR(name, config) \
+ 	PMU_EVENT_ATTR_STRING(name, armv7_event_attr_##name, \
+@@ -576,7 +588,7 @@ static struct attribute *armv7_pmuv1_event_attrs[] = {
+ 	&armv7_event_attr_br_mis_pred.attr.attr,
+ 	&armv7_event_attr_cpu_cycles.attr.attr,
+ 	&armv7_event_attr_br_pred.attr.attr,
+-	NULL
++	NULL,
+ };
+ 
+ static struct attribute_group armv7_pmuv1_events_attr_group = {
+@@ -586,7 +598,8 @@ static struct attribute_group armv7_pmuv1_events_attr_group = {
+ 
+ static const struct attribute_group *armv7_pmuv1_attr_groups[] = {
+ 	&armv7_pmuv1_events_attr_group,
+-	NULL
++	&armv7_pmu_format_attr_group,
++	NULL,
+ };
+ 
+ ARMV7_EVENT_ATTR(mem_access, ARMV7_PERFCTR_MEM_ACCESS);
+@@ -632,7 +645,7 @@ static struct attribute *armv7_pmuv2_event_attrs[] = {
+ 	&armv7_event_attr_inst_spec.attr.attr,
+ 	&armv7_event_attr_ttbr_write_retired.attr.attr,
+ 	&armv7_event_attr_bus_cycles.attr.attr,
+-	NULL
++	NULL,
+ };
+ 
+ static struct attribute_group armv7_pmuv2_events_attr_group = {
+@@ -642,7 +655,8 @@ static struct attribute_group armv7_pmuv2_events_attr_group = {
+ 
+ static const struct attribute_group *armv7_pmuv2_attr_groups[] = {
+ 	&armv7_pmuv2_events_attr_group,
+-	NULL
++	&armv7_pmu_format_attr_group,
++	NULL,
+ };
+ 
+ /*
+-- 
+1.9.3
+

@@ -1,0 +1,100 @@
+From 2493202b49fd683a16e396364af6c1434e00bfbf Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 24 Oct 2014 12:16:14 -0400
+Subject: [PATCH 0089/1767] UBUNTU: SAUCE: (no-up) apparmor: add parameter to
+ control whether policy hashing is used
+
+BugLink: http://bugs.launchpad.net/bugs/1383886
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tyler Hicks <tyhicks@canonical.com>
+Acked-by: Seth Arnold <seth.arnold@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/Kconfig            | 21 +++++++++++++++++----
+ security/apparmor/include/apparmor.h |  1 +
+ security/apparmor/lsm.c              |  4 ++++
+ security/apparmor/policy_unpack.c    |  5 +++--
+ 4 files changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/security/apparmor/Kconfig b/security/apparmor/Kconfig
+index 232469b..c8faa3c 100644
+--- a/security/apparmor/Kconfig
++++ b/security/apparmor/Kconfig
+@@ -31,13 +31,26 @@ config SECURITY_APPARMOR_BOOTPARAM_VALUE
+ 	  If you are unsure how to answer this question, answer 1.
+ 
+ config SECURITY_APPARMOR_HASH
+-	bool "SHA1 hash of loaded profiles"
++	bool "enable introspection of sha1 hashes for loaded profiles"
+ 	depends on SECURITY_APPARMOR
+ 	select CRYPTO
+ 	select CRYPTO_SHA1
+ 	default y
+ 
+ 	help
+-	  This option selects whether sha1 hashing is done against loaded
+-          profiles and exported for inspection to user space via the apparmor
+-          filesystem.
++	  This option selects whether introspection of loaded policy
++	  is available to userspace via the apparmor filesystem.
++
++config SECURITY_APPARMOR_HASH_DEFAULT
++	bool "Enable policy hash introspection by default"
++	depends on SECURITY_APPARMOR_HASH
++	default y
++
++	help
++	  This option selects whether sha1 hashing of loaded policy
++	  is enabled by default. The generation of sha1 hashes for
++	  loaded policy provide system administrators a quick way
++	  to verify that policy in the kernel matches what is expected,
++	  however it can slow down policy load on some devices. In
++	  these cases policy hashing can be disabled by default and
++	  enabled only if needed.
+diff --git a/security/apparmor/include/apparmor.h b/security/apparmor/include/apparmor.h
+index e4ea626..5d721e9 100644
+--- a/security/apparmor/include/apparmor.h
++++ b/security/apparmor/include/apparmor.h
+@@ -37,6 +37,7 @@
+ extern enum audit_mode aa_g_audit;
+ extern bool aa_g_audit_header;
+ extern bool aa_g_debug;
++extern bool aa_g_hash_policy;
+ extern bool aa_g_lock_policy;
+ extern bool aa_g_logsyscall;
+ extern bool aa_g_paranoid_load;
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index dec607c..cb3dea1 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -692,6 +692,10 @@ enum profile_mode aa_g_profile_mode = APPARMOR_ENFORCE;
+ module_param_call(mode, param_set_mode, param_get_mode,
+ 		  &aa_g_profile_mode, S_IRUSR | S_IWUSR);
+ 
++/* whether policy verification hashing is enabled */
++bool aa_g_hash_policy = CONFIG_SECURITY_APPARMOR_HASH_DEFAULT;
++module_param_named(hash_policy, aa_g_hash_policy, aabool, S_IRUSR | S_IWUSR);
++
+ /* Debug mode */
+ bool aa_g_debug;
+ module_param_named(debug, aa_g_debug, aabool, S_IRUSR | S_IWUSR);
+diff --git a/security/apparmor/policy_unpack.c b/security/apparmor/policy_unpack.c
+index a689f10..a55fb2f 100644
+--- a/security/apparmor/policy_unpack.c
++++ b/security/apparmor/policy_unpack.c
+@@ -775,8 +775,9 @@ int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
+ 		if (error)
+ 			goto fail_profile;
+ 
+-		error = aa_calc_profile_hash(profile, e.version, start,
+-					     e.pos - start);
++		if (aa_g_hash_policy)
++			error = aa_calc_profile_hash(profile, e.version, start,
++						     e.pos - start);
+ 		if (error)
+ 			goto fail_profile;
+ 
+-- 
+1.9.3
+

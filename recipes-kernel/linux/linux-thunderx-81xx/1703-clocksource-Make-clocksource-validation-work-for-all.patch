@@ -1,0 +1,51 @@
+From d2d0d6fa173da897f791217ca0389d851bcb96e5 Mon Sep 17 00:00:00 2001
+From: Yang Yingliang <yangyingliang@huawei.com>
+Date: Sat, 31 Oct 2015 18:20:55 +0800
+Subject: [PATCH 1703/1767] clocksource: Make clocksource validation work for
+ all clocksources
+
+BugLink: http://bugs.launchpad.net/bugs/1519625
+
+The clocksource validation which makes sure that the newly read value
+is not smaller than the last value only works if the clocksource mask
+is 64bit, i.e. the counter is 64bit wide. But we want to use that
+mechanism also for clocksources which are less than 64bit wide.
+
+So instead of checking whether bit 63 is set, we check whether the
+most significant bit of the clocksource mask is set in the delta
+result. If it is set, we return 0.
+
+[ tglx: Simplified the implementation, added a comment and massaged
+  	the commit message ]
+
+Suggested-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Yang Yingliang <yangyingliang@huawei.com>
+Cc: <linux-arm-kernel@lists.infradead.org>
+Link: http://lkml.kernel.org/r/56349607.6070708@huawei.com
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+(cherry picked from commit 1f45f1f33c8c8b96722dbc5e6b7acf74eaa721f7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/time/timekeeping_internal.h | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/time/timekeeping_internal.h b/kernel/time/timekeeping_internal.h
+index e20466f..5be7627 100644
+--- a/kernel/time/timekeeping_internal.h
++++ b/kernel/time/timekeeping_internal.h
+@@ -17,7 +17,11 @@ static inline cycle_t clocksource_delta(cycle_t now, cycle_t last, cycle_t mask)
+ {
+ 	cycle_t ret = (now - last) & mask;
+ 
+-	return (s64) ret > 0 ? ret : 0;
++	/*
++	 * Prevent time going backwards by checking the MSB of mask in
++	 * the result. If set, return 0.
++	 */
++	return ret & ~(mask >> 1) ? 0 : ret;
+ }
+ #else
+ static inline cycle_t clocksource_delta(cycle_t now, cycle_t last, cycle_t mask)
+-- 
+1.9.3
+

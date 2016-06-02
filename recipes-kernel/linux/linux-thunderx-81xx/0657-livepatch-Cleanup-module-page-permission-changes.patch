@@ -1,0 +1,138 @@
+From 077e1ea641e739458f0e0a90ddc59e470f5404d4 Mon Sep 17 00:00:00 2001
+From: Josh Poimboeuf <jpoimboe@redhat.com>
+Date: Thu, 3 Dec 2015 16:33:26 -0600
+Subject: [PATCH 0657/1767] livepatch: Cleanup module page permission changes
+
+Calling set_memory_rw() and set_memory_ro() for every iteration of the
+loop in klp_write_object_relocations() is messy, inefficient, and
+error-prone.
+
+Change all the read-only pages to read-write before the loop and convert
+them back to read-only again afterwards.
+
+Suggested-by: Miroslav Benes <mbenes@suse.cz>
+Signed-off-by: Josh Poimboeuf <jpoimboe@redhat.com>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
+Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+(cherry picked from commit b56b36ee6751abe7fb3890681e86fc8de2122953)
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/kernel/livepatch.c | 25 ++-----------------------
+ kernel/livepatch/core.c     | 16 +++++++++++-----
+ 2 files changed, 13 insertions(+), 28 deletions(-)
+
+diff --git a/arch/x86/kernel/livepatch.c b/arch/x86/kernel/livepatch.c
+index bcc06e8..92fc1a5 100644
+--- a/arch/x86/kernel/livepatch.c
++++ b/arch/x86/kernel/livepatch.c
+@@ -20,8 +20,6 @@
+ 
+ #include <linux/module.h>
+ #include <linux/uaccess.h>
+-#include <asm/cacheflush.h>
+-#include <asm/page_types.h>
+ #include <asm/elf.h>
+ #include <asm/livepatch.h>
+ 
+@@ -38,8 +36,7 @@
+ int klp_write_module_reloc(struct module *mod, unsigned long type,
+ 			   unsigned long loc, unsigned long value)
+ {
+-	int ret, numpages, size = 4;
+-	bool readonly;
++	size_t size = 4;
+ 	unsigned long val;
+ 	unsigned long core = (unsigned long)mod->core_layout.base;
+ 	unsigned long core_size = mod->core_layout.size;
+@@ -69,23 +66,5 @@ int klp_write_module_reloc(struct module *mod, unsigned long type,
+ 		/* loc does not point to any symbol inside the module */
+ 		return -EINVAL;
+ 
+-	readonly = false;
+-
+-#ifdef CONFIG_DEBUG_SET_MODULE_RONX
+-	if (loc < core + mod->core_layout.ro_size)
+-		readonly = true;
+-#endif
+-
+-	/* determine if the relocation spans a page boundary */
+-	numpages = ((loc & PAGE_MASK) == ((loc + size) & PAGE_MASK)) ? 1 : 2;
+-
+-	if (readonly)
+-		set_memory_rw(loc & PAGE_MASK, numpages);
+-
+-	ret = probe_kernel_write((void *)loc, &val, size);
+-
+-	if (readonly)
+-		set_memory_ro(loc & PAGE_MASK, numpages);
+-
+-	return ret;
++	return probe_kernel_write((void *)loc, &val, size);
+ }
+diff --git a/kernel/livepatch/core.c b/kernel/livepatch/core.c
+index 94893e8..bc2c85c 100644
+--- a/kernel/livepatch/core.c
++++ b/kernel/livepatch/core.c
+@@ -28,6 +28,7 @@
+ #include <linux/list.h>
+ #include <linux/kallsyms.h>
+ #include <linux/livepatch.h>
++#include <asm/cacheflush.h>
+ 
+ /**
+  * struct klp_ops - structure for tracking registered ftrace ops structs
+@@ -232,7 +233,7 @@ static int klp_find_external_symbol(struct module *pmod, const char *name,
+ static int klp_write_object_relocations(struct module *pmod,
+ 					struct klp_object *obj)
+ {
+-	int ret;
++	int ret = 0;
+ 	unsigned long val;
+ 	struct klp_reloc *reloc;
+ 
+@@ -242,13 +243,16 @@ static int klp_write_object_relocations(struct module *pmod,
+ 	if (WARN_ON(!obj->relocs))
+ 		return -EINVAL;
+ 
++	module_disable_ro(pmod);
++
+ 	for (reloc = obj->relocs; reloc->name; reloc++) {
+ 		/* discover the address of the referenced symbol */
+ 		if (reloc->external) {
+ 			if (reloc->sympos > 0) {
+ 				pr_err("non-zero sympos for external reloc symbol '%s' is not supported\n",
+ 				       reloc->name);
+-				return -EINVAL;
++				ret = -EINVAL;
++				goto out;
+ 			}
+ 			ret = klp_find_external_symbol(pmod, reloc->name, &val);
+ 		} else
+@@ -257,18 +261,20 @@ static int klp_write_object_relocations(struct module *pmod,
+ 						     reloc->sympos,
+ 						     &val);
+ 		if (ret)
+-			return ret;
++			goto out;
+ 
+ 		ret = klp_write_module_reloc(pmod, reloc->type, reloc->loc,
+ 					     val + reloc->addend);
+ 		if (ret) {
+ 			pr_err("relocation failed for symbol '%s' at 0x%016lx (%d)\n",
+ 			       reloc->name, val, ret);
+-			return ret;
++			goto out;
+ 		}
+ 	}
+ 
+-	return 0;
++out:
++	module_enable_ro(pmod);
++	return ret;
+ }
+ 
+ static void notrace klp_ftrace_handler(unsigned long ip,
+-- 
+1.9.3
+

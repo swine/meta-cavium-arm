@@ -1,0 +1,26 @@
+From e02158fb8040bb0bcf29a498d66a17496eecc35b Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Tue, 15 Mar 2016 06:30:40 -0600
+Subject: [PATCH 1527/1767] UBUNTU: SAUCE: Dump stack when X.509 certificates
+ cannot be loaded
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ certs/system_keyring.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/certs/system_keyring.c b/certs/system_keyring.c
+index 2570598..878f74f 100644
+--- a/certs/system_keyring.c
++++ b/certs/system_keyring.c
+@@ -88,6 +88,7 @@ static __init int load_system_certificate_list(void)
+ 		if (IS_ERR(key)) {
+ 			pr_err("Problem loading in-kernel X.509 certificate (%ld)\n",
+ 			       PTR_ERR(key));
++			WARN_ON_ONCE(1);
+ 		} else {
+ 			set_bit(KEY_FLAG_BUILTIN, &key_ref_to_ptr(key)->flags);
+ 			pr_notice("Loaded X.509 cert '%s'\n",
+-- 
+1.9.3
+

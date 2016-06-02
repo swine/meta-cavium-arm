@@ -1,0 +1,34 @@
+From 6915c51c8072e73bac99135211ae8244e5284508 Mon Sep 17 00:00:00 2001
+From: Peter Hutterer <peter.hutterer@who-t.net>
+Date: Sat, 6 Feb 2016 21:28:06 -0600
+Subject: [PATCH 0518/1767] Input: wacom_w8001 - set BTN_TOOL_DOUBLETAP if we
+ have 2fg support
+
+BugLink: http://bugs.launchpad.net/bugs/1542771
+
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+Acked-by: Benjamin Tissoires <benjamin.tissoires@gmail.com>
+Reviewed-by: Ping Cheng <pingc@wacom.com>
+Signed-off-by: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+(cherry picked from commit ec9acda7360de7ee70cc0db36f41c1fd819a3310)
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/input/touchscreen/wacom_w8001.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/input/touchscreen/wacom_w8001.c b/drivers/input/touchscreen/wacom_w8001.c
+index d194d57..222006e 100644
+--- a/drivers/input/touchscreen/wacom_w8001.c
++++ b/drivers/input/touchscreen/wacom_w8001.c
+@@ -471,6 +471,7 @@ static int w8001_setup(struct w8001 *w8001)
+ 		case 5:
+ 			w8001->pktlen = W8001_PKTLEN_TOUCH2FG;
+ 
++			__set_bit(BTN_TOOL_DOUBLETAP, dev->keybit);
+ 			input_mt_init_slots(dev, 2, 0);
+ 			input_set_abs_params(dev, ABS_MT_POSITION_X,
+ 						0, touch.x, 0, 0);
+-- 
+1.9.3
+

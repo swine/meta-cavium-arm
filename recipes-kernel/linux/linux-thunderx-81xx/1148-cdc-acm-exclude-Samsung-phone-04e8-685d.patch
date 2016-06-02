@@ -1,0 +1,39 @@
+From 47e00db8291fee3593e8b4953eab03606b92e890 Mon Sep 17 00:00:00 2001
+From: Oliver Neukum <oneukum@suse.com>
+Date: Mon, 18 Jan 2016 15:45:18 +0100
+Subject: [PATCH 1148/1767] cdc-acm:exclude Samsung phone 04e8:685d
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit e912e685f372ab62a2405a1acd923597f524e94a upstream.
+
+This phone needs to be handled by a specialised firmware tool
+and is reported to crash irrevocably if cdc-acm takes it.
+
+Signed-off-by: Oliver Neukum <oneukum@suse.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/usb/class/cdc-acm.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/usb/class/cdc-acm.c b/drivers/usb/class/cdc-acm.c
+index e4c70dc..fa4e239 100644
+--- a/drivers/usb/class/cdc-acm.c
++++ b/drivers/usb/class/cdc-acm.c
+@@ -1841,6 +1841,11 @@ static const struct usb_device_id acm_ids[] = {
+ 	},
+ #endif
+ 
++	/*Samsung phone in firmware update mode */
++	{ USB_DEVICE(0x04e8, 0x685d),
++	.driver_info = IGNORE_DEVICE,
++	},
++
+ 	/* Exclude Infineon Flash Loader utility */
+ 	{ USB_DEVICE(0x058b, 0x0041),
+ 	.driver_info = IGNORE_DEVICE,
+-- 
+1.9.3
+

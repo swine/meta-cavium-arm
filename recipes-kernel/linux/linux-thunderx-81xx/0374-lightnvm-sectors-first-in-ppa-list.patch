@@ -1,0 +1,43 @@
+From d546d784575a5bf08202977f52d4784af911ca76 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:26 +0100
+Subject: [PATCH 0374/1767] lightnvm: sectors first in ppa list
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+The Westlake controller requires that the PPA list has sectors defined
+sequentially. Currently, the PPA list is created with planes first, then
+sectors. Change this to sectors first, then planes.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 556755e941837ebc4b4859dd7f74f2ed2dd00fc7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index fa1a052..0c8f42f 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -245,10 +245,10 @@ int nvm_set_rqd_ppalist(struct nvm_dev *dev, struct nvm_rq *rqd,
+ 		return -ENOMEM;
+ 	}
+ 
+-	for (i = 0; i < nr_ppas; i++) {
+-		for (pl_idx = 0; pl_idx < plane_cnt; pl_idx++) {
++	for (pl_idx = 0; pl_idx < plane_cnt; pl_idx++) {
++		for (i = 0; i < nr_ppas; i++) {
+ 			ppas[i].g.pl = pl_idx;
+-			rqd->ppa_list[(i * plane_cnt) + pl_idx] = ppas[i];
++			rqd->ppa_list[(pl_idx * nr_ppas) + i] = ppas[i];
+ 		}
+ 	}
+ 
+-- 
+1.9.3
+

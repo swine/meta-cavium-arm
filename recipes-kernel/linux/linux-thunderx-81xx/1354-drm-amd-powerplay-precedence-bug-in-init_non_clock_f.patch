@@ -1,0 +1,40 @@
+From 1329471fc2842be99ca32410350fcf3eff5361ff Mon Sep 17 00:00:00 2001
+From: Dan Carpenter <dan.carpenter@oracle.com>
+Date: Mon, 4 Jan 2016 23:44:24 +0300
+Subject: [PATCH 1354/1767] drm/amd/powerplay: precedence bug in
+ init_non_clock_fields()
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+The cast to uint8_t happens before the right shift so this always sets
+.m3arb to zero.  The cast is actually a no-op so we can remove it.
+
+Fixes: 3bace3591493 ('drm/amd/powerplay: add hardware manager sub-component')
+Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 7c9574f262a25c7ca0779df31098ba4e0c382e86)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/hwmgr/processpptables.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/hwmgr/processpptables.c b/drivers/gpu/drm/amd/powerplay/hwmgr/processpptables.c
+index 1d385f4..8f9d705 100644
+--- a/drivers/gpu/drm/amd/powerplay/hwmgr/processpptables.c
++++ b/drivers/gpu/drm/amd/powerplay/hwmgr/processpptables.c
+@@ -735,8 +735,8 @@ static int init_non_clock_fields(struct pp_hwmgr *hwmgr,
+ 
+ 	ps->memory.dllOff = (0 != tmp);
+ 
+-	ps->memory.m3arb = (uint8_t)(le32_to_cpu(pnon_clock_info->ulCapsAndSettings) &
+-						ATOM_PPLIB_M3ARB_MASK) >> ATOM_PPLIB_M3ARB_SHIFT;
++	ps->memory.m3arb = (le32_to_cpu(pnon_clock_info->ulCapsAndSettings) &
++			    ATOM_PPLIB_M3ARB_MASK) >> ATOM_PPLIB_M3ARB_SHIFT;
+ 
+ 	ps->temperatures.min = PP_TEMPERATURE_UNITS_PER_CENTIGRADES *
+ 				     pnon_clock_info->ucMinTemperature;
+-- 
+1.9.3
+

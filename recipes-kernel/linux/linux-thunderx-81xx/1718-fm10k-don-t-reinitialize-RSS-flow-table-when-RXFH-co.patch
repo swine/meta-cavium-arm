@@ -1,0 +1,51 @@
+From 6c15c0c9a1b4c9a8bcf894cde7b28b5c71031f33 Mon Sep 17 00:00:00 2001
+From: "Keller, Jacob E" <jacob.e.keller@intel.com>
+Date: Mon, 8 Feb 2016 16:05:05 -0800
+Subject: [PATCH 1718/1767] fm10k: don't reinitialize RSS flow table when RXFH
+ configured
+
+BugLink: http://bugs.launchpad.net/bugs/1562310
+
+Also print an error message incase we do have to reconfigure as this
+should no longer happen anymore due to ethtool changes. If it somehow
+does occur, user should be made aware of it.
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit 1012014ef523510321728daac8e07bd70650b793)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_main.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_main.c b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+index b243c3c..38f558e 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_main.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+@@ -1937,8 +1937,10 @@ static void fm10k_init_reta(struct fm10k_intfc *interface)
+ 	u16 i, rss_i = interface->ring_feature[RING_F_RSS].indices;
+ 	u32 reta, base;
+ 
+-	/* If the netdev is initialized we have to maintain table if possible */
+-	if (interface->netdev->reg_state != NETREG_UNINITIALIZED) {
++	/* If the Rx flow indirection table has been configured manually, we
++	 * need to maintain it when possible.
++	 */
++	if (netif_is_rxfh_configured(interface->netdev)) {
+ 		for (i = FM10K_RETA_SIZE; i--;) {
+ 			reta = interface->reta[i];
+ 			if ((((reta << 24) >> 24) < rss_i) &&
+@@ -1946,6 +1948,10 @@ static void fm10k_init_reta(struct fm10k_intfc *interface)
+ 			    (((reta <<  8) >> 24) < rss_i) &&
+ 			    (((reta)       >> 24) < rss_i))
+ 				continue;
++
++			/* this should never happen */
++			dev_err(&interface->pdev->dev,
++				"RSS indirection table assigned flows out of queue bounds. Reconfiguring.\n");
+ 			goto repopulate_reta;
+ 		}
+ 
+-- 
+1.9.3
+

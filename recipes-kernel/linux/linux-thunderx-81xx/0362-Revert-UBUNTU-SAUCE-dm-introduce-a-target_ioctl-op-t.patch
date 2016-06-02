@@ -1,0 +1,59 @@
+From 36c45c03f95998e5881d4513023d972857c86a11 Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Mon, 1 Feb 2016 10:25:14 +0000
+Subject: [PATCH 0362/1767] Revert "UBUNTU: SAUCE: dm: introduce a target_ioctl
+ op to allow target specific ioctls"
+
+This reverts commit fac8e7e04e5649ff40cb920385c95c7449a4f6f9.
+
+BugLink: http://bugs.launchpad.net/bugs/1538618
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ drivers/md/dm.c               | 9 ---------
+ include/linux/device-mapper.h | 3 ---
+ 2 files changed, 12 deletions(-)
+
+diff --git a/drivers/md/dm.c b/drivers/md/dm.c
+index 9014d46..5df4048 100644
+--- a/drivers/md/dm.c
++++ b/drivers/md/dm.c
+@@ -610,15 +610,6 @@ static int dm_blk_ioctl(struct block_device *bdev, fmode_t mode,
+ 	if (r < 0)
+ 		return r;
+ 
+-	if (tgt->type->target_ioctl) {
+-		int res = tgt->type->target_ioctl(tgt, cmd, arg);
+-
+-		if (res != -ENOTTY) {
+-			r = res;
+-			goto out;
+-		}
+-	}
+-
+ 	if (r > 0) {
+ 		/*
+ 		 * Target determined this ioctl is being issued against
+diff --git a/include/linux/device-mapper.h b/include/linux/device-mapper.h
+index d770bf0..ec1c61c 100644
+--- a/include/linux/device-mapper.h
++++ b/include/linux/device-mapper.h
+@@ -81,8 +81,6 @@ typedef int (*dm_message_fn) (struct dm_target *ti, unsigned argc, char **argv);
+ 
+ typedef int (*dm_prepare_ioctl_fn) (struct dm_target *ti,
+ 			    struct block_device **bdev, fmode_t *mode);
+-typedef int (*dm_target_ioctl_fn) (struct dm_target *ti, unsigned int cmd,
+-				   unsigned long arg);
+ 
+ /*
+  * These iteration functions are typically used to check (and combine)
+@@ -159,7 +157,6 @@ struct target_type {
+ 	dm_status_fn status;
+ 	dm_message_fn message;
+ 	dm_prepare_ioctl_fn prepare_ioctl;
+-	dm_target_ioctl_fn target_ioctl;
+ 	dm_busy_fn busy;
+ 	dm_iterate_devices_fn iterate_devices;
+ 	dm_io_hints_fn io_hints;
+-- 
+1.9.3
+

@@ -1,0 +1,53 @@
+From f396ca5d5ad75e5793feb6d9f59a75ca31ad23c4 Mon Sep 17 00:00:00 2001
+From: Colin Ian King <colin.king@canonical.com>
+Date: Fri, 22 Jan 2016 17:35:26 +0000
+Subject: [PATCH 1401/1767] drm/amdgpu: fix non-ANSI declaration of
+ amdgpu_amdkfd_gfx_*_get_functions()
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+amdgpu_amdkfd_gfx_7_get_functions and amdgpu_amdkfd_gfx_8_0_get_functions
+have no parameters, so use the normal void parameter convention to make
+them  match their prototypes in the header file
+drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd.h
+
+Signed-off-by: Colin Ian King <colin.king@canonical.com>
+Signed-off-by: Oded Gabbay <oded.gabbay@gmail.com>
+(cherry picked from commit f785d98711925aceb198fb96abd786fd19fad657)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v7.c | 2 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v8.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v7.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v7.c
+index 0e13763..362bedc 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v7.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v7.c
+@@ -154,7 +154,7 @@ static const struct kfd2kgd_calls kfd2kgd = {
+ 	.get_fw_version = get_fw_version
+ };
+ 
+-struct kfd2kgd_calls *amdgpu_amdkfd_gfx_7_get_functions()
++struct kfd2kgd_calls *amdgpu_amdkfd_gfx_7_get_functions(void)
+ {
+ 	return (struct kfd2kgd_calls *)&kfd2kgd;
+ }
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v8.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v8.c
+index 79fa5c7..04b744d 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v8.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gfx_v8.c
+@@ -115,7 +115,7 @@ static const struct kfd2kgd_calls kfd2kgd = {
+ 	.get_fw_version = get_fw_version
+ };
+ 
+-struct kfd2kgd_calls *amdgpu_amdkfd_gfx_8_0_get_functions()
++struct kfd2kgd_calls *amdgpu_amdkfd_gfx_8_0_get_functions(void)
+ {
+ 	return (struct kfd2kgd_calls *)&kfd2kgd;
+ }
+-- 
+1.9.3
+

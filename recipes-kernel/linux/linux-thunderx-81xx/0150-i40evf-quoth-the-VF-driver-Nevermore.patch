@@ -1,0 +1,47 @@
+From a98d80cdd9c5962575e20373ac0bc7c971b03bd3 Mon Sep 17 00:00:00 2001
+From: Mitch Williams <mitch.a.williams@intel.com>
+Date: Mon, 26 Oct 2015 19:44:38 -0400
+Subject: [PATCH 0150/1767] i40evf: quoth the VF driver, Nevermore
+
+BugLink: http://bugs.launchpad.net/bugs/1536474
+
+If, upon a midnight dreary, the PF returns ERR_PARAM when the VF is
+requesting resources, that's fatal. Either the firmware or NVM is badly,
+badly misconfigured, or this VF has been disabled due to a previous VF
+driver sending a bunch of bogus messages.
+
+Either way, there is no recovery from this. Don't ponder weak and weary,
+just quit.
+
+Change-ID: I09d9f16cc4ee7fec3b57646a289d33838c1c5bf5
+Signed-off-by: Mitch Williams <mitch.a.williams@intel.com>
+Tested-by: Andrew Bowers <andrewx.bowers@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit e743072fd16e6e772d5b5e4aef38873946f9a3e0)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/i40evf/i40evf_main.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/net/ethernet/intel/i40evf/i40evf_main.c b/drivers/net/ethernet/intel/i40evf/i40evf_main.c
+index e246433..49e3b45 100644
+--- a/drivers/net/ethernet/intel/i40evf/i40evf_main.c
++++ b/drivers/net/ethernet/intel/i40evf/i40evf_main.c
+@@ -2435,6 +2435,14 @@ static void i40evf_init_task(struct work_struct *work)
+ 		if (err == I40E_ERR_ADMIN_QUEUE_NO_WORK) {
+ 			err = i40evf_send_vf_config_msg(adapter);
+ 			goto err;
++		} else if (err == I40E_ERR_PARAM) {
++			/* We only get ERR_PARAM if the device is in a very bad
++			 * state or if we've been disabled for previous bad
++			 * behavior. Either way, we're done now.
++			 */
++			i40evf_shutdown_adminq(hw);
++			dev_err(&pdev->dev, "Unable to get VF config due to PF error condition, not retrying\n");
++			return;
+ 		}
+ 		if (err) {
+ 			dev_err(&pdev->dev, "Unable to get VF config (%d)\n",
+-- 
+1.9.3
+

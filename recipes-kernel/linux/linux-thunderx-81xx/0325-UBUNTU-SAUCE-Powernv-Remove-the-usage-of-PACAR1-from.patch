@@ -1,0 +1,49 @@
+From 86ebae1e94d994a2714e5c2cb7df702963f7e919 Mon Sep 17 00:00:00 2001
+From: Mahesh Salgaonkar <mahesh@linux.vnet.ibm.com>
+Date: Thu, 14 Jan 2016 08:44:58 +0530
+Subject: [PATCH 0325/1767] UBUNTU: SAUCE: Powernv: Remove the usage of PACAR1
+ from opal wrappers
+
+BugLink: http://bugs.launchpad.net/bugs/1537881
+https://lists.ozlabs.org/pipermail/linuxppc-dev/2016-January/138009.html
+
+OPAL_CALL wrapper code sticks the r1 (stack pointer) into PACAR1 purely
+for debugging purpose only. The power7_wakeup* functions relies on stack
+pointer saved in PACAR1. Any opal call made using opal wrapper (directly
+or in-directly) before we fall through power7_wakeup*, then it ends up
+replacing r1 in PACAR1(r13) leading to kernel panic. So far we don't see
+any issues because we have never made any opal calls using OPAL wrapper
+before power7_wakeup*. But the subsequent HMI patch would need to invoke
+C calls during cpu wakeup/idle path that in-directly makes opal call using
+opal wrapper. This patch facilitates the subsequent HMI patch by removing
+usage of PACAR1 from opal call wrapper.
+
+Signed-off-by: Mahesh Salgaonkar <mahesh@linux.vnet.ibm.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/powerpc/platforms/powernv/opal-wrappers.S | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arch/powerpc/platforms/powernv/opal-wrappers.S b/arch/powerpc/platforms/powernv/opal-wrappers.S
+index b7a464f..62fe496 100644
+--- a/arch/powerpc/platforms/powernv/opal-wrappers.S
++++ b/arch/powerpc/platforms/powernv/opal-wrappers.S
+@@ -64,7 +64,6 @@ END_FTR_SECTION(0, 1);						\
+ 	OPAL_BRANCH(opal_tracepoint_entry) \
+ 	mfcr	r12;			\
+ 	stw	r12,8(r1);		\
+-	std	r1,PACAR1(r13);		\
+ 	li	r11,0;			\
+ 	mfmsr	r12;			\
+ 	ori	r11,r11,MSR_EE;		\
+@@ -127,7 +126,6 @@ opal_tracepoint_entry:
+ 	mfcr	r12
+ 	std	r11,16(r1)
+ 	stw	r12,8(r1)
+-	std	r1,PACAR1(r13)
+ 	li	r11,0
+ 	mfmsr	r12
+ 	ori	r11,r11,MSR_EE
+-- 
+1.9.3
+

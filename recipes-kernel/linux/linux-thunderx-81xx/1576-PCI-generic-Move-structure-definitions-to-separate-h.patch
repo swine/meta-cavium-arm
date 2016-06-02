@@ -1,0 +1,127 @@
+From 4dd06850ec4de5bc710c8c6879c035156812098e Mon Sep 17 00:00:00 2001
+From: David Daney <david.daney@cavium.com>
+Date: Fri, 11 Mar 2016 15:18:38 -0600
+Subject: [PATCH 1576/1767] PCI: generic: Move structure definitions to
+ separate header file
+
+BugLink: http://bugs.launchpad.net/bugs/1558342
+
+Move definitions for generic PCI host controller driver structures to a
+separate header file so we can share them with other drivers.  No
+functional change intended.
+
+[bhelgaas: split into separate patch, changelog]
+Signed-off-by: David Daney <david.daney@cavium.com>
+Signed-off-by: Bjorn Helgaas <bhelgaas@google.com>
+Acked-by: Arnd Bergmann <arnd@arndb.de>
+Acked-by: Will Deacon <will.deacon@arm.com>
+(cherry picked from linux-next commit 7149b9fdaa5e160a7ee2af9014d9af77e87d9689)
+[dannf: modified to move the structures as they were in v4.4]
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/pci/host/pci-host-common.h  | 53 +++++++++++++++++++++++++++++++++++++
+ drivers/pci/host/pci-host-generic.c | 28 +-------------------
+ 2 files changed, 54 insertions(+), 27 deletions(-)
+ create mode 100644 drivers/pci/host/pci-host-common.h
+
+diff --git a/drivers/pci/host/pci-host-common.h b/drivers/pci/host/pci-host-common.h
+new file mode 100644
+index 0000000..07a742c
+--- /dev/null
++++ b/drivers/pci/host/pci-host-common.h
+@@ -0,0 +1,53 @@
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ *
++ * Copyright (C) 2014 ARM Limited
++ *
++ * Author: Will Deacon <will.deacon@arm.com>
++ */
++
++#ifndef _PCI_HOST_COMMON_H
++#define _PCI_HOST_COMMON_H
++
++#include <linux/kernel.h>
++#include <linux/platform_device.h>
++
++struct gen_pci_cfg_bus_ops {
++	u32 bus_shift;
++	struct pci_ops ops;
++};
++
++struct gen_pci_cfg_windows {
++	struct resource				res;
++	struct resource				*bus_range;
++	void __iomem				**win;
++
++	struct gen_pci_cfg_bus_ops		*ops;
++};
++
++/*
++ * ARM pcibios functions expect the ARM struct pci_sys_data as the PCI
++ * sysdata.  Add pci_sys_data as the first element in struct gen_pci so
++ * that when we use a gen_pci pointer as sysdata, it is also a pointer to
++ * a struct pci_sys_data.
++ */
++struct gen_pci {
++#ifdef CONFIG_ARM
++	struct pci_sys_data			sys;
++#endif
++	struct pci_host_bridge			host;
++	struct gen_pci_cfg_windows		cfg;
++	struct list_head			resources;
++};
++
++#endif /* _PCI_HOST_COMMON_H */
+diff --git a/drivers/pci/host/pci-host-generic.c b/drivers/pci/host/pci-host-generic.c
+index 5434c90..89e25b2 100644
+--- a/drivers/pci/host/pci-host-generic.c
++++ b/drivers/pci/host/pci-host-generic.c
+@@ -25,33 +25,7 @@
+ #include <linux/of_pci.h>
+ #include <linux/platform_device.h>
+ 
+-struct gen_pci_cfg_bus_ops {
+-	u32 bus_shift;
+-	struct pci_ops ops;
+-};
+-
+-struct gen_pci_cfg_windows {
+-	struct resource				res;
+-	struct resource				*bus_range;
+-	void __iomem				**win;
+-
+-	struct gen_pci_cfg_bus_ops		*ops;
+-};
+-
+-/*
+- * ARM pcibios functions expect the ARM struct pci_sys_data as the PCI
+- * sysdata.  Add pci_sys_data as the first element in struct gen_pci so
+- * that when we use a gen_pci pointer as sysdata, it is also a pointer to
+- * a struct pci_sys_data.
+- */
+-struct gen_pci {
+-#ifdef CONFIG_ARM
+-	struct pci_sys_data			sys;
+-#endif
+-	struct pci_host_bridge			host;
+-	struct gen_pci_cfg_windows		cfg;
+-	struct list_head			resources;
+-};
++#include "pci-host-common.h"
+ 
+ static void __iomem *gen_pci_map_cfg_bus_cam(struct pci_bus *bus,
+ 					     unsigned int devfn,
+-- 
+1.9.3
+

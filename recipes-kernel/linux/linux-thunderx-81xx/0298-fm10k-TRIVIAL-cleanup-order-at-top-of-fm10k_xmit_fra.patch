@@ -1,0 +1,39 @@
+From f9ea579c7811123e38c708704041f023c3fd4da1 Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Fri, 16 Oct 2015 10:57:11 -0700
+Subject: [PATCH 0298/1767] fm10k: TRIVIAL cleanup order at top of
+ fm10k_xmit_frame
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Tested-by: Krishneil Singh <krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 03d13a51fb4494f3bf47f65e2be00e56c36d2b63)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_main.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_main.c b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+index d422cd1..1c17b62 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_main.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+@@ -1094,11 +1094,11 @@ dma_error:
+ netdev_tx_t fm10k_xmit_frame_ring(struct sk_buff *skb,
+ 				  struct fm10k_ring *tx_ring)
+ {
++	u16 count = TXD_USE_COUNT(skb_headlen(skb));
+ 	struct fm10k_tx_buffer *first;
+-	int tso;
+-	u32 tx_flags = 0;
+ 	unsigned short f;
+-	u16 count = TXD_USE_COUNT(skb_headlen(skb));
++	u32 tx_flags = 0;
++	int tso;
+ 
+ 	/* need: 1 descriptor per page * PAGE_SIZE/FM10K_MAX_DATA_PER_TXD,
+ 	 *       + 1 desc for skb_headlen/FM10K_MAX_DATA_PER_TXD,
+-- 
+1.9.3
+

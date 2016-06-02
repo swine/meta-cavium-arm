@@ -1,0 +1,72 @@
+From 4dcca8be5100cdf483d359a5dfd92ea6f90e018e Mon Sep 17 00:00:00 2001
+From: "Matthew R. Ochs" <mrochs@linux.vnet.ibm.com>
+Date: Tue, 27 Oct 2015 11:53:00 -0500
+Subject: [PATCH 0099/1767] UBUNTU: SAUCE: (noup) cxlflash: Fix to avoid
+ virtual LUN failover failure
+
+BugLink: http://bugs.launchpad.net/bugs/1513583
+
+Applications which use virtual LUN's that are backed by a physical LUN
+over both adapter ports may experience an I/O failure in the event of
+a link loss (e.g. cable pull).
+
+Virtual LUNs may be accessed through one or both ports of the adapter.
+This access is encoded in the translation entries that comprise the
+virtual LUN and used by the AFU for load-balancing I/O and handling
+failover scenarios. In a link loss scenario, even though the AFU is
+able to maintain connectivity to the LUN, it is up to the application
+to retry the failed I/O. When applications are unaware of the virtual
+LUN's underlying topology, they are unable to make a sound decision of
+when to retry an I/O and therefore are forced to make their reaction to
+a failed I/O absolute. The result is either a failure to retry I/O or
+increased latency for scenarios where a retry is pointless.
+
+To remedy this scenario, provide feedback back to the application on
+virtual LUN creation as to which ports the LUN may be accessed. LUN's
+spanning both ports are candidates for a retry in a presence of an I/O
+failure.
+
+Signed-off-by: Matthew R. Ochs <mrochs@linux.vnet.ibm.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/cxlflash/vlun.c       |  2 ++
+ include/uapi/scsi/cxlflash_ioctl.h | 10 ++++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/drivers/scsi/cxlflash/vlun.c b/drivers/scsi/cxlflash/vlun.c
+index a53f583..50f8e93 100644
+--- a/drivers/scsi/cxlflash/vlun.c
++++ b/drivers/scsi/cxlflash/vlun.c
+@@ -1008,6 +1008,8 @@ int cxlflash_disk_virtual_open(struct scsi_device *sdev, void *arg)
+ 	virt->last_lba = last_lba;
+ 	virt->rsrc_handle = rsrc_handle;
+ 
++	if (lli->port_sel == BOTH_PORTS)
++		virt->hdr.return_flags |= DK_CXLFLASH_ALL_PORTS_ACTIVE;
+ out:
+ 	if (likely(ctxi))
+ 		put_context(ctxi);
+diff --git a/include/uapi/scsi/cxlflash_ioctl.h b/include/uapi/scsi/cxlflash_ioctl.h
+index 831351b..2302f3c 100644
+--- a/include/uapi/scsi/cxlflash_ioctl.h
++++ b/include/uapi/scsi/cxlflash_ioctl.h
+@@ -31,6 +31,16 @@ struct dk_cxlflash_hdr {
+ };
+ 
+ /*
++ * Return flag definitions available to all ioctls
++ *
++ * Similar to the input flags, these are grown from the bottom-up with the
++ * intention that ioctl-specific return flag definitions would grow from the
++ * top-down, allowing the two sets to co-exist. While not required/enforced
++ * at this time, this provides future flexibility.
++ */
++#define DK_CXLFLASH_ALL_PORTS_ACTIVE	0x0000000000000001ULL
++
++/*
+  * Notes:
+  * -----
+  * The 'context_id' field of all ioctl structures contains the context
+-- 
+1.9.3
+

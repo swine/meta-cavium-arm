@@ -1,0 +1,22 @@
+diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
+index f923687..ebaf38a 100644
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -370,7 +370,7 @@ config ARM64_ERRATUM_834220
+ 
+ config ARM64_ERRATUM_845719
+ 	bool "Cortex-A53: 845719: a load might read incorrect data"
+-	depends on COMPAT
++	depends on AARCH32_EL0
+ 	default y
+ 	help
+ 	  This option adds an alternative code sequence to work around ARM
+@@ -655,7 +655,7 @@ config FORCE_MAX_ZONEORDER
+ 
+ menuconfig ARMV8_DEPRECATED
+ 	bool "Emulate deprecated/obsolete ARMv8 instructions"
+-	depends on COMPAT
++	depends on AARCH32_EL0
+ 	help
+ 	  Legacy software support may require certain instructions
+ 	  that have been deprecated or obsoleted in the architecture.

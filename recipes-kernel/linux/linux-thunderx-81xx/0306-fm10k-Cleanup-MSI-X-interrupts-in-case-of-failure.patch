@@ -1,0 +1,39 @@
+From b1563e52014ab6525f01854cb4427610d4fc9829 Mon Sep 17 00:00:00 2001
+From: Alexander Duyck <aduyck@mirantis.com>
+Date: Tue, 27 Oct 2015 16:59:12 -0700
+Subject: [PATCH 0306/1767] fm10k: Cleanup MSI-X interrupts in case of failure
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+If the q_vector allocation fails we should free the resources associated
+with the MSI-X vector table.
+
+Signed-off-by: Alexander Duyck <aduyck@mirantis.com>
+Reviewed-by: Bruce Allan <bruce.w.allan@intel.com>
+Tested-by: Krishneil Singh <Krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 587731e684dcf3522215194a02357d26b9bc7277)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_main.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_main.c b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+index df43362..d8b7800 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_main.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+@@ -1998,8 +1998,10 @@ int fm10k_init_queueing_scheme(struct fm10k_intfc *interface)
+ 
+ 	/* Allocate memory for queues */
+ 	err = fm10k_alloc_q_vectors(interface);
+-	if (err)
++	if (err) {
++		fm10k_reset_msix_capability(interface);
+ 		return err;
++	}
+ 
+ 	/* Map rings to devices, and map devices to physical queues */
+ 	fm10k_assign_rings(interface);
+-- 
+1.9.3
+

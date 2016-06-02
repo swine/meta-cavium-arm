@@ -1,0 +1,34 @@
+From 2c48b496cac4c659a3a6b48fa97c22bab05244c7 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Fri, 4 Mar 2016 05:55:27 -0700
+Subject: [PATCH 1215/1767] Revert "UBUNTU: SAUCE: bcache: prevent crash on
+ changing writeback_running"
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+This reverts commit 6ac65b6e19d2d6f6e0b093ea0c039ca3116f8617.
+
+Revert in favor of upstream stable.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/md/bcache/writeback.h | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/md/bcache/writeback.h b/drivers/md/bcache/writeback.h
+index 073a042..0a9dab1 100644
+--- a/drivers/md/bcache/writeback.h
++++ b/drivers/md/bcache/writeback.h
+@@ -63,8 +63,7 @@ static inline bool should_writeback(struct cached_dev *dc, struct bio *bio,
+ 
+ static inline void bch_writeback_queue(struct cached_dev *dc)
+ {
+-	if (!IS_ERR_OR_NULL(dc->writeback_thread))
+-		wake_up_process(dc->writeback_thread);
++	wake_up_process(dc->writeback_thread);
+ }
+ 
+ static inline void bch_writeback_add(struct cached_dev *dc)
+-- 
+1.9.3
+

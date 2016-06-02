@@ -1,0 +1,56 @@
+From 9d1f9a7f0f38603ae7166f5ba57808e83574ca73 Mon Sep 17 00:00:00 2001
+From: Aditya Kali <adityakali@google.com>
+Date: Wed, 17 Sep 2014 15:16:31 -0700
+Subject: [PATCH 0624/1767] UBUNTU: SAUCE: (noup) cgroup: cgroup namespace
+ setns support
+
+BugLink: http://bugs.launchpad.net/bugs/1546775
+
+setns on a cgroup namespace is allowed only if
+task has CAP_SYS_ADMIN in its current user-namespace and
+over the user-namespace associated with target cgroupns.
+No implicit cgroup changes happen with attaching to another
+cgroupns. It is expected that the somone moves the attaching
+process under the target cgroupns-root.
+
+Signed-off-by: Aditya Kali <adityakali@google.com>
+Signed-off-by: Serge E. Hallyn <serge.hallyn@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/cgroup.c | 19 ++++++++++++++++---
+ 1 file changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/kernel/cgroup.c b/kernel/cgroup.c
+index b0a3ecc..f93d8b1 100644
+--- a/kernel/cgroup.c
++++ b/kernel/cgroup.c
+@@ -5952,10 +5952,23 @@ static inline struct cgroup_namespace *to_cg_ns(struct ns_common *ns)
+ 	return container_of(ns, struct cgroup_namespace, ns);
+ }
+ 
+-static int cgroupns_install(struct nsproxy *nsproxy, void *ns)
++static int cgroupns_install(struct nsproxy *nsproxy, struct ns_common *ns)
+ {
+-	pr_info("setns not supported for cgroup namespace");
+-	return -EINVAL;
++	struct cgroup_namespace *cgroup_ns = to_cg_ns(ns);
++
++	if (!ns_capable(current_user_ns(), CAP_SYS_ADMIN) ||
++	    !ns_capable(cgroup_ns->user_ns, CAP_SYS_ADMIN))
++		return -EPERM;
++
++	/* Don't need to do anything if we are attaching to our own cgroupns. */
++	if (cgroup_ns == nsproxy->cgroup_ns)
++		return 0;
++
++	get_cgroup_ns(cgroup_ns);
++	put_cgroup_ns(nsproxy->cgroup_ns);
++	nsproxy->cgroup_ns = cgroup_ns;
++
++	return 0;
+ }
+ 
+ static struct ns_common *cgroupns_get(struct task_struct *task)
+-- 
+1.9.3
+

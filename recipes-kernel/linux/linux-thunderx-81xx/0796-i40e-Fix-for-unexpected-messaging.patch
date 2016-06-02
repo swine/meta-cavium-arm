@@ -1,0 +1,50 @@
+From 29c18fb1cd79796cd8ac714cebebc2507ee241d8 Mon Sep 17 00:00:00 2001
+From: Carolyn Wyborny <carolyn.wyborny@intel.com>
+Date: Wed, 17 Feb 2016 16:12:16 -0800
+Subject: [PATCH 0796/1767] i40e: Fix for unexpected messaging
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+This fixes an issue where a previously removed message
+has returned.  Changing the message type to dev_dbg
+leaves the info, if desired, but takes it out of normal
+everyday usage. Also changed call to only provide port
+data when its valid and not when its not (delete case).
+
+Change-ID: Ief6f33b915f6364c24fa8e5789c2fc3168b5e2ed
+Signed-off-by: Carolyn Wyborny <carolyn.wyborny@intel.com>
+Tested-by: Andrew Bowers <andrewx.bowers@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit 730a8f8777e55912f445c2c29234d51cceb1dfc2)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/i40e/i40e_main.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_main.c b/drivers/net/ethernet/intel/i40e/i40e_main.c
+index f26c883..3af012a 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_main.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_main.c
+@@ -7100,12 +7100,13 @@ static void i40e_sync_udp_filters_subtask(struct i40e_pf *pf)
+ 				ret = i40e_aq_del_udp_tunnel(hw, i, NULL);
+ 
+ 			if (ret) {
+-				dev_info(&pf->pdev->dev,
+-					 "%s vxlan port %d, index %d failed, err %s aq_err %s\n",
+-					 port ? "add" : "delete",
+-					 ntohs(port), i,
+-					 i40e_stat_str(&pf->hw, ret),
+-					 i40e_aq_str(&pf->hw,
++				dev_dbg(&pf->pdev->dev,
++					"%s %s port %d, index %d failed, err %s aq_err %s\n",
++					pf->udp_ports[i].type ? "vxlan" : "geneve",
++					port ? "add" : "delete",
++					ntohs(port), i,
++					i40e_stat_str(&pf->hw, ret),
++					i40e_aq_str(&pf->hw,
+ 						    pf->hw.aq.asq_last_status));
+ 				pf->udp_ports[i].index = 0;
+ 			}
+-- 
+1.9.3
+

@@ -1,0 +1,111 @@
+From 03d13afe730c08ebc6a19b1b0cfe887c59348ee6 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Thu, 26 Nov 2015 10:51:23 +0100
+Subject: [PATCH 0398/1767] nvme: factor out a nvme_unmap_data helper
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+This is the counter part to nvme_map_data.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit d4f6c3aba5b496a2cb80a8e8e082ae51e46579f3)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/pci.c | 43 +++++++++++++++++++++++++------------------
+ 1 file changed, 25 insertions(+), 18 deletions(-)
+
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 16e67cf..edc5939 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -89,10 +89,12 @@ static struct class *nvme_class;
+ 
+ struct nvme_dev;
+ struct nvme_queue;
++struct nvme_iod;
+ 
+ static int __nvme_reset(struct nvme_dev *dev);
+ static int nvme_reset(struct nvme_dev *dev);
+ static void nvme_process_cq(struct nvme_queue *nvmeq);
++static void nvme_unmap_data(struct nvme_dev *dev, struct nvme_iod *iod);
+ static void nvme_dead_ctrl(struct nvme_dev *dev);
+ 
+ struct async_cmd_info {
+@@ -655,7 +657,6 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
+ 	struct request *req = iod_get_private(iod);
+ 	struct nvme_cmd_info *cmd_rq = blk_mq_rq_to_pdu(req);
+ 	u16 status = le16_to_cpup(&cqe->status) >> 1;
+-	bool requeue = false;
+ 	int error = 0;
+ 
+ 	if (unlikely(status)) {
+@@ -663,13 +664,14 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
+ 		    && (jiffies - req->start_time) < req->timeout) {
+ 			unsigned long flags;
+ 
+-			requeue = true;
++			nvme_unmap_data(nvmeq->dev, iod);
++
+ 			blk_mq_requeue_request(req);
+ 			spin_lock_irqsave(req->q->queue_lock, flags);
+ 			if (!blk_queue_stopped(req->q))
+ 				blk_mq_kick_requeue_list(req->q);
+ 			spin_unlock_irqrestore(req->q->queue_lock, flags);
+-			goto release_iod;
++			return;
+ 		}
+ 
+ 		if (req->cmd_type == REQ_TYPE_DRV_PRIV) {
+@@ -692,21 +694,8 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
+ 			"completing aborted command with status:%04x\n",
+ 			error);
+ 
+-release_iod:
+-	if (iod->nents) {
+-		dma_unmap_sg(nvmeq->dev->dev, iod->sg, iod->nents,
+-			rq_data_dir(req) ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
+-		if (blk_integrity_rq(req)) {
+-			if (!rq_data_dir(req))
+-				nvme_dif_remap(req, nvme_dif_complete);
+-			dma_unmap_sg(nvmeq->dev->dev, iod->meta_sg, 1,
+-				rq_data_dir(req) ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
+-		}
+-	}
+-	nvme_free_iod(nvmeq->dev, iod);
+-
+-	if (likely(!requeue))
+-		blk_mq_complete_request(req, error);
++	nvme_unmap_data(nvmeq->dev, iod);
++	blk_mq_complete_request(req, error);
+ }
+ 
+ static bool nvme_setup_prps(struct nvme_dev *dev, struct nvme_iod *iod,
+@@ -837,6 +826,24 @@ out:
+ 	return ret;
+ }
+ 
++static void nvme_unmap_data(struct nvme_dev *dev, struct nvme_iod *iod)
++{
++	struct request *req = iod_get_private(iod);
++	enum dma_data_direction dma_dir = rq_data_dir(req) ?
++			DMA_TO_DEVICE : DMA_FROM_DEVICE;
++
++	if (iod->nents) {
++		dma_unmap_sg(dev->dev, iod->sg, iod->nents, dma_dir);
++		if (blk_integrity_rq(req)) {
++			if (!rq_data_dir(req))
++				nvme_dif_remap(req, nvme_dif_complete);
++			dma_unmap_sg(dev->dev, iod->meta_sg, 1, dma_dir);
++		}
++	}
++
++	nvme_free_iod(dev, iod);
++}
++
+ /*
+  * We reuse the small pool to allocate the 16-byte range here as it is not
+  * worth having a special pool for these or additional cases to handle freeing
+-- 
+1.9.3
+

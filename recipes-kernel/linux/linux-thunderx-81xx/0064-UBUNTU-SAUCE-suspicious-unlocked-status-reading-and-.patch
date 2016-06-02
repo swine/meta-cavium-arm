@@ -1,0 +1,33 @@
+From 9d8f59fbcf872c86d1e823032f48269a3db765cf Mon Sep 17 00:00:00 2001
+From: Andy Whitcroft <apw@canonical.com>
+Date: Tue, 17 Dec 2013 11:50:04 +0000
+Subject: [PATCH 0064/1767] UBUNTU: SAUCE: suspicious unlocked ->status reading
+ and writing in ipc/sem.c
+
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ ipc/sem.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/ipc/sem.c b/ipc/sem.c
+index b471e5a..99eee51 100644
+--- a/ipc/sem.c
++++ b/ipc/sem.c
+@@ -1984,6 +1984,14 @@ sleep_again:
+ 	error = get_queue_result(&queue);
+ 
+ 	/*
++	 * wake_up_sem_queue_do operates on queue without locking, so we
++	 * need a barrier here to order our read of queue.status and the
++	 * subsequent reuse of queue (queue is on the stack so will be
++	 * most likely reused in the next function call).
++	 */
++	smp_mb();
++
++	/*
+ 	 * Array removed? If yes, leave without sem_unlock().
+ 	 */
+ 	if (IS_ERR(sma)) {
+-- 
+1.9.3
+

@@ -1,0 +1,26 @@
+From b59c2f81e6decdbd70396468f430d8bfd51546a3 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Mon, 20 Jul 2015 08:58:20 -0600
+Subject: [PATCH 0083/1767] UBUNTU: SAUCE: Fix FTBS in proc_version_signature
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/proc/version_signature.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/fs/proc/version_signature.c b/fs/proc/version_signature.c
+index 859fb60..bfd43d2 100644
+--- a/fs/proc/version_signature.c
++++ b/fs/proc/version_signature.c
+@@ -1,6 +1,7 @@
++#include <linux/kernel.h>
++#include <linux/module.h>
+ #include <linux/fs.h>
+ #include <linux/init.h>
+-#include <linux/kernel.h>
+ #include <linux/proc_fs.h>
+ #include <linux/seq_file.h>
+ #include <linux/utsname.h>
+-- 
+1.9.3
+

@@ -1,0 +1,83 @@
+From 2994e34882c1532d1305609a2174d4a5db6144c3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Christian=20K=C3=B6nig?= <christian.koenig@amd.com>
+Date: Mon, 11 Jan 2016 15:35:20 +0100
+Subject: [PATCH 1382/1767] drm/ttm: add ttm_bo_move_to_lru_tail function v2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+This allows the drivers to move a BO to the end of the LRU
+without removing and adding it again.
+
+v2: Make it more robust, handle pinned and swapable BOs as well.
+
+Reviewed-by: Thomas Hellstrom <thellstrom@vmware.com>
+Signed-off-by: Christian König <christian.koenig@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit ab74961810ba7935b5f9643da10daaa36690f48e)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/ttm/ttm_bo.c | 21 +++++++++++++++++++++
+ include/drm/ttm/ttm_bo_api.h | 10 ++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/drivers/gpu/drm/ttm/ttm_bo.c b/drivers/gpu/drm/ttm/ttm_bo.c
+index 3ea9a01..4cbf265 100644
+--- a/drivers/gpu/drm/ttm/ttm_bo.c
++++ b/drivers/gpu/drm/ttm/ttm_bo.c
+@@ -228,6 +228,27 @@ void ttm_bo_del_sub_from_lru(struct ttm_buffer_object *bo)
+ }
+ EXPORT_SYMBOL(ttm_bo_del_sub_from_lru);
+ 
++void ttm_bo_move_to_lru_tail(struct ttm_buffer_object *bo)
++{
++	struct ttm_bo_device *bdev = bo->bdev;
++	struct ttm_mem_type_manager *man;
++
++	lockdep_assert_held(&bo->resv->lock.base);
++
++	if (bo->mem.placement & TTM_PL_FLAG_NO_EVICT) {
++		list_del_init(&bo->swap);
++		list_del_init(&bo->lru);
++
++	} else {
++		if (bo->ttm && !(bo->ttm->page_flags & TTM_PAGE_FLAG_SG))
++			list_move_tail(&bo->swap, &bo->glob->swap_lru);
++
++		man = &bdev->man[bo->mem.mem_type];
++		list_move_tail(&bo->lru, &man->lru);
++	}
++}
++EXPORT_SYMBOL(ttm_bo_move_to_lru_tail);
++
+ /*
+  * Call bo->mutex locked.
+  */
+diff --git a/include/drm/ttm/ttm_bo_api.h b/include/drm/ttm/ttm_bo_api.h
+index c768ddf..afae231 100644
+--- a/include/drm/ttm/ttm_bo_api.h
++++ b/include/drm/ttm/ttm_bo_api.h
+@@ -383,6 +383,16 @@ extern void ttm_bo_add_to_lru(struct ttm_buffer_object *bo);
+  */
+ extern int ttm_bo_del_from_lru(struct ttm_buffer_object *bo);
+ 
++/**
++ * ttm_bo_move_to_lru_tail
++ *
++ * @bo: The buffer object.
++ *
++ * Move this BO to the tail of all lru lists used to lookup and reserve an
++ * object. This function must be called with struct ttm_bo_global::lru_lock
++ * held, and is used to make a BO less likely to be considered for eviction.
++ */
++extern void ttm_bo_move_to_lru_tail(struct ttm_buffer_object *bo);
+ 
+ /**
+  * ttm_bo_lock_delayed_workqueue
+-- 
+1.9.3
+

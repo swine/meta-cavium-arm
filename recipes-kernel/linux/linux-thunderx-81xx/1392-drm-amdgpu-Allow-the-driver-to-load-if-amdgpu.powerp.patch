@@ -1,0 +1,60 @@
+From 4c46e586a6e2f8a459d4860d68010b1a7772efe3 Mon Sep 17 00:00:00 2001
+From: Jordan Lazare <Jordan.Lazare@amd.com>
+Date: Mon, 18 Jan 2016 17:00:03 -0500
+Subject: [PATCH 1392/1767] drm/amdgpu: Allow the driver to load if
+ amdgpu.powerplay=1 on asics without powerplay support
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Avoid setting pp_enabled if there is no powerplay implementation.
+
+Signed-off-by: Jordan Lazare <Jordan.Lazare@amd.com>
+Reviewed-by: Alex Deucher <alexander.deucher@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 3466904d38ff1e63f0a19cb31166db67f2d05c61)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c | 25 ++++++++++++++++++-------
+ 1 file changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+index 468e534..cdfd416 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+@@ -98,13 +98,24 @@ static int amdgpu_pp_early_init(void *handle)
+ 
+ #ifdef CONFIG_DRM_AMD_POWERPLAY
+ 	switch (adev->asic_type) {
+-		case CHIP_TONGA:
+-		case CHIP_FIJI:
+-			adev->pp_enabled = (amdgpu_powerplay > 0) ? true : false;
+-			break;
+-		default:
+-			adev->pp_enabled = (amdgpu_powerplay > 0) ? true : false;
+-			break;
++	case CHIP_TONGA:
++	case CHIP_FIJI:
++		adev->pp_enabled = (amdgpu_powerplay == 0) ? false : true;
++		break;
++	case CHIP_CARRIZO:
++	case CHIP_STONEY:
++		adev->pp_enabled = (amdgpu_powerplay > 0) ? true : false;
++		break;
++	/* These chips don't have powerplay implemenations */
++	case CHIP_BONAIRE:
++	case CHIP_HAWAII:
++	case CHIP_KABINI:
++	case CHIP_MULLINS:
++	case CHIP_KAVERI:
++	case CHIP_TOPAZ:
++	default:
++		adev->pp_enabled = false;
++		break;
+ 	}
+ #else
+ 	adev->pp_enabled = false;
+-- 
+1.9.3
+

@@ -1,0 +1,108 @@
+From 2fe9c1190134aabbd853025932a287f25927a479 Mon Sep 17 00:00:00 2001
+From: Joe Schultz <jschultz@xes-inc.com>
+Date: Tue, 3 Nov 2015 12:37:29 -0600
+Subject: [PATCH 0202/1767] igb: Explicitly label self-test result indices
+
+Previously, the ethtool self-test gstrings/data arrays were accessed via
+hardcoded indices, which made the code difficult to follow. This patch
+replaces the hardcoded values with enum-based labels.
+
+Signed-off-by: Joe Schultz <jschultz@xes-inc.com>
+Signed-off-by: Aaron Sierra <asierra@xes-inc.com>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit d602de05934c1d3022b153ff879e81f65df2a7b6)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/igb/igb_ethtool.c | 38 ++++++++++++++++++----------
+ 1 file changed, 24 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/igb/igb_ethtool.c b/drivers/net/ethernet/intel/igb/igb_ethtool.c
+index 2529bc6..1d329f1 100644
+--- a/drivers/net/ethernet/intel/igb/igb_ethtool.c
++++ b/drivers/net/ethernet/intel/igb/igb_ethtool.c
+@@ -127,10 +127,20 @@ static const struct igb_stats igb_gstrings_net_stats[] = {
+ #define IGB_STATS_LEN \
+ 	(IGB_GLOBAL_STATS_LEN + IGB_NETDEV_STATS_LEN + IGB_QUEUE_STATS_LEN)
+ 
++enum igb_diagnostics_results {
++	TEST_REG = 0,
++	TEST_EEP,
++	TEST_IRQ,
++	TEST_LOOP,
++	TEST_LINK
++};
++
+ static const char igb_gstrings_test[][ETH_GSTRING_LEN] = {
+-	"Register test  (offline)", "Eeprom test    (offline)",
+-	"Interrupt test (offline)", "Loopback test  (offline)",
+-	"Link test   (on/offline)"
++	[TEST_REG]  = "Register test  (offline)",
++	[TEST_EEP]  = "Eeprom test    (offline)",
++	[TEST_IRQ]  = "Interrupt test (offline)",
++	[TEST_LOOP] = "Loopback test  (offline)",
++	[TEST_LINK] = "Link test   (on/offline)"
+ };
+ #define IGB_TEST_LEN (sizeof(igb_gstrings_test) / ETH_GSTRING_LEN)
+ 
+@@ -2002,7 +2012,7 @@ static void igb_diag_test(struct net_device *netdev,
+ 		/* Link test performed before hardware reset so autoneg doesn't
+ 		 * interfere with test result
+ 		 */
+-		if (igb_link_test(adapter, &data[4]))
++		if (igb_link_test(adapter, &data[TEST_LINK]))
+ 			eth_test->flags |= ETH_TEST_FL_FAILED;
+ 
+ 		if (if_running)
+@@ -2011,21 +2021,21 @@ static void igb_diag_test(struct net_device *netdev,
+ 		else
+ 			igb_reset(adapter);
+ 
+-		if (igb_reg_test(adapter, &data[0]))
++		if (igb_reg_test(adapter, &data[TEST_REG]))
+ 			eth_test->flags |= ETH_TEST_FL_FAILED;
+ 
+ 		igb_reset(adapter);
+-		if (igb_eeprom_test(adapter, &data[1]))
++		if (igb_eeprom_test(adapter, &data[TEST_EEP]))
+ 			eth_test->flags |= ETH_TEST_FL_FAILED;
+ 
+ 		igb_reset(adapter);
+-		if (igb_intr_test(adapter, &data[2]))
++		if (igb_intr_test(adapter, &data[TEST_IRQ]))
+ 			eth_test->flags |= ETH_TEST_FL_FAILED;
+ 
+ 		igb_reset(adapter);
+ 		/* power up link for loopback test */
+ 		igb_power_up_link(adapter);
+-		if (igb_loopback_test(adapter, &data[3]))
++		if (igb_loopback_test(adapter, &data[TEST_LOOP]))
+ 			eth_test->flags |= ETH_TEST_FL_FAILED;
+ 
+ 		/* restore speed, duplex, autoneg settings */
+@@ -2045,16 +2055,16 @@ static void igb_diag_test(struct net_device *netdev,
+ 		dev_info(&adapter->pdev->dev, "online testing starting\n");
+ 
+ 		/* PHY is powered down when interface is down */
+-		if (if_running && igb_link_test(adapter, &data[4]))
++		if (if_running && igb_link_test(adapter, &data[TEST_LINK]))
+ 			eth_test->flags |= ETH_TEST_FL_FAILED;
+ 		else
+-			data[4] = 0;
++			data[TEST_LINK] = 0;
+ 
+ 		/* Online tests aren't run; pass by default */
+-		data[0] = 0;
+-		data[1] = 0;
+-		data[2] = 0;
+-		data[3] = 0;
++		data[TEST_REG] = 0;
++		data[TEST_EEP] = 0;
++		data[TEST_IRQ] = 0;
++		data[TEST_LOOP] = 0;
+ 
+ 		clear_bit(__IGB_TESTING, &adapter->state);
+ 	}
+-- 
+1.9.3
+

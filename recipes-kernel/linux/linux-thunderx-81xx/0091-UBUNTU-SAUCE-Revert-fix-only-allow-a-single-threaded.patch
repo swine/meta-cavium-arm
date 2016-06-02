@@ -1,0 +1,46 @@
+From 4f0f56fe1eb83428f20cb973f2c53d21556588ef Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Mon, 6 Oct 2014 11:16:42 -0700
+Subject: [PATCH 0091/1767] UBUNTU: SAUCE: Revert: fix: only allow a single
+ threaded process to ...
+
+Revert the enforcement of only a single thread tasks using change_onexec.
+While this change prevents applications from using change_onexec in
+a potentially broken way (it can be done right but the application code
+using it needs to be carefully audited), it does restrict historically
+allowed behavior. Specifically this change is causes docker to fail, and
+needs to be reverted until it can be selectively applied with policy
+changes.
+
+BugLink: http://bugs.launchpad.net/bugs/1371310
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/domain.c | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index dd87dff..3728644 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -818,13 +818,6 @@ int aa_change_profile(const char *ns_name, const char *hname, bool onexec,
+ 	if (error)
+ 		goto audit;
+ 
+-	if (onexec && !current_is_single_threaded()) {
+-		info = "not a single threaded task";
+-		error = -EACCES;
+-		goto audit;
+-	}
+-
+-
+ 	if (permtest)
+ 		goto audit;
+ 
+-- 
+1.9.3
+

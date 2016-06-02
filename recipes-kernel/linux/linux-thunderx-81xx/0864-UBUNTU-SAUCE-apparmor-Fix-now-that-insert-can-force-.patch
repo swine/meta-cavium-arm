@@ -1,0 +1,28 @@
+From 1a6a8608f900c24bc0661cca4abd74b3943b5f37 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 14 Oct 2015 04:52:44 -0700
+Subject: [PATCH 0864/1767] UBUNTU: SAUCE: apparmor: Fix: now that insert can
+ force replacement use it instead of remove_and_insert
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index e0681e4..a1482a8 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1858,7 +1858,7 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 		goto insert;
+ 	}
+ insert:
+-	tmp = __aa_label_remove_and_insert(labels_set(label), label, l, true);
++	tmp = __aa_label_insert(labels_set(label), l, true);
+ 	if (tmp != l) {
+ 		aa_label_free(l);
+ 		l = tmp;
+-- 
+1.9.3
+

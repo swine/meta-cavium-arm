@@ -1,0 +1,33 @@
+From 5f31a8a9efabef5940ba5849793c8999fd77b4ad Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Tue, 9 Jun 2015 16:13:30 -0500
+Subject: [PATCH 0578/1767] UBUNTU: SAUCE: quota: Treat superblock owner as
+ privilged
+
+A user privileged towards s_user_ns is privileged towards the
+superblock and should be allowed to perform privileged quota
+operations on that superblock. Convert check_quotactl_permission
+to check for CAP_SYS_ADMIN in s_user_ns for these operations.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/quota/quota.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/quota/quota.c b/fs/quota/quota.c
+index a40eaec..0370ae3 100644
+--- a/fs/quota/quota.c
++++ b/fs/quota/quota.c
+@@ -38,7 +38,7 @@ static int check_quotactl_permission(struct super_block *sb, int type, int cmd,
+ 			break;
+ 		/*FALLTHROUGH*/
+ 	default:
+-		if (!capable(CAP_SYS_ADMIN))
++		if (!ns_capable(sb->s_user_ns, CAP_SYS_ADMIN))
+ 			return -EPERM;
+ 	}
+ 
+-- 
+1.9.3
+

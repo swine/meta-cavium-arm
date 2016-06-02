@@ -1,0 +1,55 @@
+From 2a03f9f8ca49e99719cc648c17e9cea20e2d954e Mon Sep 17 00:00:00 2001
+From: Marc Zyngier <marc.zyngier@arm.com>
+Date: Fri, 15 Jan 2016 17:41:09 +0000
+Subject: [PATCH 0813/1767] hrtimer: Catch illegal clockids
+
+It is way too easy to take any random clockid and feed it to
+the hrtimer subsystem. At best, it gets mapped to a monotonic
+base, but it would be better to just catch illegal values as
+early as possible.
+
+This patch does exactly that, mapping illegal clockids to an
+illegal base index, and panicing when we detect the illegal
+condition.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+Cc: Tomasz Nowicki <tn@semihalf.com>
+Cc: Christoffer Dall <christoffer.dall@linaro.org>
+Link: http://lkml.kernel.org/r/1452879670-16133-3-git-send-email-marc.zyngier@arm.com
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+(cherry picked from linux-next commit 9006a01829a50cfd6bbd4980910ed46e895e93d7)
+BugLink: http://bugs.launchpad.net/bugs/1549494
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ kernel/time/hrtimer.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/time/hrtimer.c b/kernel/time/hrtimer.c
+index 4a47bdc..9eb2eef 100644
+--- a/kernel/time/hrtimer.c
++++ b/kernel/time/hrtimer.c
+@@ -99,6 +99,9 @@ DEFINE_PER_CPU(struct hrtimer_cpu_base, hrtimer_bases) =
+ };
+ 
+ static const int hrtimer_clock_to_base_table[MAX_CLOCKS] = {
++	/* Make sure we catch unsupported clockids */
++	[0 ... MAX_CLOCKS - 1]	= HRTIMER_MAX_CLOCK_BASES,
++
+ 	[CLOCK_REALTIME]	= HRTIMER_BASE_REALTIME,
+ 	[CLOCK_MONOTONIC]	= HRTIMER_BASE_MONOTONIC,
+ 	[CLOCK_MONOTONIC_RAW]	= HRTIMER_BASE_MONOTONIC_RAW,
+@@ -108,7 +111,9 @@ static const int hrtimer_clock_to_base_table[MAX_CLOCKS] = {
+ 
+ static inline int hrtimer_clockid_to_base(clockid_t clock_id)
+ {
+-	return hrtimer_clock_to_base_table[clock_id];
++	int base = hrtimer_clock_to_base_table[clock_id];
++	BUG_ON(base == HRTIMER_MAX_CLOCK_BASES);
++	return base;
+ }
+ 
+ /*
+-- 
+1.9.3
+

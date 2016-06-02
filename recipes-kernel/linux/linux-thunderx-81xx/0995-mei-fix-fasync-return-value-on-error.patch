@@ -1,0 +1,49 @@
+From 6ebb88a05c9f386b1b897b4da24a4357c25ff080 Mon Sep 17 00:00:00 2001
+From: Tomas Winkler <tomas.winkler@intel.com>
+Date: Thu, 7 Jan 2016 14:46:38 +0200
+Subject: [PATCH 0995/1767] mei: fix fasync return value on error
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit ed6dc538e5a36a331b6256d54f435c80f6715460 upstream.
+
+fasync should return a negative value on error
+and not poll mask POLLERR.
+
+Cc: Al Viro <viro@ZenIV.linux.org.uk>
+Reported-by: Al Viro <viro@ZenIV.linux.org.uk>
+Signed-off-by: Tomas Winkler <tomas.winkler@intel.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/misc/mei/main.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/misc/mei/main.c b/drivers/misc/mei/main.c
+index b2f2486..677d0362 100644
+--- a/drivers/misc/mei/main.c
++++ b/drivers/misc/mei/main.c
+@@ -657,7 +657,9 @@ out:
+  * @file: pointer to file structure
+  * @band: band bitmap
+  *
+- * Return: poll mask
++ * Return: negative on error,
++ *         0 if it did no changes,
++ *         and positive a process was added or deleted
+  */
+ static int mei_fasync(int fd, struct file *file, int band)
+ {
+@@ -665,7 +667,7 @@ static int mei_fasync(int fd, struct file *file, int band)
+ 	struct mei_cl *cl = file->private_data;
+ 
+ 	if (!mei_cl_is_connected(cl))
+-		return POLLERR;
++		return -ENODEV;
+ 
+ 	return fasync_helper(fd, file, band, &cl->ev_async);
+ }
+-- 
+1.9.3
+

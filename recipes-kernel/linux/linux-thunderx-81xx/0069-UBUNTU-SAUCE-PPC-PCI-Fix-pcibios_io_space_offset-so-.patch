@@ -1,0 +1,42 @@
+From eda3353f5e257fea5eb542653d8a2c3f9cae4b84 Mon Sep 17 00:00:00 2001
+From: Ben Collins <ben.c@servergy.com>
+Date: Tue, 5 Jun 2012 23:43:35 -0400
+Subject: [PATCH 0069/1767] UBUNTU: SAUCE: PPC: PCI: Fix
+ pcibios_io_space_offset() so it works for 32-bit ptr/64-bit rsrcs
+
+The commit introducing pcibios_io_space_offset() was ignoring 32-bit to
+64-bit sign extention, which is the case on ppc32 with 64-bit resource
+addresses. This only seems to have shown up while running under QEMU for
+e500mc target. It may or may be suboptimal that QEMU has an IO base
+address > 32-bits for the e500-pci implementation, but 1) it's still a
+regression and 2) it's more correct to handle things this way.
+
+Signed-off-by: Ben Collins <ben.c@servergy.com>
+---
+ arch/powerpc/kernel/pci-common.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/arch/powerpc/kernel/pci-common.c b/arch/powerpc/kernel/pci-common.c
+index 0f7a60f..d664be8 100644
+--- a/arch/powerpc/kernel/pci-common.c
++++ b/arch/powerpc/kernel/pci-common.c
+@@ -1469,9 +1469,15 @@ void pcibios_disable_device(struct pci_dev *dev)
+ 		phb->controller_ops.disable_device(dev);
+ }
+ 
++/* Before assuming too much here, take care to realize that we need sign
++ * extension from 32-bit pointers to 64-bit resource addresses to work.
++ */
+ resource_size_t pcibios_io_space_offset(struct pci_controller *hose)
+ {
+-	return (unsigned long) hose->io_base_virt - _IO_BASE;
++	long vbase = (long)hose->io_base_virt;
++	long io_base = _IO_BASE;
++
++	return (resource_size_t)(vbase - io_base);
+ }
+ 
+ static void pcibios_setup_phb_resources(struct pci_controller *hose,
+-- 
+1.9.3
+

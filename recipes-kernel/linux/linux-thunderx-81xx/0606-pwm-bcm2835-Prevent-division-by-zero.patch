@@ -1,0 +1,43 @@
+From 11358982e9beec4facd063dd963df12e70afb721 Mon Sep 17 00:00:00 2001
+From: Stefan Wahren <stefan.wahren@i2se.com>
+Date: Tue, 1 Dec 2015 22:55:40 +0000
+Subject: [PATCH 0606/1767] pwm: bcm2835: Prevent division by zero
+
+BugLink: http://bugs.launchpad.net/bugs/1520436
+
+It's possible that the PWM clock becomes an orphan. So better check the
+result of clk_get_rate() in order to prevent a division by zero.
+
+Signed-off-by: Stefan Wahren <stefan.wahren@i2se.com>
+Reviewed-by: Eric Anholt <eric@anholt.net>
+Signed-off-by: Thierry Reding <thierry.reding@gmail.com>
+(cherry picked from commit fd13c14426299e75983a0cd3edf53dfa4083a70a)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/pwm/pwm-bcm2835.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/pwm/pwm-bcm2835.c b/drivers/pwm/pwm-bcm2835.c
+index 174cca9..31a6992 100644
+--- a/drivers/pwm/pwm-bcm2835.c
++++ b/drivers/pwm/pwm-bcm2835.c
+@@ -65,7 +65,15 @@ static int bcm2835_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
+ 			      int duty_ns, int period_ns)
+ {
+ 	struct bcm2835_pwm *pc = to_bcm2835_pwm(chip);
+-	unsigned long scaler = NSEC_PER_SEC / clk_get_rate(pc->clk);
++	unsigned long rate = clk_get_rate(pc->clk);
++	unsigned long scaler;
++
++	if (!rate) {
++		dev_err(pc->dev, "failed to get clock rate\n");
++		return -EINVAL;
++	}
++
++	scaler = NSEC_PER_SEC / rate;
+ 
+ 	if (period_ns <= MIN_PERIOD) {
+ 		dev_err(pc->dev, "period %d not supported, minimum %d\n",
+-- 
+1.9.3
+

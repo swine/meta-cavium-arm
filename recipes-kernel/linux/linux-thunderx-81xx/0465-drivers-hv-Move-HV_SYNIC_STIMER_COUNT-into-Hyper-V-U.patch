@@ -1,0 +1,55 @@
+From 7fdb0e6d246e96a96029438c0e38f6403d87cc5e Mon Sep 17 00:00:00 2001
+From: Andrey Smetanin <asmetanin@virtuozzo.com>
+Date: Mon, 30 Nov 2015 19:22:14 +0300
+Subject: [PATCH 0465/1767] drivers/hv: Move HV_SYNIC_STIMER_COUNT into Hyper-V
+ UAPI x86 header
+
+This constant is required for Hyper-V SynIC timers MSR's
+support by userspace(QEMU).
+
+Signed-off-by: Andrey Smetanin <asmetanin@virtuozzo.com>
+Acked-by: K. Y. Srinivasan <kys@microsoft.com>
+Reviewed-by: Roman Kagan <rkagan@virtuozzo.com>
+CC: Gleb Natapov <gleb@kernel.org>
+CC: Paolo Bonzini <pbonzini@redhat.com>
+CC: "K. Y. Srinivasan" <kys@microsoft.com>
+CC: Haiyang Zhang <haiyangz@microsoft.com>
+CC: Vitaly Kuznetsov <vkuznets@redhat.com>
+CC: Roman Kagan <rkagan@virtuozzo.com>
+CC: Denis V. Lunev <den@openvz.org>
+CC: qemu-devel@nongnu.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+(cherry picked from commit 4f39bcfd1c132522380138a323f9af7902766301)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/x86/include/uapi/asm/hyperv.h | 2 ++
+ drivers/hv/hyperv_vmbus.h          | 2 --
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/uapi/asm/hyperv.h b/arch/x86/include/uapi/asm/hyperv.h
+index 040d408..07981f0 100644
+--- a/arch/x86/include/uapi/asm/hyperv.h
++++ b/arch/x86/include/uapi/asm/hyperv.h
+@@ -269,4 +269,6 @@ typedef struct _HV_REFERENCE_TSC_PAGE {
+ #define HV_SYNIC_SINT_AUTO_EOI		(1ULL << 17)
+ #define HV_SYNIC_SINT_VECTOR_MASK	(0xFF)
+ 
++#define HV_SYNIC_STIMER_COUNT		(4)
++
+ #endif
+diff --git a/drivers/hv/hyperv_vmbus.h b/drivers/hv/hyperv_vmbus.h
+index 0388638..9a834a4 100644
+--- a/drivers/hv/hyperv_vmbus.h
++++ b/drivers/hv/hyperv_vmbus.h
+@@ -102,8 +102,6 @@ enum hv_message_type {
+ 	HVMSG_X64_LEGACY_FP_ERROR		= 0x80010005
+ };
+ 
+-#define HV_SYNIC_STIMER_COUNT		(4)
+-
+ /* Define invalid partition identifier. */
+ #define HV_PARTITION_ID_INVALID		((u64)0x0)
+ 
+-- 
+1.9.3
+

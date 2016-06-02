@@ -1,0 +1,55 @@
+From f856077b5068dab026f0be36e98b3e5cceab9712 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Javier=20Gonz=C3=A1lez?= <javier@javigon.com>
+Date: Tue, 12 Jan 2016 07:49:31 +0100
+Subject: [PATCH 0379/1767] lightnvm: reference rrpc lun in rrpc block
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Currently, a rrpc block only points to its nvm_lun. If a user wants to
+find the associated rrpc lun, it will have to calculate the index and
+look it up manually. By referencing the rrpc lun directly, this step can
+be omitted, at the cost of a larger memory footprint.
+
+This is important for upcoming patches that implement write buffering in
+rrpc.
+
+Signed-off-by: Javier González <javier@cnexlabs.com>
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit d7a64d275b39e19c010cdfd8728cc64f14b59bda)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/rrpc.c | 1 +
+ drivers/lightnvm/rrpc.h | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/drivers/lightnvm/rrpc.c b/drivers/lightnvm/rrpc.c
+index 9a5d940..280350c 100644
+--- a/drivers/lightnvm/rrpc.c
++++ b/drivers/lightnvm/rrpc.c
+@@ -1150,6 +1150,7 @@ static int rrpc_luns_init(struct rrpc *rrpc, int lun_begin, int lun_end)
+ 			struct nvm_block *blk = &lun->blocks[j];
+ 
+ 			rblk->parent = blk;
++			rblk->rlun = rlun;
+ 			INIT_LIST_HEAD(&rblk->prio);
+ 			spin_lock_init(&rblk->lock);
+ 		}
+diff --git a/drivers/lightnvm/rrpc.h b/drivers/lightnvm/rrpc.h
+index a9696a0..7c5fa4d 100644
+--- a/drivers/lightnvm/rrpc.h
++++ b/drivers/lightnvm/rrpc.h
+@@ -54,6 +54,7 @@ struct rrpc_rq {
+ 
+ struct rrpc_block {
+ 	struct nvm_block *parent;
++	struct rrpc_lun *rlun;
+ 	struct list_head prio;
+ 
+ #define MAX_INVALID_PAGES_STORAGE 8
+-- 
+1.9.3
+

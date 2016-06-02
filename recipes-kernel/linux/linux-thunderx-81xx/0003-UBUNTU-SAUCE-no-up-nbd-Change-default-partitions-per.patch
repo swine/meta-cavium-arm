@@ -1,0 +1,39 @@
+From faca75663ce925338fc092c3b0f458e91b6ef5ee Mon Sep 17 00:00:00 2001
+From: Scott James Remnant <scott@canonical.com>
+Date: Mon, 16 Mar 2009 15:03:07 +0000
+Subject: [PATCH 0003/1767] UBUNTU: SAUCE: (no-up) nbd: Change default
+ partitions per device to 15
+
+This was previously changed by using an "options" line in a modprobe.d
+file, however that practice is now deprecated.  This is because module
+names, option names, their values and even their current defaults can
+all change inside the kernel and module-init-tools has never been kept
+in sync.
+
+In addition, changing the kernel means that the option change will apply
+if the module is built in by users or the OEM team.
+
+Bug: #342563
+
+Signed-off-by: Scott James Remnant <scott@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/block/nbd.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/block/nbd.c b/drivers/block/nbd.c
+index 93b3f99..deef152 100644
+--- a/drivers/block/nbd.c
++++ b/drivers/block/nbd.c
+@@ -79,7 +79,7 @@ static struct dentry *nbd_dbg_dir;
+ 
+ static unsigned int nbds_max = 16;
+ static struct nbd_device *nbd_dev;
+-static int max_part;
++static int max_part = 15;
+ 
+ /*
+  * Use just one lock (or at most 1 per NIC). Two arguments for this:
+-- 
+1.9.3
+

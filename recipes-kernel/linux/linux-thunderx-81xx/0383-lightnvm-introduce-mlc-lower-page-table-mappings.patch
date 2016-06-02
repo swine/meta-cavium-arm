@@ -1,0 +1,215 @@
+From 6b77615f427835be7cc13b294336a6f8a1c054b7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:35 +0100
+Subject: [PATCH 0383/1767] lightnvm: introduce mlc lower page table mappings
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+NAND MLC memories have both lower and upper pages. When programming,
+both of these must be written, before data can be read. However,
+these lower and upper pages might not placed at even and odd flash
+pages, but can be skipped. Therefore each flash memory has its lower
+pages defined, which can then be used when programming and to know when
+padding are necessary.
+
+This patch implements the lower page definition in the specification,
+and exposes it through a simple lookup table at dev->lptbl.
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit ca5927e7ab5307965104ca58bbb29d110b1d4545)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c      | 61 +++++++++++++++++++++++++++++++++++++++++++-
+ drivers/nvme/host/lightnvm.c | 22 +++++++++++++++-
+ include/linux/lightnvm.h     | 20 +++++++++++++++
+ 3 files changed, 101 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index 5199c12..1f302cc 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -362,6 +362,51 @@ int nvm_submit_ppa(struct nvm_dev *dev, struct ppa_addr *ppa, int nr_ppas,
+ }
+ EXPORT_SYMBOL(nvm_submit_ppa);
+ 
++static int nvm_init_slc_tbl(struct nvm_dev *dev, struct nvm_id_group *grp)
++{
++	int i;
++
++	dev->lps_per_blk = dev->pgs_per_blk;
++	dev->lptbl = kcalloc(dev->lps_per_blk, sizeof(int), GFP_KERNEL);
++	if (!dev->lptbl)
++		return -ENOMEM;
++
++	/* Just a linear array */
++	for (i = 0; i < dev->lps_per_blk; i++)
++		dev->lptbl[i] = i;
++
++	return 0;
++}
++
++static int nvm_init_mlc_tbl(struct nvm_dev *dev, struct nvm_id_group *grp)
++{
++	int i, p;
++	struct nvm_id_lp_mlc *mlc = &grp->lptbl.mlc;
++
++	if (!mlc->num_pairs)
++		return 0;
++
++	dev->lps_per_blk = mlc->num_pairs;
++	dev->lptbl = kcalloc(dev->lps_per_blk, sizeof(int), GFP_KERNEL);
++	if (!dev->lptbl)
++		return -ENOMEM;
++
++	/* The lower page table encoding consists of a list of bytes, where each
++	 * has a lower and an upper half. The first half byte maintains the
++	 * increment value and every value after is an offset added to the
++	 * previous incrementation value */
++	dev->lptbl[0] = mlc->pairs[0] & 0xF;
++	for (i = 1; i < dev->lps_per_blk; i++) {
++		p = mlc->pairs[i >> 1];
++		if (i & 0x1) /* upper */
++			dev->lptbl[i] = dev->lptbl[i - 1] + ((p & 0xF0) >> 4);
++		else /* lower */
++			dev->lptbl[i] = dev->lptbl[i - 1] + (p & 0xF);
++	}
++
++	return 0;
++}
++
+ static int nvm_core_init(struct nvm_dev *dev)
+ {
+ 	struct nvm_id *id = &dev->identity;
+@@ -387,11 +432,23 @@ static int nvm_core_init(struct nvm_dev *dev)
+ 		return -EINVAL;
+ 	}
+ 
+-	if (grp->fmtype != 0 && grp->fmtype != 1) {
++	switch (grp->fmtype) {
++	case NVM_ID_FMTYPE_SLC:
++		if (nvm_init_slc_tbl(dev, grp))
++			return -ENOMEM;
++		break;
++	case NVM_ID_FMTYPE_MLC:
++		if (nvm_init_mlc_tbl(dev, grp))
++			return -ENOMEM;
++		break;
++	default:
+ 		pr_err("nvm: flash type not supported\n");
+ 		return -EINVAL;
+ 	}
+ 
++	if (!dev->lps_per_blk)
++		pr_info("nvm: lower page programming table missing\n");
++
+ 	if (grp->mpos & 0x020202)
+ 		dev->plane_mode = NVM_PLANE_DOUBLE;
+ 	if (grp->mpos & 0x040404)
+@@ -420,6 +477,8 @@ static void nvm_free(struct nvm_dev *dev)
+ 
+ 	if (dev->mt)
+ 		dev->mt->unregister_mgr(dev);
++
++	kfree(dev->lptbl);
+ }
+ 
+ static int nvm_init(struct nvm_dev *dev)
+diff --git a/drivers/nvme/host/lightnvm.c b/drivers/nvme/host/lightnvm.c
+index b112f02..215c025 100644
+--- a/drivers/nvme/host/lightnvm.c
++++ b/drivers/nvme/host/lightnvm.c
+@@ -146,6 +146,16 @@ struct nvme_nvm_command {
+ 	};
+ };
+ 
++struct nvme_nvm_lp_mlc {
++	__u16			num_pairs;
++	__u8			pairs[886];
++};
++
++struct nvme_nvm_lp_tbl {
++	__u8			id[8];
++	struct nvme_nvm_lp_mlc	mlc;
++};
++
+ struct nvme_nvm_id_group {
+ 	__u8			mtype;
+ 	__u8			fmtype;
+@@ -169,7 +179,8 @@ struct nvme_nvm_id_group {
+ 	__le32			mpos;
+ 	__le32			mccap;
+ 	__le16			cpar;
+-	__u8			reserved[906];
++	__u8			reserved[10];
++	struct nvme_nvm_lp_tbl lptbl;
+ } __packed;
+ 
+ struct nvme_nvm_addr_format {
+@@ -266,6 +277,15 @@ static int init_grps(struct nvm_id *nvm_id, struct nvme_nvm_id *nvme_nvm_id)
+ 		dst->mccap = le32_to_cpu(src->mccap);
+ 
+ 		dst->cpar = le16_to_cpu(src->cpar);
++
++		if (dst->fmtype == NVM_ID_FMTYPE_MLC) {
++			memcpy(dst->lptbl.id, src->lptbl.id, 8);
++			dst->lptbl.mlc.num_pairs =
++					le16_to_cpu(src->lptbl.mlc.num_pairs);
++			/* 4 bits per pair */
++			memcpy(dst->lptbl.mlc.pairs, src->lptbl.mlc.pairs,
++						dst->lptbl.mlc.num_pairs >> 1);
++		}
+ 	}
+ 
+ 	return 0;
+diff --git a/include/linux/lightnvm.h b/include/linux/lightnvm.h
+index b90d283..678fd91 100644
+--- a/include/linux/lightnvm.h
++++ b/include/linux/lightnvm.h
+@@ -67,6 +67,20 @@ enum {
+ 	NVM_ID_CAP_CMD_SUSPEND	= 0x2,
+ 	NVM_ID_CAP_SCRAMBLE	= 0x4,
+ 	NVM_ID_CAP_ENCRYPT	= 0x8,
++
++	/* Memory types */
++	NVM_ID_FMTYPE_SLC	= 0,
++	NVM_ID_FMTYPE_MLC	= 1,
++};
++
++struct nvm_id_lp_mlc {
++	u16	num_pairs;
++	u8	pairs[886];
++};
++
++struct nvm_id_lp_tbl {
++	__u8	id[8];
++	struct nvm_id_lp_mlc mlc;
+ };
+ 
+ struct nvm_id_group {
+@@ -89,6 +103,8 @@ struct nvm_id_group {
+ 	u32	mpos;
+ 	u32	mccap;
+ 	u16	cpar;
++
++	struct nvm_id_lp_tbl lptbl;
+ };
+ 
+ struct nvm_addr_format {
+@@ -297,6 +313,10 @@ struct nvm_dev {
+ 	int sec_per_blk;
+ 	int sec_per_lun;
+ 
++	/* lower page table */
++	int lps_per_blk;
++	int *lptbl;
++
+ 	unsigned long total_pages;
+ 	unsigned long total_blocks;
+ 	int nr_luns;
+-- 
+1.9.3
+

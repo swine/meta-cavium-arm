@@ -1,0 +1,58 @@
+From a3b7b76ae799b2ecb546aeba898959d6089d8bee Mon Sep 17 00:00:00 2001
+From: Ganapatrao Kulkarni <gkulkarni@caviumnetworks.com>
+Date: Wed, 13 Apr 2016 12:43:38 +0530
+Subject: [PATCH 01/39] serial, amba-pl011, thunderx-cn81xx : adding workaround
+ for erratum UAA-28042
+
+*** Do not Upstream ***
+
+the uart interrupts on cn81xx pass 1.0 is broken.
+adding workaround to trigger periodically rx interrupts to driver.
+
+Signed-off-by: Ganapatrao Kulkarni <gkulkarni@caviumnetworks.com>
+---
+ drivers/tty/serial/amba-pl011.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/tty/serial/amba-pl011.c b/drivers/tty/serial/amba-pl011.c
+index 899a771..2e5b839 100644
+--- a/drivers/tty/serial/amba-pl011.c
++++ b/drivers/tty/serial/amba-pl011.c
+@@ -1581,10 +1581,25 @@ static void pl011_write_lcr_h(struct uart_amba_port *uap, unsigned int lcr_h)
+ 	}
+ }
+ 
++static void pl011_int_trigger(unsigned long data);
++
++static struct timer_list pl011_int_trigger_timer =
++		TIMER_INITIALIZER(pl011_int_trigger, 0, 0);
++
++static void pl011_int_trigger(unsigned long data)
++{
++	struct uart_amba_port *uap =(struct uart_amba_port *)data;
++	pl011_int(uap->port.irq, uap);
++	mod_timer(&pl011_int_trigger_timer, jiffies + 1);
++}
++
+ static int pl011_allocate_irq(struct uart_amba_port *uap)
+ {
+ 	writew(uap->im, uap->port.membase + UART011_IMSC);
+ 
++	pl011_int_trigger_timer.data = (unsigned long) uap;
++	mod_timer(&pl011_int_trigger_timer, jiffies + 1);
++
+ 	return request_irq(uap->port.irq, pl011_int, 0, "uart-pl011", uap);
+ }
+ 
+@@ -1731,6 +1746,8 @@ static void pl011_shutdown(struct uart_port *port)
+ 
+ 	free_irq(uap->port.irq, uap);
+ 
++	del_timer(&pl011_int_trigger_timer);
++
+ 	pl011_disable_uart(uap);
+ 
+ 	/*
+-- 
+1.9.1
+

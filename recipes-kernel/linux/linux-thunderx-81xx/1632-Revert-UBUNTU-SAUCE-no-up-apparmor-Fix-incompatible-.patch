@@ -1,0 +1,53 @@
+From 622c41c288ecdac9a7e6ac5e7aa719ded0c30a6b Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:06:21 -0700
+Subject: [PATCH 1632/1767] Revert "UBUNTU: SAUCE: (no-up) apparmor: Fix
+ incompatible pointer type warnings"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 5a22abd43300e0763cdd352a530ab011eb100c5c.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/af_unix.c | 11 +++--------
+ 1 file changed, 3 insertions(+), 8 deletions(-)
+
+diff --git a/security/apparmor/af_unix.c b/security/apparmor/af_unix.c
+index cd08018..62e7fd1 100644
+--- a/security/apparmor/af_unix.c
++++ b/security/apparmor/af_unix.c
+@@ -21,17 +21,12 @@
+ #include "include/path.h"
+ #include "include/policy.h"
+ 
+-static inline struct sock *aa_sock(struct unix_sock *u)
+-{
+-	return &u->sk;
+-}
+-
+ static inline int unix_fs_perm(int op, u32 mask, struct aa_label *label,
+ 			       struct unix_sock *u, int flags)
+ {
+ 	AA_BUG(!label);
+ 	AA_BUG(!u);
+-	AA_BUG(!UNIX_FS(aa_sock(u)));
++	AA_BUG(!UNIX_FS(u));
+ 
+ 	if (unconfined(label) || !LABEL_MEDIATES(label, AA_CLASS_FILE))
+ 		return 0;
+@@ -531,9 +526,9 @@ int aa_unix_peer_perm(struct aa_label *label, int op, u32 request,
+ 	AA_BUG(!sk);
+ 	AA_BUG(!peer_sk);
+ 
+-	if (UNIX_FS(aa_sock(peeru)))
++	if (UNIX_FS(peeru))
+ 		return unix_fs_perm(op, request, label, peeru, 0);
+-	else if (UNIX_FS(aa_sock(u)))
++	else if (UNIX_FS(u))
+ 		return unix_fs_perm(op, request, label, u, 0);
+ 	else {
+ 		struct aa_profile *profile;
+-- 
+1.9.3
+

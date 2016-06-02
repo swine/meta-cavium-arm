@@ -1,0 +1,44 @@
+From f323a87e8b362b2b7202488d73a755e5c33bd36a Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Wed, 24 Jul 2013 12:48:01 -0600
+Subject: [PATCH 0051/1767] UBUNTU: SAUCE: (no-up) hv: Supply vendor ID and
+ package ABI
+
+BugLink: http://bugs.launchpad.net/bugs/1193172
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/hv/hv.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/hv/hv.c b/drivers/hv/hv.c
+index 6341be8..d58fac4 100644
+--- a/drivers/hv/hv.c
++++ b/drivers/hv/hv.c
+@@ -33,6 +33,14 @@
+ #include <asm/mshyperv.h>
+ #include "hyperv_vmbus.h"
+ 
++#ifndef PKG_ABI
++/*
++ * Preserve the ability to 'make deb-pkg' since PKG_ABI is provided
++ * by the Ubuntu build rules.
++ */
++#define PKG_ABI 0
++#endif
++
+ /* The one and only */
+ struct hv_context hv_context = {
+ 	.synic_initialized	= false,
+@@ -213,7 +221,7 @@ int hv_init(void)
+ 	/*
+ 	 * Write our OS ID.
+ 	 */
+-	hv_context.guestid = generate_guest_id(0, LINUX_VERSION_CODE, 0);
++	hv_context.guestid = generate_guest_id(0x80 /*Canonical*/, LINUX_VERSION_CODE, PKG_ABI);
+ 	wrmsrl(HV_X64_MSR_GUEST_OS_ID, hv_context.guestid);
+ 
+ 	/* See if the hypercall page is already set */
+-- 
+1.9.3
+

@@ -1,0 +1,48 @@
+From 676d4a27f8ea5f4b3562a9519ff9ec55e0d51583 Mon Sep 17 00:00:00 2001
+From: Tomas Henzl <thenzl@redhat.com>
+Date: Mon, 1 Feb 2016 15:12:04 +0100
+Subject: [PATCH 0602/1767] megaraid_sas: Add an i/o barrier
+
+BugLink: http://bugs.launchpad.net/bugs/1544679
+
+A barrier should be added to ensure proper ordering of memory mapped
+writes.
+
+Signed-off-by: Tomas Henzl <thenzl@redhat.com>
+Reviewed-by: Kashyap Desai <kashyap.desai@broadcom.com>
+Acked-by: Kashyap Desai <kashyap.desai@broadcom.com>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from linux-next commit 4327614e7154a29a5db10469e49282f61598f41a)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/megaraid/megaraid_sas_base.c   | 1 +
+ drivers/scsi/megaraid/megaraid_sas_fusion.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/drivers/scsi/megaraid/megaraid_sas_base.c b/drivers/scsi/megaraid/megaraid_sas_base.c
+index e0b4ca1..5c08568 100644
+--- a/drivers/scsi/megaraid/megaraid_sas_base.c
++++ b/drivers/scsi/megaraid/megaraid_sas_base.c
+@@ -749,6 +749,7 @@ megasas_fire_cmd_skinny(struct megasas_instance *instance,
+ 	       &(regs)->inbound_high_queue_port);
+ 	writel((lower_32_bits(frame_phys_addr) | (frame_count<<1))|1,
+ 	       &(regs)->inbound_low_queue_port);
++	mmiowb();
+ 	spin_unlock_irqrestore(&instance->hba_lock, flags);
+ }
+ 
+diff --git a/drivers/scsi/megaraid/megaraid_sas_fusion.c b/drivers/scsi/megaraid/megaraid_sas_fusion.c
+index d9d0029..98a848b 100644
+--- a/drivers/scsi/megaraid/megaraid_sas_fusion.c
++++ b/drivers/scsi/megaraid/megaraid_sas_fusion.c
+@@ -204,6 +204,7 @@ megasas_fire_cmd_fusion(struct megasas_instance *instance,
+ 		&instance->reg_set->inbound_low_queue_port);
+ 	writel(le32_to_cpu(req_desc->u.high),
+ 		&instance->reg_set->inbound_high_queue_port);
++	mmiowb();
+ 	spin_unlock_irqrestore(&instance->hba_lock, flags);
+ #endif
+ }
+-- 
+1.9.3
+

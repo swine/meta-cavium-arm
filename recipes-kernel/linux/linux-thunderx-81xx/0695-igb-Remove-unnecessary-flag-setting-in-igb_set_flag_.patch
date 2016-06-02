@@ -1,0 +1,45 @@
+From 8c71d468c1c8bb63142a51ec2b74a59d69a95163 Mon Sep 17 00:00:00 2001
+From: Shota Suzuki <suzuki_shota_t3@lab.ntt.co.jp>
+Date: Fri, 11 Dec 2015 18:43:59 +0900
+Subject: [PATCH 0695/1767] igb: Remove unnecessary flag setting in
+ igb_set_flag_queue_pairs()
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+If VFs are enabled (max_vfs >= 1), both max_rss_queues and
+adapter->rss_queues are set to 2 in the case of e1000_82576.
+In this case, IGB_FLAG_QUEUE_PAIRS is always set in the default block as a
+result of fall-through, thus setting it in the e1000_82576 block is not
+necessary.
+
+Signed-off-by: Shota Suzuki <suzuki_shota_t3@lab.ntt.co.jp>
+Tested-by: Aaron Brown <aaron.f.brown@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit ceb27759987ec10ba22332bd7fdf1cfb35b86991)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/igb/igb_main.c | 8 --------
+ 1 file changed, 8 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/igb/igb_main.c b/drivers/net/ethernet/intel/igb/igb_main.c
+index 7afde45..3e5170e 100644
+--- a/drivers/net/ethernet/intel/igb/igb_main.c
++++ b/drivers/net/ethernet/intel/igb/igb_main.c
+@@ -2921,14 +2921,6 @@ void igb_set_flag_queue_pairs(struct igb_adapter *adapter,
+ 		/* Device supports enough interrupts without queue pairing. */
+ 		break;
+ 	case e1000_82576:
+-		/* If VFs are going to be allocated with RSS queues then we
+-		 * should pair the queues in order to conserve interrupts due
+-		 * to limited supply.
+-		 */
+-		if ((adapter->rss_queues > 1) &&
+-		    (adapter->vfs_allocated_count > 6))
+-			adapter->flags |= IGB_FLAG_QUEUE_PAIRS;
+-		/* fall through */
+ 	case e1000_82580:
+ 	case e1000_i350:
+ 	case e1000_i354:
+-- 
+1.9.3
+

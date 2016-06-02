@@ -1,0 +1,112 @@
+From 6af23880ab5100858398e90e6bf4e280c5ba869a Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Tue, 1 Mar 2016 13:34:41 -0700
+Subject: [PATCH 1752/1767] UBUNTU: SAUCE: [PATCH V2] iommu/arm-smmu-v2: Add
+ support for 16 bit VMID
+
+ARM-SMMUv2 supports upto 16 bit VMID. This patch enables
+16 bit VMID when HW supports.
+
+changes from V1:
+	- Remove DT Property and enable 16 bit VMID if ID says.
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/iommu/arm-smmu.c | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/iommu/arm-smmu.c b/drivers/iommu/arm-smmu.c
+index 47dc7a7..ada33a9 100644
+--- a/drivers/iommu/arm-smmu.c
++++ b/drivers/iommu/arm-smmu.c
+@@ -93,6 +93,7 @@
+ #define sCR0_VMIDPNE			(1 << 11)
+ #define sCR0_PTM			(1 << 12)
+ #define sCR0_FB				(1 << 13)
++#define sCR0_VMID16EN			(1 << 31)
+ #define sCR0_BSU_SHIFT			14
+ #define sCR0_BSU_MASK			0x3
+ 
+@@ -140,6 +141,7 @@
+ #define ID2_PTFS_4K			(1 << 12)
+ #define ID2_PTFS_16K			(1 << 13)
+ #define ID2_PTFS_64K			(1 << 14)
++#define ID2_VMID16			(1 << 15)
+ 
+ /* Global TLB invalidation */
+ #define ARM_SMMU_GR0_TLBIVMID		0x64
+@@ -189,6 +191,8 @@
+ #define ARM_SMMU_GR1_CBA2R(n)		(0x800 + ((n) << 2))
+ #define CBA2R_RW64_32BIT		(0 << 0)
+ #define CBA2R_RW64_64BIT		(1 << 0)
++#define CBA2R_VMID_SHIFT		16
++#define CBA2R_VMID_MASK			0xffff
+ 
+ /* Translation context bank */
+ #define ARM_SMMU_CB_BASE(smmu)		((smmu)->base + ((smmu)->size >> 1))
+@@ -297,6 +301,7 @@ struct arm_smmu_device {
+ #define ARM_SMMU_FEAT_TRANS_S2		(1 << 3)
+ #define ARM_SMMU_FEAT_TRANS_NESTED	(1 << 4)
+ #define ARM_SMMU_FEAT_TRANS_OPS		(1 << 5)
++#define ARM_SMMU_FEAT_VMID16		(1 << 6)
+ 	u32				features;
+ 
+ #define ARM_SMMU_OPT_SECURE_CFG_ACCESS (1 << 0)
+@@ -726,6 +731,10 @@ static void arm_smmu_init_context_bank(struct arm_smmu_domain *smmu_domain,
+ #else
+ 		reg = CBA2R_RW64_32BIT;
+ #endif
++		/* if 16bit VMID supported set VMID in CBA2R */
++		if (smmu->features & ARM_SMMU_FEAT_VMID16)
++			reg |= ARM_SMMU_CB_VMID(cfg) << CBA2R_VMID_SHIFT;
++
+ 		writel_relaxed(reg, gr1_base + ARM_SMMU_GR1_CBA2R(cfg->cbndx));
+ 	}
+ 
+@@ -741,7 +750,8 @@ static void arm_smmu_init_context_bank(struct arm_smmu_domain *smmu_domain,
+ 	if (stage1) {
+ 		reg |= (CBAR_S1_BPSHCFG_NSH << CBAR_S1_BPSHCFG_SHIFT) |
+ 			(CBAR_S1_MEMATTR_WB << CBAR_S1_MEMATTR_SHIFT);
+-	} else {
++	} else if (!(smmu->features & ARM_SMMU_FEAT_VMID16)) {
++		/*16 bit VMID is not supported set 8 bit VMID here */
+ 		reg |= ARM_SMMU_CB_VMID(cfg) << CBAR_VMID_SHIFT;
+ 	}
+ 	writel_relaxed(reg, gr1_base + ARM_SMMU_GR1_CBAR(cfg->cbndx));
+@@ -1499,6 +1509,9 @@ static void arm_smmu_device_reset(struct arm_smmu_device *smmu)
+ 	/* Don't upgrade barriers */
+ 	reg &= ~(sCR0_BSU_MASK << sCR0_BSU_SHIFT);
+ 
++	if (smmu->features & ARM_SMMU_FEAT_VMID16)
++		reg |= sCR0_VMID16EN;
++
+ 	/* Push the button */
+ 	__arm_smmu_tlb_sync(smmu);
+ 	writel(reg, ARM_SMMU_GR0_NS(smmu) + ARM_SMMU_GR0_sCR0);
+@@ -1649,6 +1662,10 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
+ 	size = arm_smmu_id_size_to_bits((id >> ID2_OAS_SHIFT) & ID2_OAS_MASK);
+ 	smmu->pa_size = size;
+ 
++	/* See if 16bit VMID is supported */
++	if (id & ID2_VMID16)
++		smmu->features = ARM_SMMU_FEAT_VMID16;
++
+ 	/*
+ 	 * What the page table walker can address actually depends on which
+ 	 * descriptor format is in use, but since a) we don't know that yet,
+@@ -1687,6 +1704,11 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
+ 		dev_notice(smmu->dev, "\tStage-2: %lu-bit IPA -> %lu-bit PA\n",
+ 			   smmu->ipa_size, smmu->pa_size);
+ 
++	if (smmu->features & ARM_SMMU_FEAT_VMID16)
++		dev_notice(smmu->dev, "\t 16 bit VMID Supported.\n");
++	else
++		dev_notice(smmu->dev, "\t Only 8 bit VMID Supported.\n");
++
+ 	return 0;
+ }
+ 
+-- 
+1.9.3
+

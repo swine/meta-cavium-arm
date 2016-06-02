@@ -1,0 +1,61 @@
+From 5bd45088b3e2a8347180928377ed51b4d62090af Mon Sep 17 00:00:00 2001
+From: Quinn Tran <quinn.tran@qlogic.com>
+Date: Thu, 17 Dec 2015 14:57:08 -0500
+Subject: [PATCH 0510/1767] qla2xxx: Disable ZIO at start time.
+
+BugLink: http://bugs.launchpad.net/bugs/1541456
+
+Signed-off-by: Quinn Tran <quinn.tran@qlogic.com>
+Signed-off-by: Himanshu Madhani <himanshu.madhani@qlogic.com>
+Signed-off-by: Nicholas Bellinger <nab@linux-iscsi.org>
+(cherry picked from commit 481ce73342b190987c2553e8df0075c3df23632e)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/qla2xxx/qla_target.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/drivers/scsi/qla2xxx/qla_target.c b/drivers/scsi/qla2xxx/qla_target.c
+index ac7a754..da35f51 100644
+--- a/drivers/scsi/qla2xxx/qla_target.c
++++ b/drivers/scsi/qla2xxx/qla_target.c
+@@ -6544,10 +6544,21 @@ qlt_24xx_config_nvram_stage2(struct scsi_qla_host *vha,
+ {
+ 	struct qla_hw_data *ha = vha->hw;
+ 
++	if (!QLA_TGT_MODE_ENABLED())
++		return;
++
+ 	if (ha->tgt.node_name_set) {
+ 		memcpy(icb->node_name, ha->tgt.tgt_node_name, WWN_SIZE);
+ 		icb->firmware_options_1 |= cpu_to_le32(BIT_14);
+ 	}
++
++	/* disable ZIO at start time. */
++	if (!vha->flags.init_done) {
++		uint32_t tmp;
++		tmp = le32_to_cpu(icb->firmware_options_2);
++		tmp &= ~(BIT_3 | BIT_2 | BIT_1 | BIT_0);
++		icb->firmware_options_2 = cpu_to_le32(tmp);
++	}
+ }
+ 
+ void
+@@ -6638,6 +6649,15 @@ qlt_81xx_config_nvram_stage2(struct scsi_qla_host *vha,
+ 		memcpy(icb->node_name, ha->tgt.tgt_node_name, WWN_SIZE);
+ 		icb->firmware_options_1 |= cpu_to_le32(BIT_14);
+ 	}
++
++	/* disable ZIO at start time. */
++	if (!vha->flags.init_done) {
++		uint32_t tmp;
++		tmp = le32_to_cpu(icb->firmware_options_2);
++		tmp &= ~(BIT_3 | BIT_2 | BIT_1 | BIT_0);
++		icb->firmware_options_2 = cpu_to_le32(tmp);
++	}
++
+ }
+ 
+ void
+-- 
+1.9.3
+

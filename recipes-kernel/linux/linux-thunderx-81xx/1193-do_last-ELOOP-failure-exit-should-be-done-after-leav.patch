@@ -1,0 +1,50 @@
+From c12e9cab07545335da10698dfbdcaa61ac788a44 Mon Sep 17 00:00:00 2001
+From: Al Viro <viro@zeniv.linux.org.uk>
+Date: Sat, 27 Feb 2016 19:37:37 -0500
+Subject: [PATCH 1193/1767] do_last(): ELOOP failure exit should be done after
+ leaving RCU mode
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 5129fa482b16615fd4464d2f5d23acb1b7056c66 upstream.
+
+... or we risk seeing a bogus value of d_is_symlink() there.
+
+Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/namei.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/fs/namei.c b/fs/namei.c
+index 76856e0..464b52f 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -3149,11 +3149,6 @@ finish_lookup:
+ 	if (unlikely(error))
+ 		return error;
+ 
+-	if (unlikely(d_is_symlink(path.dentry)) && !(open_flag & O_PATH)) {
+-		path_to_nameidata(&path, nd);
+-		return -ELOOP;
+-	}
+-
+ 	if ((nd->flags & LOOKUP_RCU) || nd->path.mnt != path.mnt) {
+ 		path_to_nameidata(&path, nd);
+ 	} else {
+@@ -3172,6 +3167,10 @@ finish_open:
+ 		return error;
+ 	}
+ 	audit_inode(nd->name, nd->path.dentry, 0);
++	if (unlikely(d_is_symlink(nd->path.dentry)) && !(open_flag & O_PATH)) {
++		error = -ELOOP;
++		goto out;
++	}
+ 	error = -EISDIR;
+ 	if ((open_flag & O_CREAT) && d_is_dir(nd->path.dentry))
+ 		goto out;
+-- 
+1.9.3
+

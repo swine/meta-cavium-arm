@@ -1,0 +1,47 @@
+From b0a101369fcf90432c5dafc381adc00c480da505 Mon Sep 17 00:00:00 2001
+From: Rob Clark <robdclark@gmail.com>
+Date: Wed, 15 Oct 2014 15:00:47 -0400
+Subject: [PATCH 1049/1767] drm/vmwgfx: respect 'nomodeset'
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 96c5d076f0a5e2023ecdb44d8261f87641ee71e0 upstream.
+
+Signed-off-by: Rob Clark <robdclark@gmail.com>
+Reviewed-by: Thomas Hellstrom <thellstrom@vmware.com>.
+Signed-off-by: Dave Airlie <airlied@redhat.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/vmwgfx/vmwgfx_drv.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/gpu/drm/vmwgfx/vmwgfx_drv.c b/drivers/gpu/drm/vmwgfx/vmwgfx_drv.c
+index c49812b..24fb348 100644
+--- a/drivers/gpu/drm/vmwgfx/vmwgfx_drv.c
++++ b/drivers/gpu/drm/vmwgfx/vmwgfx_drv.c
+@@ -25,6 +25,7 @@
+  *
+  **************************************************************************/
+ #include <linux/module.h>
++#include <linux/console.h>
+ 
+ #include <drm/drmP.h>
+ #include "vmwgfx_drv.h"
+@@ -1538,6 +1539,12 @@ static int vmw_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ static int __init vmwgfx_init(void)
+ {
+ 	int ret;
++
++#ifdef CONFIG_VGA_CONSOLE
++	if (vgacon_text_force())
++		return -EINVAL;
++#endif
++
+ 	ret = drm_pci_init(&driver, &vmw_pci_driver);
+ 	if (ret)
+ 		DRM_ERROR("Failed initializing DRM.\n");
+-- 
+1.9.3
+

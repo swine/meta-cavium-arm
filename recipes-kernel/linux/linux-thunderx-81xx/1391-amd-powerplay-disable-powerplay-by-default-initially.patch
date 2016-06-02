@@ -1,0 +1,36 @@
+From 913709df2b47283d6487f71a6152df3153d0a912 Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Mon, 21 Dec 2015 17:07:40 -0500
+Subject: [PATCH 1391/1767] amd/powerplay: disable powerplay by default
+ initially
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Hopefully we can enable this by default once we get more
+upstream feedback on stability, etc.
+
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 53d8eabe3df36015daf40a7a9bfad9b2ffafc6bd)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+index c94a9a1..468e534 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+@@ -100,7 +100,7 @@ static int amdgpu_pp_early_init(void *handle)
+ 	switch (adev->asic_type) {
+ 		case CHIP_TONGA:
+ 		case CHIP_FIJI:
+-			adev->pp_enabled = (amdgpu_powerplay == 0) ? false : true;
++			adev->pp_enabled = (amdgpu_powerplay > 0) ? true : false;
+ 			break;
+ 		default:
+ 			adev->pp_enabled = (amdgpu_powerplay > 0) ? true : false;
+-- 
+1.9.3
+

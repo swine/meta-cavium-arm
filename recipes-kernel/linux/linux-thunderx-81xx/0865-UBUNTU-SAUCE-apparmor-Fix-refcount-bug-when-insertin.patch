@@ -1,0 +1,32 @@
+From 2fe6beeffbcbba0de83ac06113dca8a7cc3b3cef Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 14 Oct 2015 04:56:02 -0700
+Subject: [PATCH 0865/1767] UBUNTU: SAUCE: apparmor: Fix: refcount bug when
+ inserting label update that transitions ns
+
+We already have a refcount on l, and aa_label_insert() returns another
+refcount so we need to make sure to put the extra one.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index a1482a8..9644cbb 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1875,7 +1875,8 @@ other_ls_insert:
+ 	if (tmp != l) {
+ 		aa_put_label(l);
+ 		l = tmp;
+-	}
++	} else
++		aa_put_label(l);	/* extra ref */
+ 
+ 	return l;
+ }
+-- 
+1.9.3
+

@@ -1,0 +1,44 @@
+From 9f895304b4dd3464826c2a6635f8032347ea7b5d Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:12 -0700
+Subject: [PATCH 1599/1767] Revert "UBUNTU: SAUCE: fixup: get rid of unused var
+ build warning"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 5e08368fa2f94a46ae9d06c37d3519b92abe158e.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 98a54d0..0b3a80a 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1769,6 +1769,9 @@ static struct aa_label *labelset_next_invalid(struct aa_labelset *ls)
+ 	read_lock_irqsave(&ls->lock, flags);
+ 
+ 	__labelset_for_each(ls, node) {
++		struct aa_profile *p;
++		struct label_it i;
++
+ 		label = rb_entry(node, struct aa_label, node);
+ 		if ((label_invalid(label) || vec_invalid(label->ent, label->size)) &&
+ 		    aa_get_label_not0(label))
+@@ -1844,11 +1847,6 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 			__aa_label_remove(labels_set(label), label, l);
+ 			write_unlock_irqrestore(&ls->lock, flags);
+ 			tmp = aa_label_insert(labels_set(l), l);
+-			if (tmp != l) {
+-				write_lock_irqsave(&ls->lock, flags);
+-				__aa_update_replacedby(label, tmp);
+-				write_unlock_irqrestore(&ls->lock, flags);
+-			}
+ 			goto out;
+ 		}
+ 	} else
+-- 
+1.9.3
+

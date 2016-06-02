@@ -1,0 +1,49 @@
+From ee72b172e2dd4d942c27a321eb7fc4d09f1a138a Mon Sep 17 00:00:00 2001
+From: Jesse Brandeburg <jesse.brandeburg@intel.com>
+Date: Wed, 13 Jan 2016 16:51:52 -0800
+Subject: [PATCH 0755/1767] i40e/i40evf: Bump version
+
+BugLink: http://bugs.launchpad.net/bugs/1547674
+
+Bump version to i40e-1.4.13 and i40evf-1.4.9
+
+Change-ID: I9db37f9d4899141c3e5455dfb456d45465b8c035
+Signed-off-by: Jesse Brandeburg <jesse.brandeburg@intel.com>
+Tested-by: Andrew Bowers <andrewx.bowers@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from net-next commit c24215c04fe7bf9f5678abe6c496d774a6b8663a)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/i40e/i40e_main.c     | 2 +-
+ drivers/net/ethernet/intel/i40evf/i40evf_main.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_main.c b/drivers/net/ethernet/intel/i40e/i40e_main.c
+index 0ce3a31..212320c 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_main.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_main.c
+@@ -46,7 +46,7 @@ static const char i40e_driver_string[] =
+ 
+ #define DRV_VERSION_MAJOR 1
+ #define DRV_VERSION_MINOR 4
+-#define DRV_VERSION_BUILD 12
++#define DRV_VERSION_BUILD 13
+ #define DRV_VERSION __stringify(DRV_VERSION_MAJOR) "." \
+ 	     __stringify(DRV_VERSION_MINOR) "." \
+ 	     __stringify(DRV_VERSION_BUILD)    DRV_KERN
+diff --git a/drivers/net/ethernet/intel/i40evf/i40evf_main.c b/drivers/net/ethernet/intel/i40evf/i40evf_main.c
+index 1ce42fa..9eecd90 100644
+--- a/drivers/net/ethernet/intel/i40evf/i40evf_main.c
++++ b/drivers/net/ethernet/intel/i40evf/i40evf_main.c
+@@ -38,7 +38,7 @@ static const char i40evf_driver_string[] =
+ 
+ #define DRV_VERSION_MAJOR 1
+ #define DRV_VERSION_MINOR 4
+-#define DRV_VERSION_BUILD 8
++#define DRV_VERSION_BUILD 9
+ #define DRV_VERSION __stringify(DRV_VERSION_MAJOR) "." \
+ 	     __stringify(DRV_VERSION_MINOR) "." \
+ 	     __stringify(DRV_VERSION_BUILD) \
+-- 
+1.9.3
+

@@ -1,0 +1,84 @@
+From 94e45dfce750e8e49bcdabab5ce3ba91951140e3 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Thu, 26 Nov 2015 11:46:39 +0100
+Subject: [PATCH 0416/1767] nvme: only ignore hardware errors in
+ nvme_create_io_queues
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Half initialized queues due to kernel error returns or timeout are still a
+good reason to give up on initializing a controller.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Acked-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 749941f2365db8198b5d75c83a575ee6e55bf03b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/pci.c | 35 ++++++++++++++++++++---------------
+ 1 file changed, 20 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 1acb521..1f529a0 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -1537,26 +1537,33 @@ static int nvme_kthread(void *data)
+ 	return 0;
+ }
+ 
+-/*
+- * Create I/O queues.  Failing to create an I/O queue is not an issue,
+- * we can continue with less than the desired amount of queues, and
+- * even a controller without I/O queues an still be used to issue
+- * admin commands.  This might be useful to upgrade a buggy firmware
+- * for example.
+- */
+-static void nvme_create_io_queues(struct nvme_dev *dev)
++static int nvme_create_io_queues(struct nvme_dev *dev)
+ {
+ 	unsigned i;
++	int ret = 0;
+ 
+-	for (i = dev->queue_count; i <= dev->max_qid; i++)
+-		if (!nvme_alloc_queue(dev, i, dev->q_depth))
++	for (i = dev->queue_count; i <= dev->max_qid; i++) {
++		if (!nvme_alloc_queue(dev, i, dev->q_depth)) {
++			ret = -ENOMEM;
+ 			break;
++		}
++	}
+ 
+-	for (i = dev->online_queues; i <= dev->queue_count - 1; i++)
+-		if (nvme_create_queue(dev->queues[i], i)) {
++	for (i = dev->online_queues; i <= dev->queue_count - 1; i++) {
++		ret = nvme_create_queue(dev->queues[i], i);
++		if (ret) {
+ 			nvme_free_queues(dev, i);
+ 			break;
+ 		}
++	}
++
++	/*
++	 * Ignore failing Create SQ/CQ commands, we can continue with less
++	 * than the desired aount of queues, and even a controller without
++	 * I/O queues an still be used to issue admin commands.  This might
++	 * be useful to upgrade a buggy firmware for example.
++	 */
++	return ret >= 0 ? 0 : ret;
+ }
+ 
+ static void __iomem *nvme_map_cmb(struct nvme_dev *dev)
+@@ -1702,9 +1709,7 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
+ 
+ 	/* Free previously allocated queues that are no longer usable */
+ 	nvme_free_queues(dev, nr_io_queues + 1);
+-	nvme_create_io_queues(dev);
+-
+-	return 0;
++	return nvme_create_io_queues(dev);
+ 
+  free_queues:
+ 	nvme_free_queues(dev, 1);
+-- 
+1.9.3
+

@@ -1,0 +1,131 @@
+From 0c931e40c6a3dd6095ea9774cf3cac2e98605789 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Matias=20Bj=C3=B8rling?= <m@bjorling.me>
+Date: Tue, 12 Jan 2016 07:49:37 +0100
+Subject: [PATCH 0385/1767] lightnvm: introduce ioctl to initialize device
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+Based on the previous patch, we now introduce an ioctl to initialize the
+device using nvm_init_sysblock and create the necessary system blocks.
+The user may specify the media manager that they wish to instantiate on
+top. Default from user-space will be "gennvm".
+
+Signed-off-by: Matias Bjørling <m@bjorling.me>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 5569615424613aa006005f18b03a3a12738a47d7)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/lightnvm/core.c       | 50 +++++++++++++++++++++++++++++++++++++++++++
+ include/uapi/linux/lightnvm.h | 11 ++++++++++
+ 2 files changed, 61 insertions(+)
+
+diff --git a/drivers/lightnvm/core.c b/drivers/lightnvm/core.c
+index 73b8ae1..ee08fac 100644
+--- a/drivers/lightnvm/core.c
++++ b/drivers/lightnvm/core.c
+@@ -1019,6 +1019,54 @@ static long nvm_ioctl_dev_remove(struct file *file, void __user *arg)
+ 	return __nvm_configure_remove(&remove);
+ }
+ 
++static void nvm_setup_nvm_sb_info(struct nvm_sb_info *info)
++{
++	info->seqnr = 1;
++	info->erase_cnt = 0;
++	info->version = 1;
++}
++
++static long __nvm_ioctl_dev_init(struct nvm_ioctl_dev_init *init)
++{
++	struct nvm_dev *dev;
++	struct nvm_sb_info info;
++
++	down_write(&nvm_lock);
++	dev = nvm_find_nvm_dev(init->dev);
++	up_write(&nvm_lock);
++	if (!dev) {
++		pr_err("nvm: device not found\n");
++		return -EINVAL;
++	}
++
++	nvm_setup_nvm_sb_info(&info);
++
++	strncpy(info.mmtype, init->mmtype, NVM_MMTYPE_LEN);
++	info.fs_ppa.ppa = -1;
++
++	return nvm_init_sysblock(dev, &info);
++}
++
++static long nvm_ioctl_dev_init(struct file *file, void __user *arg)
++{
++	struct nvm_ioctl_dev_init init;
++
++	if (!capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
++	if (copy_from_user(&init, arg, sizeof(struct nvm_ioctl_dev_init)))
++		return -EFAULT;
++
++	if (init.flags != 0) {
++		pr_err("nvm: no flags supported\n");
++		return -EINVAL;
++	}
++
++	init.dev[DISK_NAME_LEN - 1] = '\0';
++
++	return __nvm_ioctl_dev_init(&init);
++}
++
+ static long nvm_ctl_ioctl(struct file *file, uint cmd, unsigned long arg)
+ {
+ 	void __user *argp = (void __user *)arg;
+@@ -1032,6 +1080,8 @@ static long nvm_ctl_ioctl(struct file *file, uint cmd, unsigned long arg)
+ 		return nvm_ioctl_dev_create(file, argp);
+ 	case NVM_DEV_REMOVE:
+ 		return nvm_ioctl_dev_remove(file, argp);
++	case NVM_DEV_INIT:
++		return nvm_ioctl_dev_init(file, argp);
+ 	}
+ 	return 0;
+ }
+diff --git a/include/uapi/linux/lightnvm.h b/include/uapi/linux/lightnvm.h
+index 0171b85..56339e2 100644
+--- a/include/uapi/linux/lightnvm.h
++++ b/include/uapi/linux/lightnvm.h
+@@ -101,6 +101,12 @@ struct nvm_ioctl_remove {
+ 	__u32 flags;
+ };
+ 
++struct nvm_ioctl_dev_init {
++	char dev[DISK_NAME_LEN];		/* open-channel SSD device */
++	char mmtype[NVM_MMTYPE_LEN];		/* register to media manager */
++
++	__u32 flags;
++};
+ 
+ /* The ioctl type, 'L', 0x20 - 0x2F documented in ioctl-number.txt */
+ enum {
+@@ -111,6 +117,9 @@ enum {
+ 	/* device level cmds */
+ 	NVM_DEV_CREATE_CMD,
+ 	NVM_DEV_REMOVE_CMD,
++
++	/* Init a device to support LightNVM media managers */
++	NVM_DEV_INIT_CMD,
+ };
+ 
+ #define NVM_IOCTL 'L' /* 0x4c */
+@@ -123,6 +132,8 @@ enum {
+ 						struct nvm_ioctl_create)
+ #define NVM_DEV_REMOVE		_IOW(NVM_IOCTL, NVM_DEV_REMOVE_CMD, \
+ 						struct nvm_ioctl_remove)
++#define NVM_DEV_INIT		_IOW(NVM_IOCTL, NVM_DEV_INIT_CMD, \
++						struct nvm_ioctl_dev_init)
+ 
+ #define NVM_VERSION_MAJOR	1
+ #define NVM_VERSION_MINOR	0
+-- 
+1.9.3
+

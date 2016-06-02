@@ -1,0 +1,36 @@
+From e2d2a370755b30ce7069ac04ba336479ffe9ad69 Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Thu, 4 Feb 2016 23:47:38 -0500
+Subject: [PATCH 1418/1767] drm/amd/powerplay/tonga: disable uvd pg
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Not working reliably yet.
+
+Reviewed-by: Eric Huang <JinHuiEric.Huang@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 3d5afb41f82f55e6912678ea24d637b84c160d65)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c b/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c
+index 44a9250..7518caa 100644
+--- a/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c
++++ b/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c
+@@ -4615,6 +4615,9 @@ int tonga_hwmgr_backend_init(struct pp_hwmgr *hwmgr)
+ 
+ 	data->vddc_phase_shed_control = 0;
+ 
++	phm_cap_unset(hwmgr->platform_descriptor.platformCaps,
++		      PHM_PlatformCaps_UVDPowerGating);
++
+ 	if (0 == result) {
+ 		struct cgs_system_info sys_info = {0};
+ 
+-- 
+1.9.3
+

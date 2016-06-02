@@ -1,0 +1,118 @@
+From f5ef94529b7d6374a20321717ac6d76cfddc2f49 Mon Sep 17 00:00:00 2001
+From: Quinn Tran <quinn.tran@qlogic.com>
+Date: Thu, 17 Dec 2015 14:57:06 -0500
+Subject: [PATCH 0508/1767] qla2xxx: Add selective command queuing
+
+BugLink: http://bugs.launchpad.net/bugs/1541456
+
+queue work element to specific process lessen cache miss
+
+Signed-off-by: Quinn Tran <quinn.tran@qlogic.com>
+Signed-off-by: Himanshu Madhani <himanshu.madhani@qlogic.com>
+Signed-off-by: Nicholas Bellinger <nab@linux-iscsi.org>
+(cherry picked from commit fb3269baf4ecc2ce6d17d4eb537080035bdf6d5b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/qla2xxx/qla_isr.c         |  2 +-
+ drivers/scsi/qla2xxx/qla_target.c      | 13 ++++++++++++-
+ drivers/scsi/qla2xxx/tcm_qla2xxx.c     |  4 ++--
+ drivers/target/target_core_transport.c |  5 ++++-
+ include/target/target_core_base.h      |  1 +
+ 5 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/scsi/qla2xxx/qla_isr.c b/drivers/scsi/qla2xxx/qla_isr.c
+index cf0fe8e..3e89122 100644
+--- a/drivers/scsi/qla2xxx/qla_isr.c
++++ b/drivers/scsi/qla2xxx/qla_isr.c
+@@ -3302,7 +3302,7 @@ static void qla_irq_affinity_notify(struct irq_affinity_notify *notify,
+ 	}
+ }
+ 
+-void qla_irq_affinity_release(struct kref *ref)
++static void qla_irq_affinity_release(struct kref *ref)
+ {
+ 	struct irq_affinity_notify *notify =
+ 		container_of(ref, struct irq_affinity_notify, kref);
+diff --git a/drivers/scsi/qla2xxx/qla_target.c b/drivers/scsi/qla2xxx/qla_target.c
+index 9a4aed0..d3cd271 100644
+--- a/drivers/scsi/qla2xxx/qla_target.c
++++ b/drivers/scsi/qla2xxx/qla_target.c
+@@ -3982,13 +3982,24 @@ static int qlt_handle_cmd_for_atio(struct scsi_qla_host *vha,
+ 
+ 	cmd->cmd_in_wq = 1;
+ 	cmd->cmd_flags |= BIT_0;
++	cmd->se_cmd.cpuid = -1;
+ 
+ 	spin_lock(&vha->cmd_list_lock);
+ 	list_add_tail(&cmd->cmd_list, &vha->qla_cmd_list);
+ 	spin_unlock(&vha->cmd_list_lock);
+ 
+ 	INIT_WORK(&cmd->work, qlt_do_work);
+-	queue_work(qla_tgt_wq, &cmd->work);
++	if (ha->msix_count) {
++		cmd->se_cmd.cpuid = ha->tgt.rspq_vector_cpuid;
++		if (cmd->atio.u.isp24.fcp_cmnd.rddata)
++			queue_work_on(smp_processor_id(), qla_tgt_wq,
++			    &cmd->work);
++		else
++			queue_work_on(cmd->se_cmd.cpuid, qla_tgt_wq,
++			    &cmd->work);
++	} else {
++		queue_work(qla_tgt_wq, &cmd->work);
++	}
+ 	return 0;
+ 
+ }
+diff --git a/drivers/scsi/qla2xxx/tcm_qla2xxx.c b/drivers/scsi/qla2xxx/tcm_qla2xxx.c
+index 2d185bc..faf0a12 100644
+--- a/drivers/scsi/qla2xxx/tcm_qla2xxx.c
++++ b/drivers/scsi/qla2xxx/tcm_qla2xxx.c
+@@ -299,7 +299,7 @@ static void tcm_qla2xxx_free_cmd(struct qla_tgt_cmd *cmd)
+ 	cmd->vha->tgt_counters.core_qla_free_cmd++;
+ 	cmd->cmd_in_wq = 1;
+ 	INIT_WORK(&cmd->work, tcm_qla2xxx_complete_free);
+-	queue_work(tcm_qla2xxx_free_wq, &cmd->work);
++	queue_work_on(smp_processor_id(), tcm_qla2xxx_free_wq, &cmd->work);
+ }
+ 
+ /*
+@@ -504,7 +504,7 @@ static void tcm_qla2xxx_handle_data(struct qla_tgt_cmd *cmd)
+ 	cmd->cmd_flags |= BIT_10;
+ 	cmd->cmd_in_wq = 1;
+ 	INIT_WORK(&cmd->work, tcm_qla2xxx_handle_data_work);
+-	queue_work(tcm_qla2xxx_free_wq, &cmd->work);
++	queue_work_on(smp_processor_id(), tcm_qla2xxx_free_wq, &cmd->work);
+ }
+ 
+ static void tcm_qla2xxx_handle_dif_work(struct work_struct *work)
+diff --git a/drivers/target/target_core_transport.c b/drivers/target/target_core_transport.c
+index 4fdcee2..b5158a4 100644
+--- a/drivers/target/target_core_transport.c
++++ b/drivers/target/target_core_transport.c
+@@ -715,7 +715,10 @@ void target_complete_cmd(struct se_cmd *cmd, u8 scsi_status)
+ 	cmd->transport_state |= (CMD_T_COMPLETE | CMD_T_ACTIVE);
+ 	spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+ 
+-	queue_work(target_completion_wq, &cmd->work);
++	if (cmd->cpuid == -1)
++		queue_work(target_completion_wq, &cmd->work);
++	else
++		queue_work_on(cmd->cpuid, target_completion_wq, &cmd->work);
+ }
+ EXPORT_SYMBOL(target_complete_cmd);
+ 
+diff --git a/include/target/target_core_base.h b/include/target/target_core_base.h
+index aabf0ac..3310ef1 100644
+--- a/include/target/target_core_base.h
++++ b/include/target/target_core_base.h
+@@ -526,6 +526,7 @@ struct se_cmd {
+ 	unsigned int		t_prot_nents;
+ 	sense_reason_t		pi_err;
+ 	sector_t		bad_sector;
++	int			cpuid;
+ };
+ 
+ struct se_ua {
+-- 
+1.9.3
+

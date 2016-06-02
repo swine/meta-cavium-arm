@@ -1,0 +1,79 @@
+From 8e0b32c390cb1ef192e3df060ebf001a8bb25fa6 Mon Sep 17 00:00:00 2001
+From: Peter Swain <pswain@cavium.com>
+Date: Mon, 4 Apr 2016 15:31:21 -0600
+Subject: [PATCH 1760/1767] UBUNTU: SAUCE: [PATCH v5 07/14] i2c: octeon: Flush
+ TWSI writes with readback
+
+Signed-off-by: Peter Swain <pswain@cavium.com>
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Acked-by: David Daney <ddaney@caviumnetworks.com>
+Signed-off-by: dann frazier <dann.frazier@canonical.com>
+---
+ drivers/i2c/busses/i2c-octeon.c | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-octeon.c b/drivers/i2c/busses/i2c-octeon.c
+index bd5915d..44ce9d4 100644
+--- a/drivers/i2c/busses/i2c-octeon.c
++++ b/drivers/i2c/busses/i2c-octeon.c
+@@ -129,6 +129,12 @@ struct octeon_i2c {
+ 
+ static int reset_how;
+ 
++static void writeqflush(u64 val, void __iomem *addr)
++{
++	__raw_writeq(val, addr);
++	__raw_readq(addr);	/* wait for write to land */
++}
++
+ /**
+  * octeon_i2c_write_sw - write an I2C core register
+  * @i2c: The struct octeon_i2c
+@@ -189,8 +195,7 @@ static u8 octeon_i2c_read_sw(struct octeon_i2c *i2c, u64 eop_reg)
+  */
+ static void octeon_i2c_write_int(struct octeon_i2c *i2c, u64 data)
+ {
+-	__raw_writeq(data, i2c->twsi_base + TWSI_INT);
+-	__raw_readq(i2c->twsi_base + TWSI_INT);
++	writeqflush(data, i2c->twsi_base + TWSI_INT);
+ }
+ 
+ /**
+@@ -576,10 +581,10 @@ static int octeon_i2c_simple_write(struct octeon_i2c *i2c, struct i2c_msg *msgs)
+ 
+ 		for (i = 0; i < msgs[0].len - 4 && i < 4; i++, j--)
+ 			ext |= (u64) msgs[0].buf[j] << (8 * i);
+-		__raw_writeq(ext, i2c->twsi_base + SW_TWSI_EXT);
++		writeqflush(ext, i2c->twsi_base + SW_TWSI_EXT);
+ 	}
+ 
+-	__raw_writeq(cmd, i2c->twsi_base + SW_TWSI);
++	writeqflush(cmd, i2c->twsi_base + SW_TWSI);
+ 
+ 	ret = octeon_i2c_hlc_wait(i2c);
+ 	if (ret)
+@@ -625,7 +630,7 @@ static int octeon_i2c_ia_read(struct octeon_i2c *i2c, struct i2c_msg *msgs)
+ 		cmd |= (u64) msgs[0].buf[0] << SW_TWSI_IA_SHIFT;
+ 
+ 	octeon_i2c_hlc_int_clear(i2c);
+-	__raw_writeq(cmd, i2c->twsi_base + SW_TWSI);
++	writeqflush(cmd, i2c->twsi_base + SW_TWSI);
+ 
+ 	ret = octeon_i2c_hlc_wait(i2c);
+ 	if (ret)
+@@ -685,10 +690,10 @@ static int octeon_i2c_ia_write(struct octeon_i2c *i2c, struct i2c_msg *msgs)
+ 		set_ext = true;
+ 	}
+ 	if (set_ext)
+-		__raw_writeq(ext, i2c->twsi_base + SW_TWSI_EXT);
++		writeqflush(ext, i2c->twsi_base + SW_TWSI_EXT);
+ 
+ 	octeon_i2c_hlc_int_clear(i2c);
+-	__raw_writeq(cmd, i2c->twsi_base + SW_TWSI);
++	writeqflush(cmd, i2c->twsi_base + SW_TWSI);
+ 
+ 	ret = octeon_i2c_hlc_wait(i2c);
+ 	if (ret)
+-- 
+1.9.3
+

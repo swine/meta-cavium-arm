@@ -1,0 +1,44 @@
+From bbf99574e2ef50ce4b77a5b3b0eef49c29141aa0 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Tue, 9 Feb 2016 13:26:34 -0600
+Subject: [PATCH 0582/1767] UBUNTU: SAUCE: ext4: Add module parameter to enable
+ user namespace mounts
+
+This is still an experimental feature, so disable it by default
+and allow it only when the system administrator supplies the
+userns_mounts=true module parameter.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/ext4/super.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/fs/ext4/super.c b/fs/ext4/super.c
+index 329fbb8..b8ebd7c 100644
+--- a/fs/ext4/super.c
++++ b/fs/ext4/super.c
+@@ -81,6 +81,10 @@ static void ext4_destroy_lazyinit_thread(void);
+ static void ext4_unregister_li_request(struct super_block *sb);
+ static void ext4_clear_request_list(void);
+ 
++static bool userns_mounts = false;
++module_param(userns_mounts, bool, 0644);
++MODULE_PARM_DESC(userns_mounts, "Allow mounts from unprivileged user namespaces");
++
+ #if !defined(CONFIG_EXT2_FS) && !defined(CONFIG_EXT2_FS_MODULE) && defined(CONFIG_EXT4_USE_FOR_EXT2)
+ static struct file_system_type ext2_fs_type = {
+ 	.owner		= THIS_MODULE,
+@@ -3143,6 +3147,9 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
+ 	unsigned int journal_ioprio = DEFAULT_JOURNAL_IOPRIO;
+ 	ext4_group_t first_not_zeroed;
+ 
++	if (!userns_mounts && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
+ 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+ 	if (!sbi)
+ 		goto out_free_orig;
+-- 
+1.9.3
+

@@ -1,0 +1,37 @@
+From 921de8232727dd39c440fca97460666213e127b1 Mon Sep 17 00:00:00 2001
+From: Larry Finger <Larry.Finger@lwfinger.net>
+Date: Mon, 14 Dec 2015 16:34:38 -0600
+Subject: [PATCH 0988/1767] rtlwifi: rtl8192cu: Add missing parameter setup
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit b68d0ae7e58624c33f2eddab471fee55db27dbf9 upstream.
+
+This driver fails to copy the module parameter for software encryption
+to the locations used by the main code.
+
+Signed-off-by: Larry Finger <Larry.Finger@lwfinger.net>
+Signed-off-by: Kalle Valo <kvalo@codeaurora.org>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/wireless/realtek/rtlwifi/rtl8192cu/sw.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/net/wireless/realtek/rtlwifi/rtl8192cu/sw.c b/drivers/net/wireless/realtek/rtlwifi/rtl8192cu/sw.c
+index fd4a535..7c6f7f0 100644
+--- a/drivers/net/wireless/realtek/rtlwifi/rtl8192cu/sw.c
++++ b/drivers/net/wireless/realtek/rtlwifi/rtl8192cu/sw.c
+@@ -65,6 +65,8 @@ static int rtl92cu_init_sw_vars(struct ieee80211_hw *hw)
+ 	rtlpriv->dm.disable_framebursting = false;
+ 	rtlpriv->dm.thermalvalue = 0;
+ 	rtlpriv->dbg.global_debuglevel = rtlpriv->cfg->mod_params->debug;
++	rtlpriv->cfg->mod_params->sw_crypto =
++		rtlpriv->cfg->mod_params->sw_crypto;
+ 
+ 	/* for firmware buf */
+ 	rtlpriv->rtlhal.pfirmware = vzalloc(0x4000);
+-- 
+1.9.3
+

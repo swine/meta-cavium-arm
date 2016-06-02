@@ -1,0 +1,148 @@
+From 04fba7d524f42eeafc70a72baae01a33b5f75639 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 19 Apr 2016 12:29:21 +0530
+Subject: [PATCH 14/39] net: thunderx: Enable PF mailbox irq based on number of
+ VFs
+
+88xx has 128 VFs, 81xx will have 8 VFs and 83xx will have 24VFs.
+Hence made changes to PF driver so that IRQ enable registers
+are configuired based on number of VFs HW supports. Also
+cleanedup mailbox irq handler registration code.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 71 +++++++++++++-------------
+ 1 file changed, 36 insertions(+), 35 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index de7560e..4c8db3e 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -69,6 +69,7 @@ struct nicpf {
+ 	u8			num_vec;
+ 	struct msix_entry	msix_entries[NIC_PF_MSIX_VECTORS];
+ 	bool			irq_allocated[NIC_PF_MSIX_VECTORS];
++	char			irq_name[NIC_PF_MSIX_VECTORS][20];
+ };
+ 
+ /* Supported devices */
+@@ -106,9 +107,16 @@ static u64 nic_reg_read(struct nicpf *nic, u64 offset)
+ /* PF -> VF mailbox communication APIs */
+ static void nic_enable_mbx_intr(struct nicpf *nic)
+ {
+-	/* Enable mailbox interrupt for all 128 VFs */
+-	nic_reg_write(nic, NIC_PF_MAILBOX_ENA_W1S, ~0ull);
+-	nic_reg_write(nic, NIC_PF_MAILBOX_ENA_W1S + sizeof(u64), ~0ull);
++	int vf_cnt = pci_sriov_get_totalvfs(nic->pdev);
++
++#define INTR_MASK(vfs) ((vfs < 64) ? (BIT_ULL(vfs) - 1) : (~0ull))
++
++	/* Enable mailbox interrupt for all VFs */
++	nic_reg_write(nic, NIC_PF_MAILBOX_ENA_W1S, INTR_MASK(vf_cnt));
++	/* One mailbox intr enable reg per 64 VFs */
++	if (vf_cnt > 64)
++		nic_reg_write(nic, NIC_PF_MAILBOX_ENA_W1S + sizeof(u64),
++			      INTR_MASK(vf_cnt - 64));
+ }
+ 
+ static void nic_clear_mbx_intr(struct nicpf *nic, int vf, int mbx_reg)
+@@ -1068,11 +1076,18 @@ unlock:
+ 	nic->mbx_lock[vf] = false;
+ }
+ 
+-static void nic_mbx_intr_handler (struct nicpf *nic, int mbx)
++static irqreturn_t nic_mbx_intr_handler(int irq, void *nic_irq)
+ {
++	struct nicpf *nic = (struct nicpf *)nic_irq;
++	int mbx;
+ 	u64 intr;
+ 	u8  vf, vf_per_mbx_reg = 64;
+ 
++	if (irq == nic->msix_entries[NIC_PF_INTR_ID_MBOX0].vector)
++		mbx = 0;
++	else
++		mbx = 1;
++
+ 	intr = nic_reg_read(nic, NIC_PF_MAILBOX_INT + (mbx << 3));
+ 	dev_dbg(&nic->pdev->dev, "PF interrupt Mbox%d 0x%llx\n", mbx, intr);
+ 	for (vf = 0; vf < vf_per_mbx_reg; vf++) {
+@@ -1084,23 +1099,6 @@ static void nic_mbx_intr_handler (struct nicpf *nic, int mbx)
+ 			nic_clear_mbx_intr(nic, vf, mbx);
+ 		}
+ 	}
+-}
+-
+-static irqreturn_t nic_mbx0_intr_handler (int irq, void *nic_irq)
+-{
+-	struct nicpf *nic = (struct nicpf *)nic_irq;
+-
+-	nic_mbx_intr_handler(nic, 0);
+-
+-	return IRQ_HANDLED;
+-}
+-
+-static irqreturn_t nic_mbx1_intr_handler (int irq, void *nic_irq)
+-{
+-	struct nicpf *nic = (struct nicpf *)nic_irq;
+-
+-	nic_mbx_intr_handler(nic, 1);
+-
+ 	return IRQ_HANDLED;
+ }
+ 
+@@ -1108,7 +1106,11 @@ static int nic_enable_msix(struct nicpf *nic)
+ {
+ 	int i, ret;
+ 
+-	nic->num_vec = NIC_PF_MSIX_VECTORS;
++	/* One mailbox vector per 64 VFs */
++	if (pci_sriov_get_totalvfs(nic->pdev) > 64)
++		nic->num_vec = NIC_PF_MSIX_VECTORS;
++	else
++		nic->num_vec = NIC_PF_MSIX_VECTORS - 1;
+ 
+ 	for (i = 0; i < nic->num_vec; i++)
+ 		nic->msix_entries[i].entry = i;
+@@ -1147,27 +1149,26 @@ static void nic_free_all_interrupts(struct nicpf *nic)
+ 
+ static int nic_register_interrupts(struct nicpf *nic)
+ {
+-	int ret;
++	int i, ret;
+ 
+ 	/* Enable MSI-X */
+ 	ret = nic_enable_msix(nic);
+ 	if (ret)
+ 		return ret;
+ 
+-	/* Register mailbox interrupt handlers */
+-	ret = request_irq(nic->msix_entries[NIC_PF_INTR_ID_MBOX0].vector,
+-			  nic_mbx0_intr_handler, 0, "NIC Mbox0", nic);
+-	if (ret)
+-		goto fail;
+-
+-	nic->irq_allocated[NIC_PF_INTR_ID_MBOX0] = true;
++	/* Register mailbox interrupt handler */
++	for (i = NIC_PF_INTR_ID_MBOX0; i < nic->num_vec; i++) {
++		sprintf(nic->irq_name[i],
++			"NIC Mbox%d", (i - NIC_PF_INTR_ID_MBOX0));
+ 
+-	ret = request_irq(nic->msix_entries[NIC_PF_INTR_ID_MBOX1].vector,
+-			  nic_mbx1_intr_handler, 0, "NIC Mbox1", nic);
+-	if (ret)
+-		goto fail;
++		ret = request_irq(nic->msix_entries[i].vector,
++				  nic_mbx_intr_handler, 0,
++				  nic->irq_name[i], nic);
++		if (ret)
++			goto fail;
+ 
+-	nic->irq_allocated[NIC_PF_INTR_ID_MBOX1] = true;
++		nic->irq_allocated[i] = true;
++	}
+ 
+ 	/* Enable mailbox interrupt */
+ 	nic_enable_mbx_intr(nic);
+-- 
+1.9.1
+

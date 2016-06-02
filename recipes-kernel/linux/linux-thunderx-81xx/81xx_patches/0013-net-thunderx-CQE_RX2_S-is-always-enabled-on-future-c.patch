@@ -1,0 +1,95 @@
+From d73967c17d2a3d1f36c90c0261fd5ee88de51c92 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 19 Apr 2016 12:11:58 +0530
+Subject: [PATCH 13/39] net: thunderx: CQE_RX2_S is always enabled on future
+ chips
+
+Unline 88xx CQE_RX descriptor's tunnelling extension CQE_RX2_S
+is always enabled and HW does add this data into CQE_RX. As a
+result receive buffer addresses will now be present at 7th word
+of CQE_RX instead of 6th.
+
+To make things consistent enabling this on 88xx pass2 as well
+where this extension is introduced. So, otherthan 88xx pass1.x
+all silicons will have this enabled.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic.h          |  5 +++++
+ drivers/net/ethernet/cavium/thunder/nic_main.c     |  7 +++++++
+ drivers/net/ethernet/cavium/thunder/nic_reg.h      |  1 +
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c | 12 +++++++++++-
+ 4 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic.h b/drivers/net/ethernet/cavium/thunder/nic.h
+index a694aa8..28191e6 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic.h
++++ b/drivers/net/ethernet/cavium/thunder/nic.h
+@@ -529,6 +529,11 @@ static inline bool pass1_silicon(struct pci_dev *pdev)
+ 	return pdev->revision < 8;
+ }
+ 
++static inline bool pass2_silicon(struct pci_dev *pdev)
++{
++	return (pdev->revision == 8);
++}
++
+ int nicvf_set_real_num_queues(struct net_device *netdev,
+ 			      int tx_queues, int rx_queues);
+ int nicvf_open(struct net_device *netdev);
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 0ea3149..de7560e 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -963,6 +963,13 @@ static void nic_handle_mbx_intr(struct nicpf *nic, int vf)
+ 			   (mbx.rq.qs_num << NIC_QS_ID_SHIFT) |
+ 			   (mbx.rq.rq_num << NIC_Q_NUM_SHIFT);
+ 		nic_reg_write(nic, reg_addr, mbx.rq.cfg);
++		/* Enable CQE_RX2_S extension in CQE_RX descriptor.
++		 * This gets appended by default on 81xx/83xx chips,
++		 * for consistency enabling the same on 88xx pass2
++		 * where this is introduced.
++		 */
++		if (pass2_silicon(nic->pdev))
++			nic_reg_write(nic, NIC_PF_RX_CFG, 0x01);
+ 		break;
+ 	case NIC_MBOX_MSG_RQ_BP_CFG:
+ 		reg_addr = NIC_PF_QSET_0_127_RQ_0_7_BP_CFG |
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_reg.h b/drivers/net/ethernet/cavium/thunder/nic_reg.h
+index 833cf3d..b4a7953 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_reg.h
++++ b/drivers/net/ethernet/cavium/thunder/nic_reg.h
+@@ -36,6 +36,7 @@
+ #define   NIC_PF_MAILBOX_ENA_W1C		(0x0450)
+ #define   NIC_PF_MAILBOX_ENA_W1S		(0x0470)
+ #define   NIC_PF_RX_ETYPE_0_7			(0x0500)
++#define   NIC_PF_RX_CFG				(0x05D0)
+ #define   NIC_PF_PKIND_0_15_CFG			(0x0600)
+ #define   NIC_PF_ECC0_FLIP0			(0x1000)
+ #define   NIC_PF_ECC1_FLIP0			(0x1008)
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index 5dcf52d..180ec5c 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -1186,7 +1186,17 @@ struct sk_buff *nicvf_get_rcv_skb(struct nicvf *nic, struct cqe_rx_t *cqe_rx)
+ 	u64 *rb_ptrs = NULL;
+ 
+ 	rb_lens = (void *)cqe_rx + (3 * sizeof(u64));
+-	rb_ptrs = (void *)cqe_rx + (6 * sizeof(u64));
++	/* Except 88xx pass1 on all other chips CQE_RX2_S is added to
++	 * CQE_RX at word6, hence buffer pointers move by word
++	 *
++	 * Use existing 'hw_tso' flag which will be set for all chips
++	 * except 88xx pass1 instead of a additional cache line
++	 * access (or miss) by using pci dev's revision.
++	 */
++	if (!nic->hw_tso)
++		rb_ptrs = (void *)cqe_rx + (6 * sizeof(u64));
++	else
++		rb_ptrs = (void *)cqe_rx + (7 * sizeof(u64));
+ 
+ 	netdev_dbg(nic->netdev, "%s rb_cnt %d rb0_ptr %llx rb0_sz %d\n",
+ 		   __func__, cqe_rx->rb_cnt, cqe_rx->rb0_ptr, cqe_rx->rb0_sz);
+-- 
+1.9.1
+

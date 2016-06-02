@@ -1,0 +1,34 @@
+From f8a5c6c64a3852ca84331189d734ea58d662bcf3 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Mon, 16 Nov 2015 12:40:02 +0100
+Subject: [PATCH 0431/1767] nvme: fix admin queue depth
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+The number in tag_set->queue depth includes the reserved tags.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Acked-by: Keith Busch <keith.busch@intel.com>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 4680072003df14230e9eeeeefb617401012234a5)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/nvme/host/pci.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 27d6341..4c744d8 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -1431,7 +1431,7 @@ static int nvme_alloc_admin_tags(struct nvme_dev *dev)
+ 	if (!dev->ctrl.admin_q) {
+ 		dev->admin_tagset.ops = &nvme_mq_admin_ops;
+ 		dev->admin_tagset.nr_hw_queues = 1;
+-		dev->admin_tagset.queue_depth = NVME_AQ_DEPTH - 1;
++		dev->admin_tagset.queue_depth = NVME_AQ_DEPTH;
+ 		dev->admin_tagset.reserved_tags = 1;
+ 		dev->admin_tagset.timeout = ADMIN_TIMEOUT;
+ 		dev->admin_tagset.numa_node = dev_to_node(dev->dev);
+-- 
+1.9.3
+

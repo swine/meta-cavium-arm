@@ -1,0 +1,52 @@
+From c2bf37c9ab7d9da4d46c97923b48ea2a1e46683a Mon Sep 17 00:00:00 2001
+From: Will Deacon <will.deacon@arm.com>
+Date: Tue, 2 Feb 2016 12:46:23 +0000
+Subject: [PATCH 0636/1767] arm64: prefetch: don't provide spin_lock_prefetch
+ with LSE
+
+The LSE atomics rely on us not dirtying data at L1 if we can avoid it,
+otherwise many of the potential scalability benefits are lost.
+
+This patch replaces spin_lock_prefetch with a nop when the LSE atomics
+are in use, so that users don't shoot themselves in the foot by causing
+needless coherence traffic at L1.
+
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+Tested-by: Andrew Pinski <apinski@cavium.com>
+Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+(cherry picked from linux-next commit cd5e10bdf3795d22f10787bb1991c43798c885d5)
+Signed-off-by: Dann Frazier <dann.frazier@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ arch/arm64/include/asm/processor.h | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/include/asm/processor.h b/arch/arm64/include/asm/processor.h
+index 4acb7ca..31b76fc 100644
+--- a/arch/arm64/include/asm/processor.h
++++ b/arch/arm64/include/asm/processor.h
+@@ -29,6 +29,7 @@
+ 
+ #include <linux/string.h>
+ 
++#include <asm/alternative.h>
+ #include <asm/fpsimd.h>
+ #include <asm/hw_breakpoint.h>
+ #include <asm/pgtable-hwdef.h>
+@@ -177,9 +178,11 @@ static inline void prefetchw(const void *ptr)
+ }
+ 
+ #define ARCH_HAS_SPINLOCK_PREFETCH
+-static inline void spin_lock_prefetch(const void *x)
++static inline void spin_lock_prefetch(const void *ptr)
+ {
+-	prefetchw(x);
++	asm volatile(ARM64_LSE_ATOMIC_INSN(
++		     "prfm pstl1strm, %a0",
++		     "nop") : : "p" (ptr));
+ }
+ 
+ #define HAVE_ARCH_PICK_MMAP_LAYOUT
+-- 
+1.9.3
+

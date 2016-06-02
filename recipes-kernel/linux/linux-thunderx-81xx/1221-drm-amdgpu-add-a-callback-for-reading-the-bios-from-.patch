@@ -1,0 +1,50 @@
+From c44d5698adb7af4c0514fb6438065cf306201938 Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Tue, 24 Nov 2015 10:14:28 -0500
+Subject: [PATCH 1221/1767] drm/amdgpu: add a callback for reading the bios
+ from the rom directly
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+This is necessary when the vbios image is not directly accessible via
+the rom BAR or legacy vga location.
+
+Reviewed-by: Jammy Zhou <Jammy.Zhou@amd.com>
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Reviewed-by: Monk Liu <monk.liu@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 7946b878038d5113262d6eae09ff22fb2956351f)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu.h b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+index bb1099c..bec795a 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+@@ -1828,6 +1828,8 @@ struct amdgpu_cu_info {
+  */
+ struct amdgpu_asic_funcs {
+ 	bool (*read_disabled_bios)(struct amdgpu_device *adev);
++	bool (*read_bios_from_rom)(struct amdgpu_device *adev,
++				   u8 *bios, u32 length_bytes);
+ 	int (*read_register)(struct amdgpu_device *adev, u32 se_num,
+ 			     u32 sh_num, u32 reg_offset, u32 *value);
+ 	void (*set_vga_state)(struct amdgpu_device *adev, bool state);
+@@ -2234,6 +2236,7 @@ amdgpu_get_sdma_instance(struct amdgpu_ring *ring)
+ #define amdgpu_asic_set_vce_clocks(adev, ev, ec) (adev)->asic_funcs->set_vce_clocks((adev), (ev), (ec))
+ #define amdgpu_asic_get_gpu_clock_counter(adev) (adev)->asic_funcs->get_gpu_clock_counter((adev))
+ #define amdgpu_asic_read_disabled_bios(adev) (adev)->asic_funcs->read_disabled_bios((adev))
++#define amdgpu_asic_read_bios_from_rom(adev, b, l) (adev)->asic_funcs->read_bios_from_rom((adev), (b), (l))
+ #define amdgpu_asic_read_register(adev, se, sh, offset, v)((adev)->asic_funcs->read_register((adev), (se), (sh), (offset), (v)))
+ #define amdgpu_asic_get_cu_info(adev, info) (adev)->asic_funcs->get_cu_info((adev), (info))
+ #define amdgpu_gart_flush_gpu_tlb(adev, vmid) (adev)->gart.gart_funcs->flush_gpu_tlb((adev), (vmid))
+-- 
+1.9.3
+

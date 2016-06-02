@@ -1,0 +1,31 @@
+From 4641e0f9fd073374fdbb3cefc4a8ad0c1855651a Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:20 -0700
+Subject: [PATCH 1603/1767] Revert "UBUNTU: SAUCE: apparmor: fix log of
+ apparmor audit message when kern_path() fails"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit ee0d667727eadf194825ecbb7524faa4c425ab8a.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/mount.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index c9794fe..3239b3a 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -472,7 +472,7 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 			     buffer, &name, &info,
+ 			     labels_profile(label)->disconnected);
+ 	if (error)
+-		goto out;
++		goto error;
+ 
+ 	error = aa_path_name(&old_path, path_flags(labels_profile(label),
+ 						   &old_path),
+-- 
+1.9.3
+

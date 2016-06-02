@@ -1,0 +1,130 @@
+From 9886b9ab1b3f956a803d6f30c180d4ce2f51a87c Mon Sep 17 00:00:00 2001
+From: Sachin Kulkarni <Sachin.Kulkarni@imgtec.com>
+Date: Tue, 12 Jan 2016 14:30:19 +0530
+Subject: [PATCH 1152/1767] mac80211: Requeue work after scan complete for all
+ VIF types.
+
+BugLink: http://bugs.launchpad.net/bugs/1553179
+
+commit 4fa11ec726a32ea6dd768dbb2e2af3453a98ec0a upstream.
+
+During a sw scan ieee80211_iface_work ignores work items for all vifs.
+However after the scan complete work is requeued only for STA, ADHOC
+and MESH iftypes.
+
+This occasionally results in event processing getting delayed/not
+processed for iftype AP when it coexists with a STA. This can result
+in data halt and eventually disconnection on the AP interface.
+
+Signed-off-by: Sachin Kulkarni <Sachin.Kulkarni@imgtec.com>
+Signed-off-by: Johannes Berg <johannes.berg@intel.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ net/mac80211/ibss.c |  1 -
+ net/mac80211/mesh.c | 11 -----------
+ net/mac80211/mesh.h |  4 ----
+ net/mac80211/mlme.c |  2 --
+ net/mac80211/scan.c | 12 +++++++++++-
+ 5 files changed, 11 insertions(+), 19 deletions(-)
+
+diff --git a/net/mac80211/ibss.c b/net/mac80211/ibss.c
+index 337bb5d..6a12b0f 100644
+--- a/net/mac80211/ibss.c
++++ b/net/mac80211/ibss.c
+@@ -1732,7 +1732,6 @@ void ieee80211_ibss_notify_scan_completed(struct ieee80211_local *local)
+ 		if (sdata->vif.type != NL80211_IFTYPE_ADHOC)
+ 			continue;
+ 		sdata->u.ibss.last_scan_completed = jiffies;
+-		ieee80211_queue_work(&local->hw, &sdata->work);
+ 	}
+ 	mutex_unlock(&local->iflist_mtx);
+ }
+diff --git a/net/mac80211/mesh.c b/net/mac80211/mesh.c
+index fa28500..6f85b6a 100644
+--- a/net/mac80211/mesh.c
++++ b/net/mac80211/mesh.c
+@@ -1370,17 +1370,6 @@ out:
+ 	sdata_unlock(sdata);
+ }
+ 
+-void ieee80211_mesh_notify_scan_completed(struct ieee80211_local *local)
+-{
+-	struct ieee80211_sub_if_data *sdata;
+-
+-	rcu_read_lock();
+-	list_for_each_entry_rcu(sdata, &local->interfaces, list)
+-		if (ieee80211_vif_is_mesh(&sdata->vif) &&
+-		    ieee80211_sdata_running(sdata))
+-			ieee80211_queue_work(&local->hw, &sdata->work);
+-	rcu_read_unlock();
+-}
+ 
+ void ieee80211_mesh_init_sdata(struct ieee80211_sub_if_data *sdata)
+ {
+diff --git a/net/mac80211/mesh.h b/net/mac80211/mesh.h
+index a159634..4a8019f 100644
+--- a/net/mac80211/mesh.h
++++ b/net/mac80211/mesh.h
+@@ -362,14 +362,10 @@ static inline bool mesh_path_sel_is_hwmp(struct ieee80211_sub_if_data *sdata)
+ 	return sdata->u.mesh.mesh_pp_id == IEEE80211_PATH_PROTOCOL_HWMP;
+ }
+ 
+-void ieee80211_mesh_notify_scan_completed(struct ieee80211_local *local);
+-
+ void mesh_path_flush_by_iface(struct ieee80211_sub_if_data *sdata);
+ void mesh_sync_adjust_tbtt(struct ieee80211_sub_if_data *sdata);
+ void ieee80211s_stop(void);
+ #else
+-static inline void
+-ieee80211_mesh_notify_scan_completed(struct ieee80211_local *local) {}
+ static inline bool mesh_path_sel_is_hwmp(struct ieee80211_sub_if_data *sdata)
+ { return false; }
+ static inline void mesh_path_flush_by_iface(struct ieee80211_sub_if_data *sdata)
+diff --git a/net/mac80211/mlme.c b/net/mac80211/mlme.c
+index 3aa0434..83097c3 100644
+--- a/net/mac80211/mlme.c
++++ b/net/mac80211/mlme.c
+@@ -4003,8 +4003,6 @@ static void ieee80211_restart_sta_timer(struct ieee80211_sub_if_data *sdata)
+ 		if (!ieee80211_hw_check(&sdata->local->hw, CONNECTION_MONITOR))
+ 			ieee80211_queue_work(&sdata->local->hw,
+ 					     &sdata->u.mgd.monitor_work);
+-		/* and do all the other regular work too */
+-		ieee80211_queue_work(&sdata->local->hw, &sdata->work);
+ 	}
+ }
+ 
+diff --git a/net/mac80211/scan.c b/net/mac80211/scan.c
+index a413e52..acbe182 100644
+--- a/net/mac80211/scan.c
++++ b/net/mac80211/scan.c
+@@ -314,6 +314,7 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted)
+ 	bool was_scanning = local->scanning;
+ 	struct cfg80211_scan_request *scan_req;
+ 	struct ieee80211_sub_if_data *scan_sdata;
++	struct ieee80211_sub_if_data *sdata;
+ 
+ 	lockdep_assert_held(&local->mtx);
+ 
+@@ -373,7 +374,16 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted)
+ 
+ 	ieee80211_mlme_notify_scan_completed(local);
+ 	ieee80211_ibss_notify_scan_completed(local);
+-	ieee80211_mesh_notify_scan_completed(local);
++
++	/* Requeue all the work that might have been ignored while
++	 * the scan was in progress; if there was none this will
++	 * just be a no-op for the particular interface.
++	 */
++	list_for_each_entry_rcu(sdata, &local->interfaces, list) {
++		if (ieee80211_sdata_running(sdata))
++			ieee80211_queue_work(&sdata->local->hw, &sdata->work);
++	}
++
+ 	if (was_scanning)
+ 		ieee80211_start_next_roc(local);
+ }
+-- 
+1.9.3
+

@@ -1,0 +1,72 @@
+From 579ad5ea49d3d87f3e8b787c104f1851ce725e39 Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Fri, 16 Oct 2015 10:57:06 -0700
+Subject: [PATCH 0293/1767] fm10k: introduce ITR_IS_ADAPTIVE macro
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+Define a macro for identifying when the itr value is dynamic or
+adaptive. The concept was taken from i40e. This helps make clear what
+the check is, and reduces the line length to something more reasonable
+in a few places.
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Reviewed-by: Bruce Allan <bruce.w.allan@intel.com>
+Tested-by: Krishneil Singh <krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 584373f5b98aed81ff5a432d91b6e16d7554a5c9)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k.h         | 2 ++
+ drivers/net/ethernet/intel/fm10k/fm10k_ethtool.c | 6 ++----
+ drivers/net/ethernet/intel/fm10k/fm10k_main.c    | 2 +-
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k.h b/drivers/net/ethernet/intel/fm10k/fm10k.h
+index b178905..cea0d94 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k.h
++++ b/drivers/net/ethernet/intel/fm10k/fm10k.h
+@@ -172,6 +172,8 @@ struct fm10k_ring_container {
+ #define FM10K_ITR_20K		50	/* 50us */
+ #define FM10K_ITR_ADAPTIVE	0x8000	/* adaptive interrupt moderation flag */
+ 
++#define ITR_IS_ADAPTIVE(itr) (!!(itr & FM10K_ITR_ADAPTIVE))
++
+ #define FM10K_ITR_ENABLE	(FM10K_ITR_AUTOMASK | FM10K_ITR_MASK_CLEAR)
+ 
+ static inline struct netdev_queue *txring_txq(const struct fm10k_ring *ring)
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_ethtool.c b/drivers/net/ethernet/intel/fm10k/fm10k_ethtool.c
+index fd29145..a505a50 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_ethtool.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_ethtool.c
+@@ -701,12 +701,10 @@ static int fm10k_get_coalesce(struct net_device *dev,
+ {
+ 	struct fm10k_intfc *interface = netdev_priv(dev);
+ 
+-	ec->use_adaptive_tx_coalesce =
+-		!!(interface->tx_itr & FM10K_ITR_ADAPTIVE);
++	ec->use_adaptive_tx_coalesce = ITR_IS_ADAPTIVE(interface->tx_itr);
+ 	ec->tx_coalesce_usecs = interface->tx_itr & ~FM10K_ITR_ADAPTIVE;
+ 
+-	ec->use_adaptive_rx_coalesce =
+-		!!(interface->rx_itr & FM10K_ITR_ADAPTIVE);
++	ec->use_adaptive_rx_coalesce = ITR_IS_ADAPTIVE(interface->rx_itr);
+ 	ec->rx_coalesce_usecs = interface->rx_itr & ~FM10K_ITR_ADAPTIVE;
+ 
+ 	return 0;
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_main.c b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+index 746a198..21d4955 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_main.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_main.c
+@@ -1366,7 +1366,7 @@ static void fm10k_update_itr(struct fm10k_ring_container *ring_container)
+ 	unsigned int avg_wire_size, packets;
+ 
+ 	/* Only update ITR if we are using adaptive setting */
+-	if (!(ring_container->itr & FM10K_ITR_ADAPTIVE))
++	if (!ITR_IS_ADAPTIVE(ring_container->itr))
+ 		goto clear_counts;
+ 
+ 	packets = ring_container->total_packets;
+-- 
+1.9.3
+

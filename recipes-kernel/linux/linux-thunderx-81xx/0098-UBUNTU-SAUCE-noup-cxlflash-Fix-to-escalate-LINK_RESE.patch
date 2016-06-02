@@ -1,0 +1,35 @@
+From 622189d23bf06508d1aa12de8b7ded92882e0c29 Mon Sep 17 00:00:00 2001
+From: Manoj Kumar <manoj@linux.vnet.ibm.com>
+Date: Mon, 26 Oct 2015 10:50:47 -0500
+Subject: [PATCH 0098/1767] UBUNTU: SAUCE: (noup) cxlflash: Fix to escalate
+ LINK_RESET also on port 1
+
+BugLink: http://bugs.launchpad.net/bugs/1513583
+
+The original fix to escalate a 'login timed out' error
+to a LINK_RESET was only made for one of the two ports
+on the card. This fix resolves the same issue for
+the second port (port 1).
+
+Signed-off-by: Manoj N. Kumar <manoj@linux.vnet.ibm.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/cxlflash/main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/scsi/cxlflash/main.c b/drivers/scsi/cxlflash/main.c
+index 1e5bf0c..09fe252 100644
+--- a/drivers/scsi/cxlflash/main.c
++++ b/drivers/scsi/cxlflash/main.c
+@@ -1108,7 +1108,7 @@ static const struct asyc_intr_info ainfo[] = {
+ 	{SISL_ASTATUS_FC1_OTHER, "other error", 1, CLR_FC_ERROR | LINK_RESET},
+ 	{SISL_ASTATUS_FC1_LOGO, "target initiated LOGO", 1, 0},
+ 	{SISL_ASTATUS_FC1_CRC_T, "CRC threshold exceeded", 1, LINK_RESET},
+-	{SISL_ASTATUS_FC1_LOGI_R, "login timed out, retrying", 1, 0},
++	{SISL_ASTATUS_FC1_LOGI_R, "login timed out, retrying", 1, LINK_RESET},
+ 	{SISL_ASTATUS_FC1_LOGI_F, "login failed", 1, CLR_FC_ERROR},
+ 	{SISL_ASTATUS_FC1_LOGI_S, "login succeeded", 1, SCAN_HOST},
+ 	{SISL_ASTATUS_FC1_LINK_DN, "link down", 1, 0},
+-- 
+1.9.3
+

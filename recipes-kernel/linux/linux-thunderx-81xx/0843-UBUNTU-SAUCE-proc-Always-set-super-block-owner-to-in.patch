@@ -1,0 +1,37 @@
+From d1d0f952b1b1510689d1f3c5d658d6f39e72666d Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Thu, 25 Feb 2016 09:02:29 -0600
+Subject: [PATCH 0843/1767] UBUNTU: SAUCE: proc: Always set super block owner
+ to init_user_ns
+
+Setting s_user_ns to a non-init namespace gives root in that
+namespace capabilities towards the inodes in that filesystem.
+Some proc files intended to be writable only by real root rely
+only on the inode permission checks to enforce this access, so
+it's not safe to give namespace-root privileges towards these
+inodes. Always setting s_user_ns to &init_user_ns for proc
+guarantees that only real root is privileged towards these
+indoes.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ fs/proc/root.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/proc/root.c b/fs/proc/root.c
+index 4b302cb..6968c69 100644
+--- a/fs/proc/root.c
++++ b/fs/proc/root.c
+@@ -118,7 +118,7 @@ static struct dentry *proc_mount(struct file_system_type *fs_type,
+ 	}
+ 
+ 	sb = sget_userns(fs_type, proc_test_super, proc_set_super, flags,
+-			 ns->user_ns, ns);
++			 &init_user_ns, ns);
+ 	if (IS_ERR(sb))
+ 		return ERR_CAST(sb);
+ 
+-- 
+1.9.3
+

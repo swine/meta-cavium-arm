@@ -1,0 +1,39 @@
+From f33e57102ec32ef06a1b0e458c40c7f8f90c05f1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Christian=20K=C3=B6nig?= <christian.koenig@amd.com>
+Date: Mon, 11 Jan 2016 15:35:19 +0100
+Subject: [PATCH 1381/1767] drm/ttm: fix adding foreign BOs to the swap LRU
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+It doesn't make any sense to try to swap out imported BOs.
+
+Reviewed-by: Thomas Hellstrom <thellstrom@vmware.com>
+Signed-off-by: Christian König <christian.koenig@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit ed704a43e84cc536081423dcd3491acf2791aaeb)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/ttm/ttm_bo.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/ttm/ttm_bo.c b/drivers/gpu/drm/ttm/ttm_bo.c
+index a98a5d5..3ea9a01 100644
+--- a/drivers/gpu/drm/ttm/ttm_bo.c
++++ b/drivers/gpu/drm/ttm/ttm_bo.c
+@@ -176,7 +176,7 @@ void ttm_bo_add_to_lru(struct ttm_buffer_object *bo)
+ 		list_add_tail(&bo->lru, &man->lru);
+ 		kref_get(&bo->list_kref);
+ 
+-		if (bo->ttm != NULL) {
++		if (bo->ttm && !(bo->ttm->page_flags & TTM_PAGE_FLAG_SG)) {
+ 			list_add_tail(&bo->swap, &bo->glob->swap_lru);
+ 			kref_get(&bo->list_kref);
+ 		}
+-- 
+1.9.3
+

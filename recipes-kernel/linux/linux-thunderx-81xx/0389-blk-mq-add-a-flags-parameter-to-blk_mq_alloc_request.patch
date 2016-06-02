@@ -1,0 +1,344 @@
+From cd6df544b4967dd2a5eefcc84b7187d74573efcc Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Thu, 26 Nov 2015 09:13:05 +0100
+Subject: [PATCH 0389/1767] blk-mq: add a flags parameter to
+ blk_mq_alloc_request
+
+BugLink: http://bugs.launchpad.net/bugs/1531539
+
+We already have the reserved flag, and a nowait flag awkwardly encoded as
+a gfp_t.  Add a real flags argument to make the scheme more extensible and
+allow for a nicer calling convention.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Jens Axboe <axboe@fb.com>
+(cherry picked from commit 6f3b0e8bcf3cbb87a7459b3ed018d31d918df3f8)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ block/blk-core.c                  | 11 ++++++-----
+ block/blk-mq-tag.c                | 11 +++++------
+ block/blk-mq.c                    | 20 ++++++++------------
+ block/blk-mq.h                    | 11 ++++-------
+ drivers/block/mtip32xx/mtip32xx.c |  2 +-
+ drivers/block/null_blk.c          |  2 +-
+ drivers/nvme/host/lightnvm.c      |  2 +-
+ drivers/nvme/host/pci.c           | 11 ++++++-----
+ fs/block_dev.c                    |  4 ++--
+ include/linux/blk-mq.h            |  8 +++++++-
+ include/linux/blkdev.h            |  2 +-
+ 11 files changed, 42 insertions(+), 42 deletions(-)
+
+diff --git a/block/blk-core.c b/block/blk-core.c
+index 33e2f62..70f2d2a 100644
+--- a/block/blk-core.c
++++ b/block/blk-core.c
+@@ -646,7 +646,7 @@ struct request_queue *blk_alloc_queue(gfp_t gfp_mask)
+ }
+ EXPORT_SYMBOL(blk_alloc_queue);
+ 
+-int blk_queue_enter(struct request_queue *q, gfp_t gfp)
++int blk_queue_enter(struct request_queue *q, bool nowait)
+ {
+ 	while (true) {
+ 		int ret;
+@@ -654,7 +654,7 @@ int blk_queue_enter(struct request_queue *q, gfp_t gfp)
+ 		if (percpu_ref_tryget_live(&q->q_usage_counter))
+ 			return 0;
+ 
+-		if (!gfpflags_allow_blocking(gfp))
++		if (nowait)
+ 			return -EBUSY;
+ 
+ 		ret = wait_event_interruptible(q->mq_freeze_wq,
+@@ -1292,7 +1292,9 @@ static struct request *blk_old_get_request(struct request_queue *q, int rw,
+ struct request *blk_get_request(struct request_queue *q, int rw, gfp_t gfp_mask)
+ {
+ 	if (q->mq_ops)
+-		return blk_mq_alloc_request(q, rw, gfp_mask, false);
++		return blk_mq_alloc_request(q, rw,
++			(gfp_mask & __GFP_DIRECT_RECLAIM) ?
++				0 : BLK_MQ_REQ_NOWAIT);
+ 	else
+ 		return blk_old_get_request(q, rw, gfp_mask);
+ }
+@@ -2060,8 +2062,7 @@ blk_qc_t generic_make_request(struct bio *bio)
+ 	do {
+ 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
+ 
+-		if (likely(blk_queue_enter(q, __GFP_DIRECT_RECLAIM) == 0)) {
+-
++		if (likely(blk_queue_enter(q, false) == 0)) {
+ 			ret = q->make_request_fn(q, bio);
+ 
+ 			blk_queue_exit(q);
+diff --git a/block/blk-mq-tag.c b/block/blk-mq-tag.c
+index a07ca34..abdbb47 100644
+--- a/block/blk-mq-tag.c
++++ b/block/blk-mq-tag.c
+@@ -268,7 +268,7 @@ static int bt_get(struct blk_mq_alloc_data *data,
+ 	if (tag != -1)
+ 		return tag;
+ 
+-	if (!gfpflags_allow_blocking(data->gfp))
++	if (data->flags & BLK_MQ_REQ_NOWAIT)
+ 		return -1;
+ 
+ 	bs = bt_wait_ptr(bt, hctx);
+@@ -303,7 +303,7 @@ static int bt_get(struct blk_mq_alloc_data *data,
+ 		data->ctx = blk_mq_get_ctx(data->q);
+ 		data->hctx = data->q->mq_ops->map_queue(data->q,
+ 				data->ctx->cpu);
+-		if (data->reserved) {
++		if (data->flags & BLK_MQ_REQ_RESERVED) {
+ 			bt = &data->hctx->tags->breserved_tags;
+ 		} else {
+ 			last_tag = &data->ctx->last_tag;
+@@ -349,10 +349,9 @@ static unsigned int __blk_mq_get_reserved_tag(struct blk_mq_alloc_data *data)
+ 
+ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
+ {
+-	if (!data->reserved)
+-		return __blk_mq_get_tag(data);
+-
+-	return __blk_mq_get_reserved_tag(data);
++	if (data->flags & BLK_MQ_REQ_RESERVED)
++		return __blk_mq_get_reserved_tag(data);
++	return __blk_mq_get_tag(data);
+ }
+ 
+ static struct bt_wait_state *bt_wake_ptr(struct blk_mq_bitmap_tags *bt)
+diff --git a/block/blk-mq.c b/block/blk-mq.c
+index 6d6f8fe..93a4e19 100644
+--- a/block/blk-mq.c
++++ b/block/blk-mq.c
+@@ -229,8 +229,8 @@ __blk_mq_alloc_request(struct blk_mq_alloc_data *data, int rw)
+ 	return NULL;
+ }
+ 
+-struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp,
+-		bool reserved)
++struct request *blk_mq_alloc_request(struct request_queue *q, int rw,
++		unsigned int flags)
+ {
+ 	struct blk_mq_ctx *ctx;
+ 	struct blk_mq_hw_ctx *hctx;
+@@ -238,24 +238,22 @@ struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp,
+ 	struct blk_mq_alloc_data alloc_data;
+ 	int ret;
+ 
+-	ret = blk_queue_enter(q, gfp);
++	ret = blk_queue_enter(q, flags & BLK_MQ_REQ_NOWAIT);
+ 	if (ret)
+ 		return ERR_PTR(ret);
+ 
+ 	ctx = blk_mq_get_ctx(q);
+ 	hctx = q->mq_ops->map_queue(q, ctx->cpu);
+-	blk_mq_set_alloc_data(&alloc_data, q, gfp & ~__GFP_DIRECT_RECLAIM,
+-			reserved, ctx, hctx);
++	blk_mq_set_alloc_data(&alloc_data, q, flags, ctx, hctx);
+ 
+ 	rq = __blk_mq_alloc_request(&alloc_data, rw);
+-	if (!rq && (gfp & __GFP_DIRECT_RECLAIM)) {
++	if (!rq && !(flags & BLK_MQ_REQ_NOWAIT)) {
+ 		__blk_mq_run_hw_queue(hctx);
+ 		blk_mq_put_ctx(ctx);
+ 
+ 		ctx = blk_mq_get_ctx(q);
+ 		hctx = q->mq_ops->map_queue(q, ctx->cpu);
+-		blk_mq_set_alloc_data(&alloc_data, q, gfp, reserved, ctx,
+-				hctx);
++		blk_mq_set_alloc_data(&alloc_data, q, flags, ctx, hctx);
+ 		rq =  __blk_mq_alloc_request(&alloc_data, rw);
+ 		ctx = alloc_data.ctx;
+ 	}
+@@ -1175,8 +1173,7 @@ static struct request *blk_mq_map_request(struct request_queue *q,
+ 		rw |= REQ_SYNC;
+ 
+ 	trace_block_getrq(q, bio, rw);
+-	blk_mq_set_alloc_data(&alloc_data, q, GFP_ATOMIC, false, ctx,
+-			hctx);
++	blk_mq_set_alloc_data(&alloc_data, q, BLK_MQ_REQ_NOWAIT, ctx, hctx);
+ 	rq = __blk_mq_alloc_request(&alloc_data, rw);
+ 	if (unlikely(!rq)) {
+ 		__blk_mq_run_hw_queue(hctx);
+@@ -1185,8 +1182,7 @@ static struct request *blk_mq_map_request(struct request_queue *q,
+ 
+ 		ctx = blk_mq_get_ctx(q);
+ 		hctx = q->mq_ops->map_queue(q, ctx->cpu);
+-		blk_mq_set_alloc_data(&alloc_data, q,
+-				__GFP_RECLAIM|__GFP_HIGH, false, ctx, hctx);
++		blk_mq_set_alloc_data(&alloc_data, q, 0, ctx, hctx);
+ 		rq = __blk_mq_alloc_request(&alloc_data, rw);
+ 		ctx = alloc_data.ctx;
+ 		hctx = alloc_data.hctx;
+diff --git a/block/blk-mq.h b/block/blk-mq.h
+index 713820b..eaede8e 100644
+--- a/block/blk-mq.h
++++ b/block/blk-mq.h
+@@ -96,8 +96,7 @@ static inline void blk_mq_put_ctx(struct blk_mq_ctx *ctx)
+ struct blk_mq_alloc_data {
+ 	/* input parameter */
+ 	struct request_queue *q;
+-	gfp_t gfp;
+-	bool reserved;
++	unsigned int flags;
+ 
+ 	/* input & output parameter */
+ 	struct blk_mq_ctx *ctx;
+@@ -105,13 +104,11 @@ struct blk_mq_alloc_data {
+ };
+ 
+ static inline void blk_mq_set_alloc_data(struct blk_mq_alloc_data *data,
+-		struct request_queue *q, gfp_t gfp, bool reserved,
+-		struct blk_mq_ctx *ctx,
+-		struct blk_mq_hw_ctx *hctx)
++		struct request_queue *q, unsigned int flags,
++		struct blk_mq_ctx *ctx, struct blk_mq_hw_ctx *hctx)
+ {
+ 	data->q = q;
+-	data->gfp = gfp;
+-	data->reserved = reserved;
++	data->flags = flags;
+ 	data->ctx = ctx;
+ 	data->hctx = hctx;
+ }
+diff --git a/drivers/block/mtip32xx/mtip32xx.c b/drivers/block/mtip32xx/mtip32xx.c
+index 3457ac8..10bd8d0 100644
+--- a/drivers/block/mtip32xx/mtip32xx.c
++++ b/drivers/block/mtip32xx/mtip32xx.c
+@@ -173,7 +173,7 @@ static struct mtip_cmd *mtip_get_int_command(struct driver_data *dd)
+ {
+ 	struct request *rq;
+ 
+-	rq = blk_mq_alloc_request(dd->queue, 0, __GFP_RECLAIM, true);
++	rq = blk_mq_alloc_request(dd->queue, 0, BLK_MQ_REQ_RESERVED);
+ 	return blk_mq_rq_to_pdu(rq);
+ }
+ 
+diff --git a/drivers/block/null_blk.c b/drivers/block/null_blk.c
+index e6cad40..a48c258 100644
+--- a/drivers/block/null_blk.c
++++ b/drivers/block/null_blk.c
+@@ -448,7 +448,7 @@ static int null_lnvm_submit_io(struct nvm_dev *dev, struct nvm_rq *rqd)
+ 	struct request *rq;
+ 	struct bio *bio = rqd->bio;
+ 
+-	rq = blk_mq_alloc_request(q, bio_rw(bio), GFP_KERNEL, 0);
++	rq = blk_mq_alloc_request(q, bio_rw(bio), 0);
+ 	if (IS_ERR(rq))
+ 		return -ENOMEM;
+ 
+diff --git a/drivers/nvme/host/lightnvm.c b/drivers/nvme/host/lightnvm.c
+index 215c025..71f2bbc 100644
+--- a/drivers/nvme/host/lightnvm.c
++++ b/drivers/nvme/host/lightnvm.c
+@@ -483,7 +483,7 @@ static int nvme_nvm_submit_io(struct nvm_dev *dev, struct nvm_rq *rqd)
+ 	struct bio *bio = rqd->bio;
+ 	struct nvme_nvm_command *cmd;
+ 
+-	rq = blk_mq_alloc_request(q, bio_rw(bio), GFP_KERNEL, 0);
++	rq = blk_mq_alloc_request(q, bio_rw(bio), 0);
+ 	if (IS_ERR(rq))
+ 		return -ENOMEM;
+ 
+diff --git a/drivers/nvme/host/pci.c b/drivers/nvme/host/pci.c
+index 0c67b57..f5c0e26 100644
+--- a/drivers/nvme/host/pci.c
++++ b/drivers/nvme/host/pci.c
+@@ -1041,7 +1041,7 @@ int __nvme_submit_sync_cmd(struct request_queue *q, struct nvme_command *cmd,
+ 	struct request *req;
+ 	int ret;
+ 
+-	req = blk_mq_alloc_request(q, write, GFP_KERNEL, false);
++	req = blk_mq_alloc_request(q, write, 0);
+ 	if (IS_ERR(req))
+ 		return PTR_ERR(req);
+ 
+@@ -1094,7 +1094,8 @@ static int nvme_submit_async_admin_req(struct nvme_dev *dev)
+ 	struct nvme_cmd_info *cmd_info;
+ 	struct request *req;
+ 
+-	req = blk_mq_alloc_request(dev->admin_q, WRITE, GFP_ATOMIC, true);
++	req = blk_mq_alloc_request(dev->admin_q, WRITE,
++			BLK_MQ_REQ_NOWAIT | BLK_MQ_REQ_RESERVED);
+ 	if (IS_ERR(req))
+ 		return PTR_ERR(req);
+ 
+@@ -1119,7 +1120,7 @@ static int nvme_submit_admin_async_cmd(struct nvme_dev *dev,
+ 	struct request *req;
+ 	struct nvme_cmd_info *cmd_rq;
+ 
+-	req = blk_mq_alloc_request(dev->admin_q, WRITE, GFP_KERNEL, false);
++	req = blk_mq_alloc_request(dev->admin_q, WRITE, 0);
+ 	if (IS_ERR(req))
+ 		return PTR_ERR(req);
+ 
+@@ -1320,8 +1321,8 @@ static void nvme_abort_req(struct request *req)
+ 	if (!dev->abort_limit)
+ 		return;
+ 
+-	abort_req = blk_mq_alloc_request(dev->admin_q, WRITE, GFP_ATOMIC,
+-									false);
++	abort_req = blk_mq_alloc_request(dev->admin_q, WRITE,
++			BLK_MQ_REQ_NOWAIT);
+ 	if (IS_ERR(abort_req))
+ 		return;
+ 
+diff --git a/fs/block_dev.c b/fs/block_dev.c
+index 44d4a1e..cf1db63 100644
+--- a/fs/block_dev.c
++++ b/fs/block_dev.c
+@@ -395,7 +395,7 @@ int bdev_read_page(struct block_device *bdev, sector_t sector,
+ 	if (!ops->rw_page || bdev_get_integrity(bdev))
+ 		return result;
+ 
+-	result = blk_queue_enter(bdev->bd_queue, GFP_KERNEL);
++	result = blk_queue_enter(bdev->bd_queue, false);
+ 	if (result)
+ 		return result;
+ 	result = ops->rw_page(bdev, sector + get_start_sect(bdev), page, READ);
+@@ -432,7 +432,7 @@ int bdev_write_page(struct block_device *bdev, sector_t sector,
+ 
+ 	if (!ops->rw_page || bdev_get_integrity(bdev))
+ 		return -EOPNOTSUPP;
+-	result = blk_queue_enter(bdev->bd_queue, GFP_KERNEL);
++	result = blk_queue_enter(bdev->bd_queue, false);
+ 	if (result)
+ 		return result;
+ 
+diff --git a/include/linux/blk-mq.h b/include/linux/blk-mq.h
+index daf17d7..7fc9296 100644
+--- a/include/linux/blk-mq.h
++++ b/include/linux/blk-mq.h
+@@ -188,8 +188,14 @@ void blk_mq_insert_request(struct request *, bool, bool, bool);
+ void blk_mq_free_request(struct request *rq);
+ void blk_mq_free_hctx_request(struct blk_mq_hw_ctx *, struct request *rq);
+ bool blk_mq_can_queue(struct blk_mq_hw_ctx *);
++
++enum {
++	BLK_MQ_REQ_NOWAIT	= (1 << 0), /* return when out of requests */
++	BLK_MQ_REQ_RESERVED	= (1 << 1), /* allocate from reserved pool */
++};
++
+ struct request *blk_mq_alloc_request(struct request_queue *q, int rw,
+-		gfp_t gfp, bool reserved);
++		unsigned int flags);
+ struct request *blk_mq_tag_to_rq(struct blk_mq_tags *tags, unsigned int tag);
+ struct cpumask *blk_mq_tags_cpumask(struct blk_mq_tags *tags);
+ 
+diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
+index c70e358..a010a39 100644
+--- a/include/linux/blkdev.h
++++ b/include/linux/blkdev.h
+@@ -794,7 +794,7 @@ extern int scsi_cmd_ioctl(struct request_queue *, struct gendisk *, fmode_t,
+ extern int sg_scsi_ioctl(struct request_queue *, struct gendisk *, fmode_t,
+ 			 struct scsi_ioctl_command __user *);
+ 
+-extern int blk_queue_enter(struct request_queue *q, gfp_t gfp);
++extern int blk_queue_enter(struct request_queue *q, bool nowait);
+ extern void blk_queue_exit(struct request_queue *q);
+ extern void blk_start_queue(struct request_queue *q);
+ extern void blk_start_queue_async(struct request_queue *q);
+-- 
+1.9.3
+

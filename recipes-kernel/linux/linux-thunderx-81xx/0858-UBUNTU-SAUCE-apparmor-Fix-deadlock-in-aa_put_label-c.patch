@@ -1,0 +1,70 @@
+From 49e56e3aaf9746e2732b1bd66ad35f4cbb1a7f13 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 7 Oct 2015 07:47:45 -0700
+Subject: [PATCH 0858/1767] UBUNTU: SAUCE: apparmor: Fix: deadlock in
+ aa_put_label() call chain
+
+BugLink: http://bugs.launchpad.net/bugs/1448912
+
+When aa_put_label() is called from a fn that is holding the labelset
+lock, it can result in a deadlock if the put count reaches 0 triggering
+the kref callback, which tries to take the label set lock.
+
+Rework so the label_kref callback deferrs removing the label from
+the labelset until the rcu callback, ensuring the lock is not held
+by the calling code.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 627109a..4c7fb19 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -234,10 +234,8 @@ void aa_label_free(struct aa_label *label)
+ 	kfree(label);
+ }
+ 
+-static void label_free_rcu(struct rcu_head *head)
++static void label_free_switch(struct aa_label *l)
+ {
+-	struct aa_label *l = container_of(head, struct aa_label, rcu);
+-
+ 	if (l->flags & FLAG_NS_COUNT)
+ 		aa_free_namespace(labels_ns(l));
+ 	else if (label_isprofile(l))
+@@ -246,6 +244,14 @@ static void label_free_rcu(struct rcu_head *head)
+ 		aa_label_free(l);
+ }
+ 
++static void label_free_rcu(struct rcu_head *head)
++{
++	struct aa_label *l = container_of(head, struct aa_label, rcu);
++
++	(void) aa_label_remove(labels_set(l), l);
++	label_free_switch(l);
++}
++
+ bool aa_label_remove(struct aa_labelset *ls, struct aa_label *label);
+ void aa_label_kref(struct kref *kref)
+ {
+@@ -254,12 +260,10 @@ void aa_label_kref(struct kref *kref)
+ 
+ 	if (!ns) {
+ 		/* never live, no rcu callback needed, just using the fn */
+-		label_free_rcu(&l->rcu);
++		label_free_switch(l);
+ 		return;
+ 	}
+ 
+-	(void) aa_label_remove(&ns->labels, l);
+-
+ 	/* TODO: if compound label and not invalid add to reclaim cache */
+ 	call_rcu(&l->rcu, label_free_rcu);
+ }
+-- 
+1.9.3
+

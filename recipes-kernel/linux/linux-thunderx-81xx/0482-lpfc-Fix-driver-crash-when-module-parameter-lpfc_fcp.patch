@@ -1,0 +1,43 @@
+From efa1326260e0251c34374b12fb7ea1cf69c02745 Mon Sep 17 00:00:00 2001
+From: James Smart <james.smart@avagotech.com>
+Date: Wed, 16 Dec 2015 18:11:56 -0500
+Subject: [PATCH 0482/1767] lpfc: Fix driver crash when module parameter
+ lpfc_fcp_io_channel set to 16
+
+BugLink: http://bugs.launchpad.net/bugs/1541592
+
+Fix driver crash when module parameter lpfc_fcp_io_channel set to 16
+
+Signed-off-by: Dick Kennedy <dick.kennedy@avagotech.com>
+Signed-off-by: James Smart <james.smart@avagotech.com>
+Reviewed-by: Hannes Reinicke <hare@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit 6690e0d4fc5cccf74534abe0c9f9a69032bc02f0)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/lpfc/lpfc_init.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/scsi/lpfc/lpfc_init.c b/drivers/scsi/lpfc/lpfc_init.c
+index db9446c..5915407 100644
+--- a/drivers/scsi/lpfc/lpfc_init.c
++++ b/drivers/scsi/lpfc/lpfc_init.c
+@@ -8833,9 +8833,12 @@ found:
+ 				 * already mapped to this phys_id.
+ 				 */
+ 				if (cpup->irq != LPFC_VECTOR_MAP_EMPTY) {
+-					chann[saved_chann] =
+-						cpup->channel_id;
+-					saved_chann++;
++					if (saved_chann <=
++					    LPFC_FCP_IO_CHAN_MAX) {
++						chann[saved_chann] =
++							cpup->channel_id;
++						saved_chann++;
++					}
+ 					goto out;
+ 				}
+ 
+-- 
+1.9.3
+

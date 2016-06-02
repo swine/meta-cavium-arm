@@ -1,0 +1,36 @@
+From fa31d73de5077ae543ac11ae66ccce5f452368dc Mon Sep 17 00:00:00 2001
+From: James Smart <james.smart@avagotech.com>
+Date: Wed, 16 Dec 2015 18:12:08 -0500
+Subject: [PATCH 0494/1767] lpfc: Update version to 11.0.0.10 for upstream
+ patch set
+
+BugLink: http://bugs.launchpad.net/bugs/1541592
+
+Update version to 11.0.0.10 for upstream patch set
+
+Signed-off-by: Dick Kennedy <dick.kennedy@avagotech.com>
+Signed-off-by: James Smart <james.smart@avagotech.com>
+Reviewed-by: Hannes Reinicke <hare@suse.de>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+(cherry picked from commit b034573c7eb39aa58cd4a08e487869fea6d4ad2d)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/scsi/lpfc/lpfc_version.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/scsi/lpfc/lpfc_version.h b/drivers/scsi/lpfc/lpfc_version.h
+index ea53aa6..4dc2256 100644
+--- a/drivers/scsi/lpfc/lpfc_version.h
++++ b/drivers/scsi/lpfc/lpfc_version.h
+@@ -18,7 +18,7 @@
+  * included with this package.                                     *
+  *******************************************************************/
+ 
+-#define LPFC_DRIVER_VERSION "11.0.0.0."
++#define LPFC_DRIVER_VERSION "11.0.0.10."
+ #define LPFC_DRIVER_NAME		"lpfc"
+ 
+ /* Used for SLI 2/3 */
+-- 
+1.9.3
+

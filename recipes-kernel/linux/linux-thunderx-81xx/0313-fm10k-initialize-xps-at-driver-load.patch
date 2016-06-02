@@ -1,0 +1,104 @@
+From 10710bcb0a984b96793e72b9db5ea8bfabd204fd Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Thu, 29 Oct 2015 13:43:40 -0700
+Subject: [PATCH 0313/1767] fm10k: initialize xps at driver load
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+Similar to ixgbe and i40e, initialize XPS on driver load so that we can
+take advantage of this kernel feature.
+
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Reviewed-by: Bruce Allan <bruce.w.allan@intel.com>
+Tested-by: Krishneil Singh <krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 504b0fdf92bfb28b88b79fe3bf356b840b2e555c)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k.h     |  3 +++
+ drivers/net/ethernet/intel/fm10k/fm10k_pci.c | 18 ++++++++++++++++--
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k.h b/drivers/net/ethernet/intel/fm10k/fm10k.h
+index 021abe3..b34bb00 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k.h
++++ b/drivers/net/ethernet/intel/fm10k/fm10k.h
+@@ -23,6 +23,7 @@
+ 
+ #include <linux/types.h>
+ #include <linux/etherdevice.h>
++#include <linux/cpumask.h>
+ #include <linux/rtnetlink.h>
+ #include <linux/if_vlan.h>
+ #include <linux/pci.h>
+@@ -66,6 +67,7 @@ struct fm10k_l2_accel {
+ enum fm10k_ring_state_t {
+ 	__FM10K_TX_DETECT_HANG,
+ 	__FM10K_HANG_CHECK_ARMED,
++	__FM10K_TX_XPS_INIT_DONE,
+ };
+ 
+ #define check_for_tx_hang(ring) \
+@@ -209,6 +211,7 @@ struct fm10k_q_vector {
+ 	struct fm10k_ring_container rx, tx;
+ 
+ 	struct napi_struct napi;
++	cpumask_t affinity_mask;
+ 	char name[IFNAMSIZ + 9];
+ 
+ #ifdef CONFIG_DEBUG_FS
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_pci.c b/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
+index e820b5f..020f6dc 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
+@@ -601,6 +601,13 @@ static void fm10k_configure_tx_ring(struct fm10k_intfc *interface,
+ 	fm10k_write_reg(hw, FM10K_PFVTCTL(reg_idx),
+ 			FM10K_PFVTCTL_FTAG_DESC_ENABLE);
+ 
++	/* Initialize XPS */
++	if (!test_and_set_bit(__FM10K_TX_XPS_INIT_DONE, &ring->state) &&
++	    ring->q_vector)
++		netif_set_xps_queue(ring->netdev,
++				    &ring->q_vector->affinity_mask,
++				    ring->queue_index);
++
+ 	/* enable queue */
+ 	fm10k_write_reg(hw, FM10K_TXDCTL(reg_idx), txdctl);
+ }
+@@ -1488,8 +1495,10 @@ void fm10k_qv_free_irq(struct fm10k_intfc *interface)
+ 		if (!q_vector->tx.count && !q_vector->rx.count)
+ 			continue;
+ 
+-		/* disable interrupts */
++		/* clear the affinity_mask in the IRQ descriptor */
++		irq_set_affinity_hint(entry->vector, NULL);
+ 
++		/* disable interrupts */
+ 		writel(FM10K_ITR_MASK_SET, q_vector->itr);
+ 
+ 		free_irq(entry->vector, q_vector);
+@@ -1547,6 +1556,9 @@ int fm10k_qv_request_irq(struct fm10k_intfc *interface)
+ 			goto err_out;
+ 		}
+ 
++		/* assign the mask for this irq */
++		irq_set_affinity_hint(entry->vector, &q_vector->affinity_mask);
++
+ 		/* Enable q_vector */
+ 		writel(FM10K_ITR_ENABLE, q_vector->itr);
+ 
+@@ -1567,8 +1579,10 @@ err_out:
+ 		if (!q_vector->tx.count && !q_vector->rx.count)
+ 			continue;
+ 
+-		/* disable interrupts */
++		/* clear the affinity_mask in the IRQ descriptor */
++		irq_set_affinity_hint(entry->vector, NULL);
+ 
++		/* disable interrupts */
+ 		writel(FM10K_ITR_MASK_SET, q_vector->itr);
+ 
+ 		free_irq(entry->vector, q_vector);
+-- 
+1.9.3
+

@@ -1,0 +1,175 @@
+From 7d22e2466bfde1847b7761af90fc4391e4392cb6 Mon Sep 17 00:00:00 2001
+From: Tim Gardner <tim.gardner@canonical.com>
+Date: Thu, 7 Jan 2016 09:39:21 -0700
+Subject: [PATCH 0106/1767] UBUNTU: SAUCE: (no-up) apparmor: Fix incompatible
+ pointer type warnings
+
+  CC      security/apparmor/af_unix.o
+In file included from ./arch/x86/include/asm/bug.h:35:0,
+                 from include/linux/bug.h:4,
+                 from include/linux/cpumask.h:12,
+                 from ./arch/x86/include/asm/cpumask.h:4,
+                 from ./arch/x86/include/asm/msr.h:10,
+                 from ./arch/x86/include/asm/processor.h:20,
+                 from ./arch/x86/include/asm/atomic.h:6,
+                 from include/linux/atomic.h:4,
+                 from include/linux/mutex.h:18,
+                 from include/net/af_unix.h:6,
+                 from security/apparmor/include/af_unix.h:15,
+                 from security/apparmor/af_unix.c:16:
+security/apparmor/af_unix.c: In function 'unix_fs_perm':
+security/apparmor/af_unix.c:29:18: warning: passing argument 1 of 'unix_sk' from incompatible pointer type [-Wincompatible-pointer-types]
+  AA_BUG(!UNIX_FS(u));
+                  ^
+include/asm-generic/bug.h:95:25: note: in definition of macro 'WARN'
+  int __ret_warn_on = !!(condition);    \
+                         ^
+security/apparmor/include/apparmor.h:75:28: note: in expansion of macro 'AA_BUG_FMT'
+ #define AA_BUG(X, args...) AA_BUG_FMT((X), "" args )
+                            ^
+security/apparmor/af_unix.c:29:2: note: in expansion of macro 'AA_BUG'
+  AA_BUG(!UNIX_FS(u));
+  ^
+security/apparmor/include/af_unix.h:36:22: note: in expansion of macro 'UNIX_ANONYMOUS'
+ #define UNIX_FS(U) (!UNIX_ANONYMOUS(U) && unix_sk(U)->addr->name->sun_path[0])
+                      ^
+security/apparmor/af_unix.c:29:10: note: in expansion of macro 'UNIX_FS'
+  AA_BUG(!UNIX_FS(u));
+          ^
+In file included from security/apparmor/include/af_unix.h:15:0,
+                 from security/apparmor/af_unix.c:16:
+include/net/af_unix.h:68:33: note: expected 'const struct sock *' but argument is of type 'struct unix_sock *'
+ static inline struct unix_sock *unix_sk(const struct sock *sk)
+                                 ^
+In file included from ./arch/x86/include/asm/bug.h:35:0,
+                 from include/linux/bug.h:4,
+                 from include/linux/cpumask.h:12,
+                 from ./arch/x86/include/asm/cpumask.h:4,
+                 from ./arch/x86/include/asm/msr.h:10,
+                 from ./arch/x86/include/asm/processor.h:20,
+                 from ./arch/x86/include/asm/atomic.h:6,
+                 from include/linux/atomic.h:4,
+                 from include/linux/mutex.h:18,
+                 from include/net/af_unix.h:6,
+                 from security/apparmor/include/af_unix.h:15,
+                 from security/apparmor/af_unix.c:16:
+security/apparmor/af_unix.c:29:18: warning: passing argument 1 of 'unix_sk' from incompatible pointer type [-Wincompatible-pointer-types]
+  AA_BUG(!UNIX_FS(u));
+                  ^
+include/asm-generic/bug.h:95:25: note: in definition of macro 'WARN'
+  int __ret_warn_on = !!(condition);    \
+                         ^
+security/apparmor/include/apparmor.h:75:28: note: in expansion of macro 'AA_BUG_FMT'
+ #define AA_BUG(X, args...) AA_BUG_FMT((X), "" args )
+                            ^
+security/apparmor/af_unix.c:29:2: note: in expansion of macro 'AA_BUG'
+  AA_BUG(!UNIX_FS(u));
+  ^
+security/apparmor/af_unix.c:29:10: note: in expansion of macro 'UNIX_FS'
+  AA_BUG(!UNIX_FS(u));
+          ^
+In file included from security/apparmor/include/af_unix.h:15:0,
+                 from security/apparmor/af_unix.c:16:
+include/net/af_unix.h:68:33: note: expected 'const struct sock *' but argument is of type 'struct unix_sock *'
+ static inline struct unix_sock *unix_sk(const struct sock *sk)
+                                 ^
+In file included from security/apparmor/af_unix.c:16:0:
+security/apparmor/af_unix.c: In function 'aa_unix_peer_perm':
+security/apparmor/af_unix.c:529:14: warning: passing argument 1 of 'unix_sk' from incompatible pointer type [-Wincompatible-pointer-types]
+  if (UNIX_FS(peeru))
+              ^
+security/apparmor/include/af_unix.h:32:37: note: in definition of macro 'UNIX_ANONYMOUS'
+ #define UNIX_ANONYMOUS(U) (!unix_sk(U)->addr)
+                                     ^
+security/apparmor/af_unix.c:529:6: note: in expansion of macro 'UNIX_FS'
+  if (UNIX_FS(peeru))
+      ^
+In file included from security/apparmor/include/af_unix.h:15:0,
+                 from security/apparmor/af_unix.c:16:
+include/net/af_unix.h:68:33: note: expected 'const struct sock *' but argument is of type 'struct unix_sock *'
+ static inline struct unix_sock *unix_sk(const struct sock *sk)
+                                 ^
+In file included from security/apparmor/af_unix.c:16:0:
+security/apparmor/af_unix.c:529:14: warning: passing argument 1 of 'unix_sk' from incompatible pointer type [-Wincompatible-pointer-types]
+  if (UNIX_FS(peeru))
+              ^
+security/apparmor/include/af_unix.h:36:51: note: in definition of macro 'UNIX_FS'
+ #define UNIX_FS(U) (!UNIX_ANONYMOUS(U) && unix_sk(U)->addr->name->sun_path[0])
+                                                   ^
+In file included from security/apparmor/include/af_unix.h:15:0,
+                 from security/apparmor/af_unix.c:16:
+include/net/af_unix.h:68:33: note: expected 'const struct sock *' but argument is of type 'struct unix_sock *'
+ static inline struct unix_sock *unix_sk(const struct sock *sk)
+                                 ^
+In file included from security/apparmor/af_unix.c:16:0:
+security/apparmor/af_unix.c:531:19: warning: passing argument 1 of 'unix_sk' from incompatible pointer type [-Wincompatible-pointer-types]
+  else if (UNIX_FS(u))
+                   ^
+security/apparmor/include/af_unix.h:32:37: note: in definition of macro 'UNIX_ANONYMOUS'
+ #define UNIX_ANONYMOUS(U) (!unix_sk(U)->addr)
+                                     ^
+security/apparmor/af_unix.c:531:11: note: in expansion of macro 'UNIX_FS'
+  else if (UNIX_FS(u))
+           ^
+In file included from security/apparmor/include/af_unix.h:15:0,
+                 from security/apparmor/af_unix.c:16:
+include/net/af_unix.h:68:33: note: expected 'const struct sock *' but argument is of type 'struct unix_sock *'
+ static inline struct unix_sock *unix_sk(const struct sock *sk)
+                                 ^
+In file included from security/apparmor/af_unix.c:16:0:
+security/apparmor/af_unix.c:531:19: warning: passing argument 1 of 'unix_sk' from incompatible pointer type [-Wincompatible-pointer-types]
+  else if (UNIX_FS(u))
+                   ^
+security/apparmor/include/af_unix.h:36:51: note: in definition of macro 'UNIX_FS'
+ #define UNIX_FS(U) (!UNIX_ANONYMOUS(U) && unix_sk(U)->addr->name->sun_path[0])
+                                                   ^
+In file included from security/apparmor/include/af_unix.h:15:0,
+                 from security/apparmor/af_unix.c:16:
+include/net/af_unix.h:68:33: note: expected 'const struct sock *' but argument is of type 'struct unix_sock *'
+ static inline struct unix_sock *unix_sk(const struct sock *sk)
+                                 ^
+
+Cc: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/af_unix.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/security/apparmor/af_unix.c b/security/apparmor/af_unix.c
+index 62e7fd1..cd08018 100644
+--- a/security/apparmor/af_unix.c
++++ b/security/apparmor/af_unix.c
+@@ -21,12 +21,17 @@
+ #include "include/path.h"
+ #include "include/policy.h"
+ 
++static inline struct sock *aa_sock(struct unix_sock *u)
++{
++	return &u->sk;
++}
++
+ static inline int unix_fs_perm(int op, u32 mask, struct aa_label *label,
+ 			       struct unix_sock *u, int flags)
+ {
+ 	AA_BUG(!label);
+ 	AA_BUG(!u);
+-	AA_BUG(!UNIX_FS(u));
++	AA_BUG(!UNIX_FS(aa_sock(u)));
+ 
+ 	if (unconfined(label) || !LABEL_MEDIATES(label, AA_CLASS_FILE))
+ 		return 0;
+@@ -526,9 +531,9 @@ int aa_unix_peer_perm(struct aa_label *label, int op, u32 request,
+ 	AA_BUG(!sk);
+ 	AA_BUG(!peer_sk);
+ 
+-	if (UNIX_FS(peeru))
++	if (UNIX_FS(aa_sock(peeru)))
+ 		return unix_fs_perm(op, request, label, peeru, 0);
+-	else if (UNIX_FS(u))
++	else if (UNIX_FS(aa_sock(u)))
+ 		return unix_fs_perm(op, request, label, u, 0);
+ 	else {
+ 		struct aa_profile *profile;
+-- 
+1.9.3
+

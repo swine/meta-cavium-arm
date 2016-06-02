@@ -1,0 +1,74 @@
+From daadafe8d8723596814b11a43b4f19420ceb518f Mon Sep 17 00:00:00 2001
+From: Jacob Keller <jacob.e.keller@intel.com>
+Date: Mon, 26 Oct 2015 16:32:04 -0700
+Subject: [PATCH 0300/1767] fm10k: do not use CamelCase
+
+BugLink: http://bugs.launchpad.net/bugs/1536475
+
+Avoid the use of CamelCase for some variable names that previously
+slipped through review.
+
+Reported-by: Bruce Allan <bruce.w.allan@intel.com>
+Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+Tested-by: Krishneil Singh <krishneil.k.singh@intel.com>
+Signed-off-by: Jeff Kirsher <jeffrey.t.kirsher@intel.com>
+(cherry picked from commit 40423dd2a56ab95c41b69d9dd910199a0acfd5c5)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/ethernet/intel/fm10k/fm10k_pci.c  | 12 ++++++------
+ drivers/net/ethernet/intel/fm10k/fm10k_type.h | 14 +++++++-------
+ 2 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_pci.c b/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
+index 15d8e10..644b0c1 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_pci.c
+@@ -1411,14 +1411,14 @@ static int fm10k_mbx_request_irq_pf(struct fm10k_intfc *interface)
+ 	}
+ 
+ 	/* Enable interrupts w/ no moderation for "other" interrupts */
+-	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_PCIeFault), other_itr);
+-	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_SwitchUpDown), other_itr);
+-	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_SRAM), other_itr);
+-	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_MaxHoldTime), other_itr);
+-	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_VFLR), other_itr);
++	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_pcie_fault), other_itr);
++	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_switch_up_down), other_itr);
++	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_sram), other_itr);
++	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_max_hold_time), other_itr);
++	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_vflr), other_itr);
+ 
+ 	/* Enable interrupts w/ moderation for mailbox */
+-	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_Mailbox), mbx_itr);
++	fm10k_write_reg(hw, FM10K_INT_MAP(fm10k_int_mailbox), mbx_itr);
+ 
+ 	/* Enable individual interrupt causes */
+ 	fm10k_write_reg(hw, FM10K_EIMR, FM10K_EIMR_ENABLE(PCA_FAULT) |
+diff --git a/drivers/net/ethernet/intel/fm10k/fm10k_type.h b/drivers/net/ethernet/intel/fm10k/fm10k_type.h
+index 0272725..2fd962f 100644
+--- a/drivers/net/ethernet/intel/fm10k/fm10k_type.h
++++ b/drivers/net/ethernet/intel/fm10k/fm10k_type.h
+@@ -388,13 +388,13 @@ struct fm10k_hw;
+ #define FM10K_SW_SYSTIME_PULSE(_n)	((_n) + 0x02252)
+ 
+ enum fm10k_int_source {
+-	fm10k_int_Mailbox	= 0,
+-	fm10k_int_PCIeFault	= 1,
+-	fm10k_int_SwitchUpDown	= 2,
+-	fm10k_int_SwitchEvent	= 3,
+-	fm10k_int_SRAM		= 4,
+-	fm10k_int_VFLR		= 5,
+-	fm10k_int_MaxHoldTime	= 6,
++	fm10k_int_mailbox		= 0,
++	fm10k_int_pcie_fault		= 1,
++	fm10k_int_switch_up_down	= 2,
++	fm10k_int_switch_event		= 3,
++	fm10k_int_sram			= 4,
++	fm10k_int_vflr			= 5,
++	fm10k_int_max_hold_time		= 6,
+ 	fm10k_int_sources_max_pf
+ };
+ 
+-- 
+1.9.3
+

@@ -1,0 +1,41 @@
+From c65131c705c32c43222aea5c0f2e52c1ea0fe868 Mon Sep 17 00:00:00 2001
+From: Olaf Hering <olaf@aepfle.de>
+Date: Mon, 14 Dec 2015 16:01:35 -0800
+Subject: [PATCH 0456/1767] tools: hv: remove repeated HV_FCOPY string
+
+HV_FCOPY is already used as identifier in syslog.
+
+Signed-off-by: Olaf Hering <olaf@aepfle.de>
+Signed-off-by: K. Y. Srinivasan <kys@microsoft.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+(cherry picked from commit 6dfb867cea9e93ae9220f0b2e702b0440e4c8b4b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ tools/hv/hv_fcopy_daemon.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/hv/hv_fcopy_daemon.c b/tools/hv/hv_fcopy_daemon.c
+index f1d7426..fdc9ca4 100644
+--- a/tools/hv/hv_fcopy_daemon.c
++++ b/tools/hv/hv_fcopy_daemon.c
+@@ -179,7 +179,7 @@ int main(int argc, char *argv[])
+ 	}
+ 
+ 	openlog("HV_FCOPY", 0, LOG_USER);
+-	syslog(LOG_INFO, "HV_FCOPY starting; pid is:%d", getpid());
++	syslog(LOG_INFO, "starting; pid is:%d", getpid());
+ 
+ 	fcopy_fd = open("/dev/vmbus/hv_fcopy", O_RDWR);
+ 
+@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
+ 			}
+ 			kernel_modver = *(__u32 *)buffer;
+ 			in_handshake = 0;
+-			syslog(LOG_INFO, "HV_FCOPY: kernel module version: %d",
++			syslog(LOG_INFO, "kernel module version: %d",
+ 			       kernel_modver);
+ 			continue;
+ 		}
+-- 
+1.9.3
+

@@ -1,0 +1,116 @@
+From 424f0c78b5c078b213a1038eed0e782f7ffb4fcc Mon Sep 17 00:00:00 2001
+From: "Singhai, Anjali" <anjali.singhai@intel.com>
+Date: Mon, 14 Dec 2015 12:21:17 -0800
+Subject: [PATCH 0185/1767] geneve: Add geneve udp port offload for ethernet
+ devices
+
+BugLink: http://bugs.launchpad.net/bugs/1536474
+
+Add ndo_ops to add/del UDP ports to a device that supports geneve
+offload.
+
+v2: Comment fix.
+
+Signed-off-by: Anjali Singhai Jain <anjali.singhai@intel.com>
+Signed-off-by: Kiran Patil <kiran.patil@intel.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+(cherry picked from commit a8170d2b9e8d38a1f3fa3b40b6f8cd34a87d5382)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/net/geneve.c      | 23 +++++++++++++++++++++++
+ include/linux/netdevice.h | 20 +++++++++++++++++++-
+ 2 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/geneve.c b/drivers/net/geneve.c
+index 0599b99..ea5b00d 100644
+--- a/drivers/net/geneve.c
++++ b/drivers/net/geneve.c
+@@ -380,8 +380,11 @@ static struct socket *geneve_create_sock(struct net *net, bool ipv6,
+ 
+ static void geneve_notify_add_rx_port(struct geneve_sock *gs)
+ {
++	struct net_device *dev;
+ 	struct sock *sk = gs->sock->sk;
++	struct net *net = sock_net(sk);
+ 	sa_family_t sa_family = sk->sk_family;
++	__be16 port = inet_sk(sk)->inet_sport;
+ 	int err;
+ 
+ 	if (sa_family == AF_INET) {
+@@ -390,6 +393,14 @@ static void geneve_notify_add_rx_port(struct geneve_sock *gs)
+ 			pr_warn("geneve: udp_add_offload failed with status %d\n",
+ 				err);
+ 	}
++
++	rcu_read_lock();
++	for_each_netdev_rcu(net, dev) {
++		if (dev->netdev_ops->ndo_add_geneve_port)
++			dev->netdev_ops->ndo_add_geneve_port(dev, sa_family,
++							     port);
++	}
++	rcu_read_unlock();
+ }
+ 
+ static int geneve_hlen(struct genevehdr *gh)
+@@ -530,8 +541,20 @@ static struct geneve_sock *geneve_socket_create(struct net *net, __be16 port,
+ 
+ static void geneve_notify_del_rx_port(struct geneve_sock *gs)
+ {
++	struct net_device *dev;
+ 	struct sock *sk = gs->sock->sk;
++	struct net *net = sock_net(sk);
+ 	sa_family_t sa_family = sk->sk_family;
++	__be16 port = inet_sk(sk)->inet_sport;
++
++	rcu_read_lock();
++	for_each_netdev_rcu(net, dev) {
++		if (dev->netdev_ops->ndo_del_geneve_port)
++			dev->netdev_ops->ndo_del_geneve_port(dev, sa_family,
++							     port);
++	}
++
++	rcu_read_unlock();
+ 
+ 	if (sa_family == AF_INET)
+ 		udp_del_offload(&gs->udp_offloads);
+diff --git a/include/linux/netdevice.h b/include/linux/netdevice.h
+index 3143c84..33af579 100644
+--- a/include/linux/netdevice.h
++++ b/include/linux/netdevice.h
+@@ -1011,6 +1011,19 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
+  *	a new port starts listening. The operation is protected by the
+  *	vxlan_net->sock_lock.
+  *
++ * void (*ndo_add_geneve_port)(struct net_device *dev,
++ *			      sa_family_t sa_family, __be16 port);
++ *	Called by geneve to notify a driver about the UDP port and socket
++ *	address family that geneve is listnening to. It is called only when
++ *	a new port starts listening. The operation is protected by the
++ *	geneve_net->sock_lock.
++ *
++ * void (*ndo_del_geneve_port)(struct net_device *dev,
++ *			      sa_family_t sa_family, __be16 port);
++ *	Called by geneve to notify the driver about a UDP port and socket
++ *	address family that geneve is not listening to anymore. The operation
++ *	is protected by the geneve_net->sock_lock.
++ *
+  * void (*ndo_del_vxlan_port)(struct  net_device *dev,
+  *			      sa_family_t sa_family, __be16 port);
+  *	Called by vxlan to notify the driver about a UDP port and socket
+@@ -1215,7 +1228,12 @@ struct net_device_ops {
+ 	void			(*ndo_del_vxlan_port)(struct  net_device *dev,
+ 						      sa_family_t sa_family,
+ 						      __be16 port);
+-
++	void			(*ndo_add_geneve_port)(struct  net_device *dev,
++						       sa_family_t sa_family,
++						       __be16 port);
++	void			(*ndo_del_geneve_port)(struct  net_device *dev,
++						       sa_family_t sa_family,
++						       __be16 port);
+ 	void*			(*ndo_dfwd_add_station)(struct net_device *pdev,
+ 							struct net_device *dev);
+ 	void			(*ndo_dfwd_del_station)(struct net_device *pdev,
+-- 
+1.9.3
+

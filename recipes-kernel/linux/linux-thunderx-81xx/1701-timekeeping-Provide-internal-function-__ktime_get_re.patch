@@ -1,0 +1,63 @@
+From 90758eedf3d1bf4a59138dfe3fd2d91e92100078 Mon Sep 17 00:00:00 2001
+From: DengChao <chao.deng@linaro.org>
+Date: Sun, 13 Dec 2015 12:24:18 +0800
+Subject: [PATCH 1701/1767] timekeeping: Provide internal function
+ __ktime_get_real_seconds
+
+BugLink: http://bugs.launchpad.net/bugs/1519625
+
+In order to fix Y2038 issues in the ntp code we will need replace
+get_seconds() with ktime_get_real_seconds() but as the ntp code uses
+the timekeeping lock which is also used by ktime_get_real_seconds(),
+we need a version without locking.
+Add a new function __ktime_get_real_seconds() in timekeeping to
+do this.
+
+Reviewed-by: John Stultz <john.stultz@linaro.org>
+Signed-off-by: DengChao <chao.deng@linaro.org>
+Signed-off-by: John Stultz <john.stultz@linaro.org>
+(cherry picked from commit dee3665416a8553279d10b62b5e62685cbe5daa8)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ kernel/time/timekeeping.c          | 13 +++++++++++++
+ kernel/time/timekeeping_internal.h |  2 ++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/kernel/time/timekeeping.c b/kernel/time/timekeeping.c
+index d9249da..21cc239 100644
+--- a/kernel/time/timekeeping.c
++++ b/kernel/time/timekeeping.c
+@@ -845,6 +845,19 @@ time64_t ktime_get_real_seconds(void)
+ }
+ EXPORT_SYMBOL_GPL(ktime_get_real_seconds);
+ 
++/**
++ * __ktime_get_real_seconds - The same as ktime_get_real_seconds
++ * but without the sequence counter protect. This internal function
++ * is called just when timekeeping lock is already held.
++ */
++time64_t __ktime_get_real_seconds(void)
++{
++	struct timekeeper *tk = &tk_core.timekeeper;
++
++	return tk->xtime_sec;
++}
++
++
+ #ifdef CONFIG_NTP_PPS
+ 
+ /**
+diff --git a/kernel/time/timekeeping_internal.h b/kernel/time/timekeeping_internal.h
+index 4ea005a..e20466f 100644
+--- a/kernel/time/timekeeping_internal.h
++++ b/kernel/time/timekeeping_internal.h
+@@ -26,4 +26,6 @@ static inline cycle_t clocksource_delta(cycle_t now, cycle_t last, cycle_t mask)
+ }
+ #endif
+ 
++extern time64_t __ktime_get_real_seconds(void);
++
+ #endif /* _TIMEKEEPING_INTERNAL_H */
+-- 
+1.9.3
+

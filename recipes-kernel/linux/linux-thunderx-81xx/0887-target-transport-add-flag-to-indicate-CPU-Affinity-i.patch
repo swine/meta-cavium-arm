@@ -1,0 +1,79 @@
+From 58940ec1cf9e2cc3010318dfec3e8f15e9a81f97 Mon Sep 17 00:00:00 2001
+From: Quinn Tran <quinn.tran@qlogic.com>
+Date: Wed, 10 Feb 2016 18:59:13 -0500
+Subject: [PATCH 0887/1767] target/transport: add flag to indicate CPU Affinity
+ is observed
+
+BugLink: http://bugs.launchpad.net/bugs/1552332
+
+Signed-off-by: Quinn Tran <quinn.tran@qlogic.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Reviewed-by: Bart Van Assche <bart.vanassche@sandisk.com>
+Fixes: fb3269b ("qla2xxx: Add selective command queuing")
+Signed-off-by: Himanshu Madhani <himanshu.madhani@qlogic.com>
+Signed-off-by: Nicholas Bellinger <nab@linux-iscsi.org>
+(back ported from commit 9095adaab8c1d82707e4e9961b6ad79b62f3361b)
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+
+Conflicts:
+	include/target/target_core_base.h
+---
+ drivers/target/target_core_transport.c | 12 +++++++++---
+ include/target/target_core_base.h      |  3 +++
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/target/target_core_transport.c b/drivers/target/target_core_transport.c
+index b5158a4..930a036 100644
+--- a/drivers/target/target_core_transport.c
++++ b/drivers/target/target_core_transport.c
+@@ -715,10 +715,10 @@ void target_complete_cmd(struct se_cmd *cmd, u8 scsi_status)
+ 	cmd->transport_state |= (CMD_T_COMPLETE | CMD_T_ACTIVE);
+ 	spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+ 
+-	if (cmd->cpuid == -1)
+-		queue_work(target_completion_wq, &cmd->work);
+-	else
++	if (cmd->se_cmd_flags & SCF_USE_CPUID)
+ 		queue_work_on(cmd->cpuid, target_completion_wq, &cmd->work);
++	else
++		queue_work(target_completion_wq, &cmd->work);
+ }
+ EXPORT_SYMBOL(target_complete_cmd);
+ 
+@@ -1431,6 +1431,12 @@ int target_submit_cmd_map_sgls(struct se_cmd *se_cmd, struct se_session *se_sess
+ 	 */
+ 	transport_init_se_cmd(se_cmd, se_tpg->se_tpg_tfo, se_sess,
+ 				data_length, data_dir, task_attr, sense);
++
++	if (flags & TARGET_SCF_USE_CPUID)
++		se_cmd->se_cmd_flags |= SCF_USE_CPUID;
++	else
++		se_cmd->cpuid = WORK_CPU_UNBOUND;
++
+ 	if (flags & TARGET_SCF_UNKNOWN_SIZE)
+ 		se_cmd->unknown_data_length = 1;
+ 	/*
+diff --git a/include/target/target_core_base.h b/include/target/target_core_base.h
+index 3310ef1..37ef694 100644
+--- a/include/target/target_core_base.h
++++ b/include/target/target_core_base.h
+@@ -138,6 +138,8 @@ enum se_cmd_flags_table {
+ 	SCF_COMPARE_AND_WRITE		= 0x00080000,
+ 	SCF_COMPARE_AND_WRITE_POST	= 0x00100000,
+ 	SCF_PASSTHROUGH_PROT_SG_TO_MEM_NOALLOC = 0x00200000,
++	SCF_ACK_KREF			= 0x00400000,
++	SCF_USE_CPUID			= 0x00800000,
+ };
+ 
+ /* struct se_dev_entry->lun_flags and struct se_lun->lun_access */
+@@ -185,6 +187,7 @@ enum target_sc_flags_table {
+ 	TARGET_SCF_BIDI_OP		= 0x01,
+ 	TARGET_SCF_ACK_KREF		= 0x02,
+ 	TARGET_SCF_UNKNOWN_SIZE		= 0x04,
++	TARGET_SCF_USE_CPUID	= 0x08,
+ };
+ 
+ /* fabric independent task management function values */
+-- 
+1.9.3
+

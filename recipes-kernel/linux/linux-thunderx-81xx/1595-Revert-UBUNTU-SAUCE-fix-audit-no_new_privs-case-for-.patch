@@ -1,0 +1,68 @@
+From 02c69347ca4e9e7df25ef370ee05d72aaa80c851 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:05:03 -0700
+Subject: [PATCH 1595/1767] Revert "UBUNTU: SAUCE: fix: audit "no_new_privs"
+ case for exec failure"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit b9eab948e47cad7504c32f5e6e6b65c97ff27345.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/domain.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index 73e27ea..3728644 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -474,9 +474,9 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 	 * fail the exec.
+ 	 */
+ 	if (bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS) {
++		aa_put_profile(new_profile);
+ 		error = -EPERM;
+-		info = "no new privs";
+-		goto audit;
++		goto cleanup;
+ 	}
+ 
+ 	if (!new_profile)
+@@ -489,8 +489,10 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 
+ 	if (bprm->unsafe & (LSM_UNSAFE_PTRACE | LSM_UNSAFE_PTRACE_CAP)) {
+ 		error = may_change_ptraced_domain(new_profile, &info);
+-		if (error)
++		if (error) {
++			aa_put_profile(new_profile);
+ 			goto audit;
++		}
+ 	}
+ 
+ 	/* Determine if secure exec is needed.
+@@ -511,6 +513,7 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 		bprm->unsafe |= AA_SECURE_X_NEEDED;
+ 	}
+ apply:
++	target = new_profile->base.hname;
+ 	/* when transitioning profiles clear unsafe personality bits */
+ 	bprm->per_clear |= PER_CLEAR_ON_SETID;
+ 
+@@ -523,12 +526,9 @@ x_clear:
+ 	aa_clear_task_cxt_trans(cxt);
+ 
+ audit:
+-	if (new_profile)
+-		target = new_profile->base.hname;
+ 	error = aa_audit_file(profile, &perms, OP_EXEC, MAY_EXEC, name, target,
+ 			      cond.uid, info, error);
+-	if (new_profile && &new_profile->label != cxt->label)
+-		aa_put_profile(new_profile);
++
+ cleanup:
+ 	aa_put_label(label);
+ 	put_buffers(buffer);
+-- 
+1.9.3
+

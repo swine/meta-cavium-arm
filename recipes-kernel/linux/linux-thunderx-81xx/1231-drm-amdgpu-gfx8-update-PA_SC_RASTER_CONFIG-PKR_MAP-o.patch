@@ -1,0 +1,36 @@
+From 325a09f6d337d47c5f387d4e96c190e4b1cb0313 Mon Sep 17 00:00:00 2001
+From: Flora Cui <Flora.Cui@amd.com>
+Date: Tue, 8 Dec 2015 11:23:29 +0800
+Subject: [PATCH 1231/1767] drm/amdgpu/gfx8: update PA_SC_RASTER_CONFIG:PKR_MAP
+ only
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Use default value as a base.
+
+Signed-off-by: Flora Cui <Flora.Cui@amd.com>
+Reviewed-by: Jammy Zhou <Jammy.Zhou@amd.com>
+(cherry picked from commit c27816a883575037ec67e7f92fbd214648a1c1cb)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
+index 4b5bb7e..8f17b05 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
+@@ -3125,7 +3125,7 @@ static void gfx_v8_0_setup_rb(struct amdgpu_device *adev,
+ 	mutex_lock(&adev->grbm_idx_mutex);
+ 	for (i = 0; i < se_num; i++) {
+ 		gfx_v8_0_select_se_sh(adev, i, 0xffffffff);
+-		data = 0;
++		data = RREG32(mmPA_SC_RASTER_CONFIG);
+ 		for (j = 0; j < sh_per_se; j++) {
+ 			switch (enabled_rbs & 3) {
+ 			case 0:
+-- 
+1.9.3
+

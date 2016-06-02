@@ -1,0 +1,44 @@
+From a7c9aa07d8c9cd61154ba7773df42e2128dd3c27 Mon Sep 17 00:00:00 2001
+From: Ben Hutchings <ben@decadent.org.uk>
+Date: Wed, 21 Jan 2015 09:24:00 -0600
+Subject: [PATCH 0081/1767] UBUNTU: SAUCE: rtsx_usb_ms: Use
+ msleep_interruptible() in polling loop
+
+BugLink: http://bugs.launchpad.net/bugs/1413149
+
+rtsx_usb_ms creates a task that mostly sleeps, but tasks in
+uninterruptible sleep still contribute to the load average (for
+bug-compatibility with Unix).  A load average of ~1 on a system that
+should be idle is somewhat alarming.
+
+Change the sleep to be interruptible, but still ignore signals.
+
+A better fix might be to replace this loop with a delayed work item.
+
+References: https://bugs.debian.org/765717
+Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+Signed-off-by: Chris J Arges <chris.j.arges@canonical.com>
+Acked-by: Andy Whitcroft <apw@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ drivers/memstick/host/rtsx_usb_ms.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/memstick/host/rtsx_usb_ms.c b/drivers/memstick/host/rtsx_usb_ms.c
+index 1105db2..645dede 100644
+--- a/drivers/memstick/host/rtsx_usb_ms.c
++++ b/drivers/memstick/host/rtsx_usb_ms.c
+@@ -706,7 +706,8 @@ poll_again:
+ 		if (host->eject)
+ 			break;
+ 
+-		msleep(1000);
++		if (msleep_interruptible(1000))
++			flush_signals(current);
+ 	}
+ 
+ 	complete(&host->detect_ms_exit);
+-- 
+1.9.3
+

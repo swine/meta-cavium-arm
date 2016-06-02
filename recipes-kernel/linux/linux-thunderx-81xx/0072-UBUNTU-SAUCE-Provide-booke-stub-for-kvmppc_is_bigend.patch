@@ -1,0 +1,30 @@
+From 658426f11665583925d7ecc64852ce3b8b18d252 Mon Sep 17 00:00:00 2001
+From: Ben Collins <ben.c@servergy.com>
+Date: Sat, 18 Jan 2014 13:07:39 -0500
+Subject: [PATCH 0072/1767] UBUNTU: SAUCE: Provide booke stub for
+ kvmppc_is_bigendian()
+
+Signed-off-by: Ben Collins <ben.c@servergy.com>
+---
+ arch/powerpc/include/asm/kvm_booke.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/powerpc/include/asm/kvm_booke.h b/arch/powerpc/include/asm/kvm_booke.h
+index bc6e29e..1f6bfbd 100644
+--- a/arch/powerpc/include/asm/kvm_booke.h
++++ b/arch/powerpc/include/asm/kvm_booke.h
+@@ -100,6 +100,11 @@ static inline ulong kvmppc_get_pc(struct kvm_vcpu *vcpu)
+ 	return vcpu->arch.pc;
+ }
+ 
++static inline bool kvmppc_is_bigendian(struct kvm_vcpu *vcpu)
++{
++	return 1;
++}
++
+ static inline ulong kvmppc_get_fault_dar(struct kvm_vcpu *vcpu)
+ {
+ 	return vcpu->arch.fault_dear;
+-- 
+1.9.3
+

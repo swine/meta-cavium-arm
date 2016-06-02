@@ -1,0 +1,36 @@
+From 2ed7517f6bc066a794fad4c9d34820ba8d0ca01b Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Fri, 11 Dec 2015 12:39:01 -0500
+Subject: [PATCH 1342/1767] drm/powerplay/hwmgr: log errors in
+ tonga_hwmgr_backend_init
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+Helpful in debugging init issues.
+
+Reviewed-by: Tom St Denis <tom.stdenis@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit aa22ae4b1f23a52c7e92599ee47a9b9fbb129604)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c b/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c
+index 49f8af5..3cb5d04 100644
+--- a/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c
++++ b/drivers/gpu/drm/amd/powerplay/hwmgr/tonga_hwmgr.c
+@@ -4557,6 +4557,8 @@ int tonga_hwmgr_backend_init(struct pp_hwmgr *hwmgr)
+ 
+ 	/* Initalize Dynamic State Adjustment Rule Settings*/
+ 	result = tonga_initializa_dynamic_state_adjustment_rule_settings(hwmgr);
++	if (result)
++		printk(KERN_ERR "[ powerplay ] tonga_initializa_dynamic_state_adjustment_rule_settings failed!\n");
+ 	data->uvd_enabled = 0;
+ 
+ 	table = &(data->smc_state_table);
+-- 
+1.9.3
+

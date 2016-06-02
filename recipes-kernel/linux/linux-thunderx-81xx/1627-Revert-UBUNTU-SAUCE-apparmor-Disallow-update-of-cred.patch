@@ -1,0 +1,32 @@
+From db388a857af84d376b8d09d45b3187e1836e36df Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 06:06:10 -0700
+Subject: [PATCH 1627/1767] Revert "UBUNTU: SAUCE: apparmor: Disallow update of
+ cred when then subjective != the objective cred"
+
+BugLink: http://bugs.launchpad.net/bugs/1379535
+
+This reverts commit 1f95c6b69724417ab7039e924ec1a46cdc2f3a03.
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/context.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/security/apparmor/context.c b/security/apparmor/context.c
+index e17150b..475682c 100644
+--- a/security/apparmor/context.c
++++ b/security/apparmor/context.c
+@@ -100,9 +100,6 @@ int aa_replace_current_label(struct aa_label *label)
+ 	if (cxt->label == label)
+ 		return 0;
+ 
+-	if (current_cred() != current_real_cred())
+-		return -EBUSY;
+-
+ 	new  = prepare_creds();
+ 	if (!new)
+ 		return -ENOMEM;
+-- 
+1.9.3
+

@@ -1,0 +1,70 @@
+From 47b65ad44bb72cd17ec5f0e114014e55208bba3c Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Wed, 11 Nov 2015 00:31:00 -0500
+Subject: [PATCH 1298/1767] drm/amd/powerplay/fiji: enable pcie and mclk
+ forcing for low
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+When forcing the lowest state also force mclk and pcie.
+
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 74c577b0313d4140ec8b61745c6ade3a4d735d33)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/powerplay/hwmgr/fiji_hwmgr.c | 30 ++++++++++++++++++++----
+ 1 file changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/powerplay/hwmgr/fiji_hwmgr.c b/drivers/gpu/drm/amd/powerplay/hwmgr/fiji_hwmgr.c
+index 4457878..adcc2f0 100644
+--- a/drivers/gpu/drm/amd/powerplay/hwmgr/fiji_hwmgr.c
++++ b/drivers/gpu/drm/amd/powerplay/hwmgr/fiji_hwmgr.c
+@@ -3576,18 +3576,38 @@ static int fiji_force_dpm_lowest(struct pp_hwmgr *hwmgr)
+ {
+ 	struct fiji_hwmgr *data =
+ 			(struct fiji_hwmgr *)(hwmgr->backend);
+-	uint32_t level = 0;
++	uint32_t level;
+ 
+-	/* Only force sclk for now */
+ 	if (!data->sclk_dpm_key_disabled)
+ 		if (data->dpm_level_enable_mask.sclk_dpm_enable_mask) {
+ 			level = fiji_get_lowest_enabled_level(hwmgr,
+-					data->dpm_level_enable_mask.sclk_dpm_enable_mask);
++							      data->dpm_level_enable_mask.sclk_dpm_enable_mask);
+ 			smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
+-					PPSMC_MSG_SCLKDPM_SetEnabledMask,
+-					(1 << level));
++							    PPSMC_MSG_SCLKDPM_SetEnabledMask,
++							    (1 << level));
++
++	}
++
++	if (!data->mclk_dpm_key_disabled) {
++		if (data->dpm_level_enable_mask.mclk_dpm_enable_mask) {
++			level = fiji_get_lowest_enabled_level(hwmgr,
++							      data->dpm_level_enable_mask.mclk_dpm_enable_mask);
++			smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
++							    PPSMC_MSG_MCLKDPM_SetEnabledMask,
++							    (1 << level));
++		}
++	}
+ 
++	if (!data->pcie_dpm_key_disabled) {
++		if (data->dpm_level_enable_mask.pcie_dpm_enable_mask) {
++			level = fiji_get_lowest_enabled_level(hwmgr,
++							      data->dpm_level_enable_mask.pcie_dpm_enable_mask);
++			smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
++							    PPSMC_MSG_PCIeDPM_ForceLevel,
++							    (1 << level));
++		}
+ 	}
++
+ 	return 0;
+ 
+ }
+-- 
+1.9.3
+

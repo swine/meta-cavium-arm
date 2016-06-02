@@ -1,0 +1,93 @@
+From 1ce9dd1a5f5677244085a82472b84c046260c5cf Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Tue, 29 Sep 2015 14:38:30 -0500
+Subject: [PATCH 0559/1767] UBUNTU: SAUCE: userns: Replace in_userns with
+ current_in_userns
+
+All current callers of in_userns pass current_user_ns as the
+first argument. Simplify by replacing in_userns with
+current_in_userns which checks whether current_user_ns is in the
+namespace supplied as an argument.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Acked-by: James Morris <james.l.morris@oracle.com>
+Acked-by: Serge Hallyn <serge.hallyn@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ fs/namespace.c                 | 2 +-
+ include/linux/user_namespace.h | 6 ++----
+ kernel/user_namespace.c        | 6 +++---
+ security/commoncap.c           | 2 +-
+ 4 files changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/fs/namespace.c b/fs/namespace.c
+index 457b565..af8988e 100644
+--- a/fs/namespace.c
++++ b/fs/namespace.c
+@@ -3298,7 +3298,7 @@ bool mnt_may_suid(struct vfsmount *mnt)
+ 	 * in other namespaces.
+ 	 */
+ 	return !(mnt->mnt_flags & MNT_NOSUID) && check_mnt(real_mount(mnt)) &&
+-	       in_userns(current_user_ns(), mnt->mnt_sb->s_user_ns);
++	       current_in_userns(mnt->mnt_sb->s_user_ns);
+ }
+ 
+ static struct ns_common *mntns_get(struct task_struct *task)
+diff --git a/include/linux/user_namespace.h b/include/linux/user_namespace.h
+index a43faa7..9217169 100644
+--- a/include/linux/user_namespace.h
++++ b/include/linux/user_namespace.h
+@@ -72,8 +72,7 @@ extern ssize_t proc_projid_map_write(struct file *, const char __user *, size_t,
+ extern ssize_t proc_setgroups_write(struct file *, const char __user *, size_t, loff_t *);
+ extern int proc_setgroups_show(struct seq_file *m, void *v);
+ extern bool userns_may_setgroups(const struct user_namespace *ns);
+-extern bool in_userns(const struct user_namespace *ns,
+-		      const struct user_namespace *target_ns);
++extern bool current_in_userns(const struct user_namespace *target_ns);
+ #else
+ 
+ static inline struct user_namespace *get_user_ns(struct user_namespace *ns)
+@@ -103,8 +102,7 @@ static inline bool userns_may_setgroups(const struct user_namespace *ns)
+ 	return true;
+ }
+ 
+-static inline bool in_userns(const struct user_namespace *ns,
+-			     const struct user_namespace *target_ns)
++static inline bool current_in_userns(const struct user_namespace *target_ns)
+ {
+ 	return true;
+ }
+diff --git a/kernel/user_namespace.c b/kernel/user_namespace.c
+index ecb0e94..0628de2 100644
+--- a/kernel/user_namespace.c
++++ b/kernel/user_namespace.c
+@@ -955,10 +955,10 @@ bool userns_may_setgroups(const struct user_namespace *ns)
+  * Returns true if @ns is the same namespace as or a descendant of
+  * @target_ns.
+  */
+-bool in_userns(const struct user_namespace *ns,
+-	       const struct user_namespace *target_ns)
++bool current_in_userns(const struct user_namespace *target_ns)
+ {
+-	for (; ns; ns = ns->parent) {
++	struct user_namespace *ns;
++	for (ns = current_user_ns(); ns; ns = ns->parent) {
+ 		if (ns == target_ns)
+ 			return true;
+ 	}
+diff --git a/security/commoncap.c b/security/commoncap.c
+index 91ccd61..97ec4d9 100644
+--- a/security/commoncap.c
++++ b/security/commoncap.c
+@@ -455,7 +455,7 @@ static int get_file_caps(struct linux_binprm *bprm, bool *effective, bool *has_c
+ 
+ 	if (!mnt_may_suid(bprm->file->f_path.mnt))
+ 		return 0;
+-	if (!in_userns(current_user_ns(), bprm->file->f_path.mnt->mnt_sb->s_user_ns))
++	if (!current_in_userns(bprm->file->f_path.mnt->mnt_sb->s_user_ns))
+ 		return 0;
+ 
+ 	rc = get_vfs_caps_from_disk(bprm->file->f_path.dentry, &vcaps);
+-- 
+1.9.3
+

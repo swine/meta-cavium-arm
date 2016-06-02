@@ -1,0 +1,74 @@
+From 741c6b3846793a1b2131205a1f1c2885fedb7593 Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Tue, 19 Jan 2016 13:12:02 -0600
+Subject: [PATCH 0807/1767] UBUNTU: SAUCE: overlayfs: Skip permission checking
+ for trusted.overlayfs.* xattrs
+
+The original mounter had CAP_SYS_ADMIN in the user namespace
+where the mount happened, and the vfs has validated that the user
+has permission to do the requested operation. This is sufficient
+for allowing the kernel to write these specific xattrs, so bypass
+the permission checks for these xattrs.
+
+BugLink: http://bugs.launchpad.net/bugs/1531747
+BugLink: http://bugs.launchpad.net/bugs/1534961
+BugLink: http://bugs.launchpad.net/bugs/1535150
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ fs/overlayfs/dir.c       |  2 +-
+ fs/overlayfs/overlayfs.h | 18 ++++++++++++++++--
+ 2 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/fs/overlayfs/dir.c b/fs/overlayfs/dir.c
+index 2216082..a3fc127 100644
+--- a/fs/overlayfs/dir.c
++++ b/fs/overlayfs/dir.c
+@@ -60,7 +60,7 @@ int ovl_do_whiteout_v1(struct inode *workdir,
+ 	if (err)
+ 		return err;
+ 
+-	err = vfs_setxattr(dentry, ovl_whiteout_xattr, "y", 1, 0);
++	err = ovl_do_setxattr(dentry, ovl_whiteout_xattr, "y", 1, 0);
+ 	if (err)
+ 		vfs_unlink(workdir, dentry, NULL);
+ 
+diff --git a/fs/overlayfs/overlayfs.h b/fs/overlayfs/overlayfs.h
+index 91c3b8e..d61c611 100644
+--- a/fs/overlayfs/overlayfs.h
++++ b/fs/overlayfs/overlayfs.h
+@@ -95,7 +95,14 @@ static inline int ovl_do_symlink(struct inode *dir, struct dentry *dentry,
+ static inline int ovl_do_setxattr(struct dentry *dentry, const char *name,
+ 				  const void *value, size_t size, int flags)
+ {
+-	int err = vfs_setxattr(dentry, name, value, size, flags);
++	struct inode *inode = dentry->d_inode;
++	int err = -EOPNOTSUPP;
++
++	mutex_lock(&inode->i_mutex);
++	if (inode->i_op->setxattr)
++		err = inode->i_op->setxattr(dentry, name, value, size, flags);
++	mutex_unlock(&inode->i_mutex);
++
+ 	pr_debug("setxattr(%pd2, \"%s\", \"%*s\", 0x%x) = %i\n",
+ 		 dentry, name, (int) size, (char *) value, flags, err);
+ 	return err;
+@@ -103,7 +110,14 @@ static inline int ovl_do_setxattr(struct dentry *dentry, const char *name,
+ 
+ static inline int ovl_do_removexattr(struct dentry *dentry, const char *name)
+ {
+-	int err = vfs_removexattr(dentry, name);
++	struct inode *inode = dentry->d_inode;
++	int err = -EOPNOTSUPP;
++
++	mutex_lock(&inode->i_mutex);
++	if (inode->i_op->removexattr)
++		err = inode->i_op->removexattr(dentry, name);
++	mutex_unlock(&inode->i_mutex);
++
+ 	pr_debug("removexattr(%pd2, \"%s\") = %i\n", dentry, name, err);
+ 	return err;
+ }
+-- 
+1.9.3
+

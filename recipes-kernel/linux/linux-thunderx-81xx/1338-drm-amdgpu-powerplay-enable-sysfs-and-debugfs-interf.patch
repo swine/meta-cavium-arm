@@ -1,0 +1,52 @@
+From fe98b54940268c83fb8aa818868af6c0197d2ebb Mon Sep 17 00:00:00 2001
+From: Alex Deucher <alexander.deucher@amd.com>
+Date: Tue, 8 Dec 2015 17:28:28 -0500
+Subject: [PATCH 1338/1767] drm/amdgpu/powerplay: enable sysfs and debugfs
+ interfaces late
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BugLink: http://bugs.launchpad.net/bugs/1546572
+
+To avoid users accessing them before the module has finished
+initializing them and make sure they are only created if
+dpm has properly initialized.
+
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Reviewed-by: Jammy Zhou <Jammy.Zhou@amd.com>
+Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+(cherry picked from commit 898b1dead9a99aeeb103febacf838c7c71d58292)
+Signed-off-by: Alberto Milone <alberto.milone@canonical.com>
+
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+index 049e4a7..c94a9a1 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_powerplay.c
+@@ -130,6 +130,10 @@ static int amdgpu_pp_late_init(void *handle)
+ 		ret = adev->powerplay.ip_funcs->late_init(
+ 					adev->powerplay.pp_handle);
+ 
++#ifdef CONFIG_DRM_AMD_POWERPLAY
++	if (adev->pp_enabled)
++		amdgpu_pm_sysfs_init(adev);
++#endif
+ 	return ret;
+ }
+ 
+@@ -144,7 +148,6 @@ static int amdgpu_pp_sw_init(void *handle)
+ 
+ #ifdef CONFIG_DRM_AMD_POWERPLAY
+ 	if (adev->pp_enabled) {
+-		amdgpu_pm_sysfs_init(adev);
+ 		if (amdgpu_dpm == 0)
+ 			adev->pm.dpm_enabled = false;
+ 		else
+-- 
+1.9.3
+

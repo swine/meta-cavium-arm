@@ -1,0 +1,58 @@
+From 36e95243d1256e96f17c26a0d77554d41a545a56 Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Mon, 22 Feb 2016 16:02:00 +0100
+Subject: [PATCH 0810/1767] UBUNTU SAUCE: arm: mm: avoid calling
+ apply_to_page_range on empty range
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Calling apply_to_page_range with an empty range results in a BUG_ON
+from the core code. This can be triggered by trying to load the st_drv
+module with CONFIG_DEBUG_SET_MODULE_RONX enabled:
+
+	kernel BUG at mm/memory.c:1874!
+	Internal error: Oops - BUG: 0 [#1] PREEMPT SMP
+	Modules linked in:
+	CPU: 3 PID: 1764 Comm: insmod Not tainted 4.5.0-rc1+ #2
+	Hardware name: ARM Juno development board (r0) (DT)
+	task: ffffffc9763b8000 ti: ffffffc975af8000 task.ti: ffffffc975af8000
+	PC is at apply_to_page_range+0x2cc/0x2d0
+	LR is at change_memory_common+0x80/0x108
+
+This patch fixes the issue by making change_memory_common (called by the
+set_memory_* functions) a NOP when numpages == 0, therefore avoiding the
+erroneous call to apply_to_page_range and bringing us into line with x86
+and s390.
+
+Cc: <stable@vger.kernel.org>
+Reviewed-by: Laura Abbott <labbott@redhat.com>
+Acked-by: David Rientjes <rientjes@google.com>
+Signed-off-by: Mika Penttilä <mika.penttila@nextfour.com>
+
+BugLink: http://bugs.launchpad.net/bugs/1547718
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+Acked-by: Brad Figg <brad.figg@canonical.com>
+Acked-by: Kamal Mostafa <kamal@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ arch/arm/mm/pageattr.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/arm/mm/pageattr.c b/arch/arm/mm/pageattr.c
+index cf30daf..4e59379 100644
+--- a/arch/arm/mm/pageattr.c
++++ b/arch/arm/mm/pageattr.c
+@@ -55,6 +55,9 @@ static int change_memory_common(unsigned long addr, int numpages,
+ 	if (end < MODULES_VADDR || start >= MODULES_END)
+ 		return -EINVAL;
+ 
++	if (!numpages)
++		return 0;
++
+ 	data.set_mask = set_mask;
+ 	data.clear_mask = clear_mask;
+ 
+-- 
+1.9.3
+

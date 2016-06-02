@@ -1,0 +1,46 @@
+From 4ee56fae086c90a6e9692e393b510da58949bcbf Mon Sep 17 00:00:00 2001
+From: Timo Aaltonen <timo.aaltonen@canonical.com>
+Date: Mon, 22 Feb 2016 19:43:04 +0200
+Subject: [PATCH 0832/1767] UBUNTU: SAUCE: uapi/drm/i915: Backport
+ I915_EXEC_BSD_MASK
+
+BugLink: http://bugs.launchpad.net/bugs/1540390
+
+Backport I915_EXEC_BSD_MASK from
+
+commit d9da6aa035c6dfdb003ff9776532b9b356d83f15
+Author: Tvrtko Ursulin <tvrtko.ursulin@intel.com>
+Date:   Wed Jan 27 13:41:09 2016 +0000
+
+    drm/i915: Fix VCS ring selection after uapi decoupling
+
+Signed-off-by: Timo Aaltonen <timo.aaltonen@canonical.com>
+Signed-off-by: Andy Whitcroft <apw@canonical.com>
+---
+ include/uapi/drm/i915_drm.h | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/include/uapi/drm/i915_drm.h b/include/uapi/drm/i915_drm.h
+index c1b6dd3..ec25c45 100644
+--- a/include/uapi/drm/i915_drm.h
++++ b/include/uapi/drm/i915_drm.h
+@@ -772,10 +772,12 @@ struct drm_i915_gem_execbuffer2 {
+ #define I915_EXEC_HANDLE_LUT		(1<<12)
+ 
+ /** Used for switching BSD rings on the platforms with two BSD rings */
+-#define I915_EXEC_BSD_MASK		(3<<13)
+-#define I915_EXEC_BSD_DEFAULT		(0<<13) /* default ping-pong mode */
+-#define I915_EXEC_BSD_RING1		(1<<13)
+-#define I915_EXEC_BSD_RING2		(2<<13)
++#define I915_EXEC_BSD_SHIFT     (13)
++#define I915_EXEC_BSD_MASK	(3 << I915_EXEC_BSD_SHIFT)
++/* default ping-pong mode */
++#define I915_EXEC_BSD_DEFAULT	(0 << I915_EXEC_BSD_SHIFT)
++#define I915_EXEC_BSD_RING1	(1 << I915_EXEC_BSD_SHIFT)
++#define I915_EXEC_BSD_RING2	(2 << I915_EXEC_BSD_SHIFT)
+ 
+ /** Tell the kernel that the batchbuffer is processed by
+  *  the resource streamer.
+-- 
+1.9.3
+

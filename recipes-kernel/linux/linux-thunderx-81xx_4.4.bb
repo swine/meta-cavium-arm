@@ -1786,8 +1786,9 @@ include ilp32_4_4_patches.inc
 S = "${WORKDIR}/git"
 
 do_package_qa() {
-	echo "Do Nothing" > /tmp/log
+	echo "do_package_qa commented hack"
 }
+
 
 addtask deploy after do_install
 addtask shared_workdir after do_compile before do_install

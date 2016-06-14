@@ -69,9 +69,6 @@ do_install() {
 	install -d ${D}/lib
 	install -d ${D}/usr/lib
 	
-	echo ${base_libdir} > ~/mjlog
-	echo ${libdir} >> ~/mjlog
-
 	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/lib/*  ${D}/lib
 	
 	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root${base_libdir}/*  ${D}${base_libdir}
@@ -83,6 +80,8 @@ do_install() {
 	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/${libdir}/crt*.*  ${D}/usr/lib
 	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/${libdir}/crt?.*  ${D}${base_libdir}
 #	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/${libdir}/crt?.*  ${D}/lib
+	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/${libdir}/gcrt*.*  ${D}/usr/lib
+	cp -a ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/${libdir}/gcrt?.*  ${D}${base_libdir}
 	
 	#cp -af ${EXTERNAL_TOOLCHAIN}/${ELT_TARGET_SYS}/sys-root/${libdir}/*  ${D}${base_libdir}
 

@@ -1,0 +1,104 @@
+From 589acba2668b74d4f905340d4b8153f732d7e7a4 Mon Sep 17 00:00:00 2001
+From: Robin Murphy <robin.murphy@arm.com>
+Date: Mon, 12 Sep 2016 17:13:53 +0100
+Subject: [PATCH 076/375] iommu/arm-smmu: Add a stream map entry iterator
+
+We iterate over the SMEs associated with a master config quite a lot in
+various places, and are about to do so even more. Let's wrap the idiom
+in a handy iterator macro before the repetition gets out of hand.
+
+Tested-by: Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>
+Signed-off-by: Robin Murphy <robin.murphy@arm.com>
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+---
+ drivers/iommu/arm-smmu.c | 26 ++++++++++++--------------
+ 1 file changed, 12 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/iommu/arm-smmu.c b/drivers/iommu/arm-smmu.c
+index d88ad72d156d..606f5df7723d 100644
+--- a/drivers/iommu/arm-smmu.c
++++ b/drivers/iommu/arm-smmu.c
+@@ -325,6 +325,8 @@ struct arm_smmu_master_cfg {
+ 	s16				smendx[MAX_MASTER_STREAMIDS];
+ };
+ #define INVALID_SMENDX			-1
++#define for_each_cfg_sme(cfg, i, idx) \
++	for (i = 0; idx = cfg->smendx[i], i < cfg->num_streamids; ++i)
+ 
+ struct arm_smmu_device {
+ 	struct device			*dev;
+@@ -1068,8 +1070,8 @@ static int arm_smmu_master_alloc_smes(struct arm_smmu_device *smmu,
+ 	int i, idx;
+ 
+ 	/* Allocate the SMRs on the SMMU */
+-	for (i = 0; i < cfg->num_streamids; ++i) {
+-		if (cfg->smendx[i] != INVALID_SMENDX)
++	for_each_cfg_sme(cfg, i, idx) {
++		if (idx != INVALID_SMENDX)
+ 			return -EEXIST;
+ 
+ 		/* ...except on stream indexing hardware, of course */
+@@ -1093,8 +1095,8 @@ static int arm_smmu_master_alloc_smes(struct arm_smmu_device *smmu,
+ 		return 0;
+ 
+ 	/* It worked! Now, poke the actual hardware */
+-	for (i = 0; i < cfg->num_streamids; ++i)
+-		arm_smmu_write_smr(smmu, cfg->smendx[i]);
++	for_each_cfg_sme(cfg, i, idx)
++		arm_smmu_write_smr(smmu, idx);
+ 
+ 	return 0;
+ 
+@@ -1109,15 +1111,13 @@ err_free_smrs:
+ static void arm_smmu_master_free_smes(struct arm_smmu_master_cfg *cfg)
+ {
+ 	struct arm_smmu_device *smmu = cfg->smmu;
+-	int i;
++	int i, idx;
+ 
+ 	/*
+ 	 * We *must* clear the S2CR first, because freeing the SMR means
+ 	 * that it can be re-allocated immediately.
+ 	 */
+-	for (i = 0; i < cfg->num_streamids; ++i) {
+-		int idx = cfg->smendx[i];
+-
++	for_each_cfg_sme(cfg, i, idx) {
+ 		/* An IOMMU group is torn down by the first device to be removed */
+ 		if (idx == INVALID_SMENDX)
+ 			return;
+@@ -1129,9 +1129,9 @@ static void arm_smmu_master_free_smes(struct arm_smmu_master_cfg *cfg)
+ 	__iowmb();
+ 
+ 	/* Invalidate the SMRs before freeing back to the allocator */
+-	for (i = 0; i < cfg->num_streamids; ++i) {
++	for_each_cfg_sme(cfg, i, idx) {
+ 		if (smmu->smrs)
+-			arm_smmu_free_smr(smmu, cfg->smendx[i]);
++			arm_smmu_free_smr(smmu, idx);
+ 
+ 		cfg->smendx[i] = INVALID_SMENDX;
+ 	}
+@@ -1140,7 +1140,7 @@ static void arm_smmu_master_free_smes(struct arm_smmu_master_cfg *cfg)
+ static int arm_smmu_domain_add_master(struct arm_smmu_domain *smmu_domain,
+ 				      struct arm_smmu_master_cfg *cfg)
+ {
+-	int i, ret = 0;
++	int i, idx, ret = 0;
+ 	struct arm_smmu_device *smmu = smmu_domain->smmu;
+ 	struct arm_smmu_s2cr *s2cr = smmu->s2crs;
+ 	enum arm_smmu_s2cr_type type = S2CR_TYPE_TRANS;
+@@ -1160,9 +1160,7 @@ static int arm_smmu_domain_add_master(struct arm_smmu_domain *smmu_domain,
+ 	if (smmu_domain->domain.type == IOMMU_DOMAIN_DMA)
+ 		type = S2CR_TYPE_BYPASS;
+ 
+-	for (i = 0; i < cfg->num_streamids; ++i) {
+-		int idx = cfg->smendx[i];
+-
++	for_each_cfg_sme(cfg, i, idx) {
+ 		/* Devices in an IOMMU group may already be configured */
+ 		if (type == s2cr[idx].type && cbndx == s2cr[idx].cbndx)
+ 			break;
+-- 
+2.14.1
+

@@ -1,0 +1,31 @@
+From 986008d09dbdfb5b3d4b7e754ee97aca7b4a67a5 Mon Sep 17 00:00:00 2001
+From: Peter Swain <peter.swain@cavium.com>
+Date: Wed, 25 Apr 2018 18:24:56 -0700
+Subject: [PATCH 332/375] mmc: cavium: backport to 4.8 (missing
+ MMC_CAP_3_3V_DDR)
+
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/mmc/host/cavium.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mmc/host/cavium.c b/drivers/mmc/host/cavium.c
+index 677ce237bbe2..a82e9843e225 100644
+--- a/drivers/mmc/host/cavium.c
++++ b/drivers/mmc/host/cavium.c
+@@ -1042,8 +1042,10 @@ int cvm_mmc_of_slot_probe(struct device *dev, struct cvm_mmc_host *host)
+ 	 * modes up to 52MHz.
+ 	 */
+ 	mmc->caps |= MMC_CAP_MMC_HIGHSPEED | MMC_CAP_SD_HIGHSPEED |
+-		     MMC_CAP_ERASE | MMC_CAP_CMD23 | MMC_CAP_POWER_OFF_CARD |
+-		     MMC_CAP_3_3V_DDR;
++		     MMC_CAP_ERASE | MMC_CAP_CMD23 | MMC_CAP_POWER_OFF_CARD;
++#ifdef MMC_CAP_3_3V_DDR
++	mmc->caps |= MMC_CAP_3_3V_DDR;
++#endif
+ 
+ 	if (host->use_sg)
+ 		mmc->max_segs = 16;
+-- 
+2.14.1
+

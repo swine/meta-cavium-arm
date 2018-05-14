@@ -1,0 +1,42 @@
+From 4f465965e21d56485379e2a40cf54b952d3ee983 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Thu, 23 Mar 2017 14:37:56 -0700
+Subject: [PATCH 137/375] octeontx: increase reset wait time
+
+current reset ait time is too short underload
+increase it
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c | 1 +
+ drivers/pci/quirks.c                                    | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+index 020f3ce40fc1..e0f0605c9ef7 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+@@ -172,6 +172,7 @@ static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
+ 			}
+ 			identify(&ssow->vf[i], domain_id, vf_idx);
+ 			vf_idx++;
++			ret = -ENODEV;
+ 			if (vf_idx == vf_count) {
+ 				ssow->vfs_in_use += vf_count;
+ 				ret = 0;
+diff --git a/drivers/pci/quirks.c b/drivers/pci/quirks.c
+index ea7018530dce..41e39edd08f0 100644
+--- a/drivers/pci/quirks.c
++++ b/drivers/pci/quirks.c
+@@ -3893,7 +3893,7 @@ static int reset_cavium_octeon_vf(struct pci_dev *pdev, int probe)
+ 	u64 val;
+ 	u64 addr;
+ 	int vf_id;
+-	int count = 200;
++	int count = 2000;
+ 
+ 	dev_dbg(&pdev->dev, "reset_cavium_octeon_vf() called probe=%d\n",
+ 			probe);
+-- 
+2.14.1
+

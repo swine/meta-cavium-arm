@@ -1,0 +1,263 @@
+From 82abe1e3ff15520b6af9b7896c2354e0d61de083 Mon Sep 17 00:00:00 2001
+From: Peter Swain <peter.swain@cavium.com>
+Date: Mon, 23 Apr 2018 00:40:14 -0700
+Subject: [PATCH 297/375] mtd: nand: Make sure drivers not supporting
+ SET/GET_FEATURES return -ENOTSUPP
+
+A lot of drivers are providing their own ->cmdfunc(), and most of the
+time this implementation does not support all possible NAND operations.
+But since ->cmdfunc() cannot return an error code, the core has no way
+to know that the operation it requested is not supported.
+
+This is a problem we cannot address for all kind of operations with the
+current design, but we can prevent these silent failures for the
+GET/SET FEATURES operation by overloading the default
+->onfi_{set,get}_features() methods with one returning -ENOTSUPP.
+
+Reported-by: Chris Packham <Chris.Packham@alliedtelesis.co.nz>
+Signed-off-by: Boris Brezillon <boris.brezillon@free-electrons.com>
+Tested-by: Chris Packham <Chris.Packham@alliedtelesis.co.nz>
+
+Cherry-picked from upstream 4a78cc644eed
+Signed-off-by: Peter Swain <pswain@cavium.com>
+---
+ drivers/mtd/nand/bcm47xxnflash/ops_bcm4706.c  |  2 ++
+ drivers/mtd/nand/cafe_nand.c                  |  2 ++
+ drivers/mtd/nand/denali.c                     |  2 ++
+ drivers/mtd/nand/docg4.c                      |  2 ++
+ drivers/mtd/nand/fsl_elbc_nand.c              |  2 ++
+ drivers/mtd/nand/fsl_ifc_nand.c               |  2 ++
+ drivers/mtd/nand/hisi504_nand.c               |  2 ++
+ drivers/mtd/nand/mpc5121_nfc.c                |  2 ++
+ drivers/mtd/nand/nand_base.c                  | 19 +++++++++++++++++++
+ drivers/mtd/nand/pxa3xx_nand.c                |  2 ++
+ drivers/mtd/nand/qcom_nandc.c                 |  2 ++
+ drivers/mtd/nand/sh_flctl.c                   |  2 ++
+ drivers/mtd/nand/vf610_nfc.c                  |  2 ++
+ drivers/staging/mt29f_spinand/mt29f_spinand.c |  2 ++
+ include/linux/mtd/nand.h                      | 12 ++++++++++++
+ 15 files changed, 57 insertions(+)
+
+diff --git a/drivers/mtd/nand/bcm47xxnflash/ops_bcm4706.c b/drivers/mtd/nand/bcm47xxnflash/ops_bcm4706.c
+index f1da4ea88f2c..54bac5b73f0a 100644
+--- a/drivers/mtd/nand/bcm47xxnflash/ops_bcm4706.c
++++ b/drivers/mtd/nand/bcm47xxnflash/ops_bcm4706.c
+@@ -392,6 +392,8 @@ int bcm47xxnflash_ops_bcm4706_init(struct bcm47xxnflash *b47n)
+ 	b47n->nand_chip.read_byte = bcm47xxnflash_ops_bcm4706_read_byte;
+ 	b47n->nand_chip.read_buf = bcm47xxnflash_ops_bcm4706_read_buf;
+ 	b47n->nand_chip.write_buf = bcm47xxnflash_ops_bcm4706_write_buf;
++	b47n->nand_chip.onfi_set_features = nand_onfi_get_set_features_notsupp;
++	b47n->nand_chip.onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	nand_chip->chip_delay = 50;
+ 	b47n->nand_chip.bbt_options = NAND_BBT_USE_FLASH;
+diff --git a/drivers/mtd/nand/cafe_nand.c b/drivers/mtd/nand/cafe_nand.c
+index 0b0c93702abb..f05a01b029ec 100644
+--- a/drivers/mtd/nand/cafe_nand.c
++++ b/drivers/mtd/nand/cafe_nand.c
+@@ -654,6 +654,8 @@ static int cafe_nand_probe(struct pci_dev *pdev,
+ 	cafe->nand.read_buf = cafe_read_buf;
+ 	cafe->nand.write_buf = cafe_write_buf;
+ 	cafe->nand.select_chip = cafe_select_chip;
++	cafe->nand.onfi_set_features = nand_onfi_get_set_features_notsupp;
++	cafe->nand.onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	cafe->nand.chip_delay = 0;
+ 
+diff --git a/drivers/mtd/nand/denali.c b/drivers/mtd/nand/denali.c
+index 0476ae8776d9..bf6eddfe4423 100644
+--- a/drivers/mtd/nand/denali.c
++++ b/drivers/mtd/nand/denali.c
+@@ -1504,6 +1504,8 @@ int denali_init(struct denali_nand_info *denali)
+ 	denali->nand.cmdfunc = denali_cmdfunc;
+ 	denali->nand.read_byte = denali_read_byte;
+ 	denali->nand.waitfunc = denali_waitfunc;
++	denali->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	denali->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	/*
+ 	 * scan for NAND devices attached to the controller
+diff --git a/drivers/mtd/nand/docg4.c b/drivers/mtd/nand/docg4.c
+index 47316998017f..f969a4ea9c4d 100644
+--- a/drivers/mtd/nand/docg4.c
++++ b/drivers/mtd/nand/docg4.c
+@@ -1261,6 +1261,8 @@ static void __init init_mtd_structs(struct mtd_info *mtd)
+ 	nand->read_buf = docg4_read_buf;
+ 	nand->write_buf = docg4_write_buf16;
+ 	nand->erase = docg4_erase_block;
++	nand->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	nand->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 	nand->ecc.read_page = docg4_read_page;
+ 	nand->ecc.write_page = docg4_write_page;
+ 	nand->ecc.read_page_raw = docg4_read_page_raw;
+diff --git a/drivers/mtd/nand/fsl_elbc_nand.c b/drivers/mtd/nand/fsl_elbc_nand.c
+index 60a88f24c6b3..6b10312762c9 100644
+--- a/drivers/mtd/nand/fsl_elbc_nand.c
++++ b/drivers/mtd/nand/fsl_elbc_nand.c
+@@ -775,6 +775,8 @@ static int fsl_elbc_chip_init(struct fsl_elbc_mtd *priv)
+ 	chip->select_chip = fsl_elbc_select_chip;
+ 	chip->cmdfunc = fsl_elbc_cmdfunc;
+ 	chip->waitfunc = fsl_elbc_wait;
++	chip->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	chip->bbt_td = &bbt_main_descr;
+ 	chip->bbt_md = &bbt_mirror_descr;
+diff --git a/drivers/mtd/nand/fsl_ifc_nand.c b/drivers/mtd/nand/fsl_ifc_nand.c
+index 4043ca02ff13..fc61ee6db6fb 100644
+--- a/drivers/mtd/nand/fsl_ifc_nand.c
++++ b/drivers/mtd/nand/fsl_ifc_nand.c
+@@ -831,6 +831,8 @@ static int fsl_ifc_chip_init(struct fsl_ifc_mtd *priv)
+ 	chip->select_chip = fsl_ifc_select_chip;
+ 	chip->cmdfunc = fsl_ifc_cmdfunc;
+ 	chip->waitfunc = fsl_ifc_wait;
++	chip->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	chip->bbt_td = &bbt_main_descr;
+ 	chip->bbt_md = &bbt_mirror_descr;
+diff --git a/drivers/mtd/nand/hisi504_nand.c b/drivers/mtd/nand/hisi504_nand.c
+index 9432546f4cd4..782fc7bbaa70 100644
+--- a/drivers/mtd/nand/hisi504_nand.c
++++ b/drivers/mtd/nand/hisi504_nand.c
+@@ -764,6 +764,8 @@ static int hisi_nfc_probe(struct platform_device *pdev)
+ 	chip->write_buf		= hisi_nfc_write_buf;
+ 	chip->read_buf		= hisi_nfc_read_buf;
+ 	chip->chip_delay	= HINFC504_CHIP_DELAY;
++	chip->onfi_set_features	= nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features	= nand_onfi_get_set_features_notsupp;
+ 
+ 	hisi_nfc_host_init(host);
+ 
+diff --git a/drivers/mtd/nand/mpc5121_nfc.c b/drivers/mtd/nand/mpc5121_nfc.c
+index 7eacb2f545f5..9c9eb1de2a9b 100644
+--- a/drivers/mtd/nand/mpc5121_nfc.c
++++ b/drivers/mtd/nand/mpc5121_nfc.c
+@@ -708,6 +708,8 @@ static int mpc5121_nfc_probe(struct platform_device *op)
+ 	chip->read_buf = mpc5121_nfc_read_buf;
+ 	chip->write_buf = mpc5121_nfc_write_buf;
+ 	chip->select_chip = mpc5121_nfc_select_chip;
++	chip->onfi_set_features	= nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features	= nand_onfi_get_set_features_notsupp;
+ 	chip->bbt_options = NAND_BBT_USE_FLASH;
+ 	chip->ecc.mode = NAND_ECC_SOFT;
+ 	chip->ecc.algo = NAND_ECC_HAMMING;
+diff --git a/drivers/mtd/nand/nand_base.c b/drivers/mtd/nand/nand_base.c
+index 77533f7f2429..20a52a1fb2ac 100644
+--- a/drivers/mtd/nand/nand_base.c
++++ b/drivers/mtd/nand/nand_base.c
+@@ -3113,6 +3113,25 @@ static int nand_onfi_get_features(struct mtd_info *mtd, struct nand_chip *chip,
+ 	return 0;
+ }
+ 
++/**
++ * nand_onfi_get_set_features_notsupp - set/get features stub returning
++ *					-ENOTSUPP
++ * @mtd: MTD device structure
++ * @chip: nand chip info structure
++ * @addr: feature address.
++ * @subfeature_param: the subfeature parameters, a four bytes array.
++ *
++ * Should be used by NAND controller drivers that do not support the SET/GET
++ * FEATURES operations.
++ */
++int nand_onfi_get_set_features_notsupp(struct mtd_info *mtd,
++				       struct nand_chip *chip, int addr,
++				       u8 *subfeature_param)
++{
++	return -ENOTSUPP;
++}
++EXPORT_SYMBOL(nand_onfi_get_set_features_notsupp);
++
+ /**
+  * nand_suspend - [MTD Interface] Suspend the NAND flash
+  * @mtd: MTD device structure
+diff --git a/drivers/mtd/nand/pxa3xx_nand.c b/drivers/mtd/nand/pxa3xx_nand.c
+index 436dd6dc11f4..708bcd5ab1cb 100644
+--- a/drivers/mtd/nand/pxa3xx_nand.c
++++ b/drivers/mtd/nand/pxa3xx_nand.c
+@@ -1808,6 +1808,8 @@ static int alloc_nand_resource(struct platform_device *pdev)
+ 		chip->write_buf		= pxa3xx_nand_write_buf;
+ 		chip->options		|= NAND_NO_SUBPAGE_WRITE;
+ 		chip->cmdfunc		= nand_cmdfunc;
++		chip->onfi_set_features	= nand_onfi_get_set_features_notsupp;
++		chip->onfi_get_features	= nand_onfi_get_set_features_notsupp;
+ 	}
+ 
+ 	spin_lock_init(&chip->controller->lock);
+diff --git a/drivers/mtd/nand/qcom_nandc.c b/drivers/mtd/nand/qcom_nandc.c
+index de7d28e62d4e..58a113898c49 100644
+--- a/drivers/mtd/nand/qcom_nandc.c
++++ b/drivers/mtd/nand/qcom_nandc.c
+@@ -2009,6 +2009,8 @@ static int qcom_nand_host_init(struct qcom_nand_controller *nandc,
+ 	chip->read_byte		= qcom_nandc_read_byte;
+ 	chip->read_buf		= qcom_nandc_read_buf;
+ 	chip->write_buf		= qcom_nandc_write_buf;
++	chip->onfi_set_features	= nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features	= nand_onfi_get_set_features_notsupp;
+ 
+ 	/*
+ 	 * the bad block marker is readable only when we read the last codeword
+diff --git a/drivers/mtd/nand/sh_flctl.c b/drivers/mtd/nand/sh_flctl.c
+index 6fa3bcd59769..38318d89fdc0 100644
+--- a/drivers/mtd/nand/sh_flctl.c
++++ b/drivers/mtd/nand/sh_flctl.c
+@@ -1177,6 +1177,8 @@ static int flctl_probe(struct platform_device *pdev)
+ 	nand->read_buf = flctl_read_buf;
+ 	nand->select_chip = flctl_select_chip;
+ 	nand->cmdfunc = flctl_cmdfunc;
++	nand->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	nand->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	if (pdata->flcmncr_val & SEL_16BIT)
+ 		nand->options |= NAND_BUSWIDTH_16;
+diff --git a/drivers/mtd/nand/vf610_nfc.c b/drivers/mtd/nand/vf610_nfc.c
+index 3ad514c44dcb..f8078484ffec 100644
+--- a/drivers/mtd/nand/vf610_nfc.c
++++ b/drivers/mtd/nand/vf610_nfc.c
+@@ -703,6 +703,8 @@ static int vf610_nfc_probe(struct platform_device *pdev)
+ 	chip->read_buf = vf610_nfc_read_buf;
+ 	chip->write_buf = vf610_nfc_write_buf;
+ 	chip->select_chip = vf610_nfc_select_chip;
++	chip->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	chip->options |= NAND_NO_SUBPAGE_WRITE;
+ 
+diff --git a/drivers/staging/mt29f_spinand/mt29f_spinand.c b/drivers/staging/mt29f_spinand/mt29f_spinand.c
+index e389009fca42..a4e3ae8f0c85 100644
+--- a/drivers/staging/mt29f_spinand/mt29f_spinand.c
++++ b/drivers/staging/mt29f_spinand/mt29f_spinand.c
+@@ -915,6 +915,8 @@ static int spinand_probe(struct spi_device *spi_nand)
+ 	chip->waitfunc	= spinand_wait;
+ 	chip->options	|= NAND_CACHEPRG;
+ 	chip->select_chip = spinand_select_chip;
++	chip->onfi_set_features = nand_onfi_get_set_features_notsupp;
++	chip->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	mtd = nand_to_mtd(chip);
+ 
+diff --git a/include/linux/mtd/nand.h b/include/linux/mtd/nand.h
+index 8dd6e01f45c0..72733b7c156a 100644
+--- a/include/linux/mtd/nand.h
++++ b/include/linux/mtd/nand.h
+@@ -1093,4 +1093,16 @@ int nand_read_oob_std(struct mtd_info *mtd, struct nand_chip *chip, int page);
+ /* Default read_oob syndrome implementation */
+ int nand_read_oob_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
+ 			   int page);
++
++/* Stub used by drivers that do not support GET/SET FEATURES operations */
++int nand_onfi_get_set_features_notsupp(struct mtd_info *mtd,
++				       struct nand_chip *chip, int addr,
++				       u8 *subfeature_param);
++
++/* Reset and initialize a NAND device */
++int nand_reset(struct nand_chip *chip, int chipnr);
++
++/* Free resources held by the NAND device */
++void nand_cleanup(struct nand_chip *chip);
++
+ #endif /* __LINUX_MTD_NAND_H */
+-- 
+2.14.1
+

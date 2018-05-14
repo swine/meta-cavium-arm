@@ -1,0 +1,525 @@
+From 4b0a7b1c7deade5ce71449f6d0fc5dca4d917994 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Sun, 14 May 2017 08:42:56 -0700
+Subject: [PATCH 196/375] octeontx: Add LBK-based PKI/PKO-NIC communication.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ .../net/ethernet/cavium/octeontx-83xx/lbk_main.c   |  37 +++++-
+ .../net/ethernet/cavium/octeontx-83xx/octeontx.h   |   1 +
+ drivers/net/ethernet/cavium/thunder/nic.h          |   8 ++
+ drivers/net/ethernet/cavium/thunder/nic_main.c     | 138 +++++++++++++++++++--
+ .../net/ethernet/cavium/thunder/nicvf_ethtool.c    |   6 +-
+ drivers/net/ethernet/cavium/thunder/nicvf_main.c   |   9 ++
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.h  |   1 +
+ drivers/net/ethernet/cavium/thunder/thunder_lbk.h  |  20 +++
+ 8 files changed, 202 insertions(+), 18 deletions(-)
+ create mode 100644 drivers/net/ethernet/cavium/thunder/thunder_lbk.h
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+index fb747fc39241..cc4f0479860d 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2016 Cavium, Inc.
++ * Copyright (C) 2017 Cavium, Inc.
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of version 2 of the GNU General Public License
+@@ -11,6 +11,7 @@
+ #include <linux/pci.h>
+ #include <linux/random.h>
+ 
++#include "../thunder/thunder_lbk.h"
+ #include "lbk.h"
+ 
+ #define DRV_NAME "octeontx-lbk"
+@@ -72,6 +73,9 @@ static struct octtx_lbk_port octeontx_lbk_ports[LBK_MAX_PORTS] = {
+ 	{.glb_port_idx = 1, .domain_id = LBK_INVALID_ID}
+ };
+ 
++/* Interface with Thunder NIC driver */
++static struct thunder_lbk_com_s *thlbk;
++
+ static int lbk_index_from_id(int id)
+ {
+ 	return id & LBK_DEV_MASK;
+@@ -268,15 +272,15 @@ int lbk_port_status(struct octtx_lbk_port *port, mbox_lbk_port_status_t *stat)
+ /* Domain create function.
+  */
+ static int lbk_create_domain(u32 id, u16 domain_id,
+-			     struct octtx_lbk_port *port_tbl, int ports,
++			     struct octtx_lbk_port *port_tbl, int port_count,
+ 		struct octeontx_master_com_t *com, void *domain)
+ {
+ 	struct octtx_lbk_port *port, *gport;
+ 	struct lbkpf *lbk;
+-	int i, j, k;
++	int rc = -ENODEV, i, j, k, pkind;
+ 
+ 	spin_lock(&octeontx_lbk_lock);
+-	for (i = 0; i < ports; i++) {
++	for (i = 0; i < port_count; i++) {
+ 		port = &port_tbl[i];
+ 		for (j = 0; j < LBK_MAX_PORTS; j++) {
+ 			gport = &octeontx_lbk_ports[j];
+@@ -293,14 +297,27 @@ static int lbk_create_domain(u32 id, u16 domain_id,
+ 			gport->domain_id = domain_id;
+ 			gport->dom_port_idx = i;
+ 
++			if (port->glb_port_idx == 1) {
++				rc = thlbk->port_start();
++				if (rc)
++					goto err;
++				pkind = thlbk->get_port_pkind();
++			} else {
++				pkind = port->pkind;
++			}
+ 			lbk = get_lbk_dev(port->node, port->ilbk);
+ 			for (k = 0; k < lbk->channels; k++)
+ 				lbk_reg_write(lbk, LBK_CH_PKIND(k),
+-					      port->pkind);
++						port->pkind);
++			lbk = get_lbk_dev(port->node, port->olbk);
++			for (k = 0; k < lbk->channels; k++)
++				lbk_reg_write(lbk, LBK_CH_PKIND(k), pkind);
+ 		}
+ 	}
++	rc = 0;
++err:
+ 	spin_unlock(&octeontx_lbk_lock);
+-	return 0;
++	return rc;
+ }
+ 
+ /* Domain destroy function.
+@@ -323,6 +340,8 @@ static int lbk_destroy_domain(u32 id, u16 domain_id)
+ 		port->domain_id = LBK_INVALID_ID;
+ 		port->ilbk = LBK_INVALID_ID;
+ 		port->olbk = LBK_INVALID_ID;
++		if (port->vnic)
++			thlbk->port_stop();
+ 	}
+ 	spin_unlock(&octeontx_lbk_lock);
+ 	return 0;
+@@ -369,6 +388,12 @@ static int lbk_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	u64 ioaddr;
+ 	int err, node;
+ 
++	/* Setup interface with NIC driver */
++	thlbk = try_then_request_module(symbol_get(thunder_lbk_com),
++					"thunder_lbk");
++	if (!thlbk)
++		return -ENODEV;
++
+ 	/* Setup LBK Device */
+ 	lbk = devm_kzalloc(dev, sizeof(*lbk), GFP_KERNEL);
+ 	if (!lbk)
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+index 03097d2458ed..3cae238ecc42 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+@@ -102,6 +102,7 @@ struct octtx_lbk_port {
+ 	int	olbk_base_chan; /* Node-local base channel (PKI_CHAN_E) */
+ 	int	olbk_num_chans;
+ 	int	pkind; /* PKI port number */
++	void	*vnic; /* NIC port descriptor */
+ };
+ #endif
+ 
+diff --git a/drivers/net/ethernet/cavium/thunder/nic.h b/drivers/net/ethernet/cavium/thunder/nic.h
+index d50e56ada7ac..7b78fa0b3997 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic.h
++++ b/drivers/net/ethernet/cavium/thunder/nic.h
+@@ -55,6 +55,12 @@
+ /* Max when CPI_ALG is IP diffserv */
+ #define	NIC_MAX_CPI_PER_LMAC		64
+ 
++#define	NIC_LBK_PKIO			0
++#define	NIC_LBK_VNIC			1
++#define	NIC_LBK_PKIO_LMAC		16
++#define	NIC_LBK_VNIC_LMAC		17
++#define	NIC_LBK_CHAN_BASE		128
++
+ /* NIC VF Interrupts */
+ #define	NICVF_INTR_CQ			0
+ #define	NICVF_INTR_SQ			1
+@@ -337,6 +343,7 @@ struct nicvf {
+ 	bool			pf_acked;
+ 	bool			pf_nacked;
+ 	bool			set_mac_pending;
++	bool			lbk_mode;
+ } ____cacheline_aligned_in_smp;
+ 
+ /* PF <--> VF Mailbox communication
+@@ -385,6 +392,7 @@ struct nic_cfg_msg {
+ 	u8    tns_mode:1;
+ 	u8    sqs_mode:1;
+ 	u8    loopback_supported:1;
++	u8    lbk_mode:1;
+ 	u8    mac_addr[ETH_ALEN];
+ };
+ 
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 076bb756d692..ef3cd5183bd4 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -17,6 +17,7 @@
+ #include "nic.h"
+ #include "q_struct.h"
+ #include "thunder_bgx.h"
++#include "thunder_lbk.h"
+ 
+ #define DRV_NAME	"thunder-nic"
+ #define DRV_VERSION	"1.0"
+@@ -71,6 +72,7 @@ struct nicpf {
+ 	struct msix_entry	*msix_entries;
+ 	bool			irq_allocated[NIC_PF_MSIX_VECTORS];
+ 	char			irq_name[NIC_PF_MSIX_VECTORS][20];
++	int			lbk_vf;
+ };
+ 
+ /* Supported devices */
+@@ -161,6 +163,86 @@ static void nic_send_msg_to_vf(struct nicpf *nic, int vf, union nic_mbx *mbx)
+ 	}
+ }
+ 
++#define LBK_PKIND 15
++
++static u8 lbk_link_up;
++
++static int nic_get_lbk_port_pkind(void)
++{
++	return LBK_PKIND;
++}
++
++static int nic_start_lbk_port(void)
++{
++	lbk_link_up = 1;
++	return 0;
++}
++
++static void nic_stop_lbk_port(void)
++{
++	lbk_link_up = 0;
++}
++
++struct thunder_lbk_com_s thunder_lbk_com = {
++	.port_start = nic_start_lbk_port,
++	.port_stop = nic_stop_lbk_port,
++	.get_port_pkind = nic_get_lbk_port_pkind
++};
++EXPORT_SYMBOL(thunder_lbk_com);
++
++static void nic_lbk_link_update(struct nicpf *nic)
++{
++	union nic_mbx mbx = {};
++	u8 vf = nic->lbk_vf;
++
++	if (nic->mbx_lock[vf])
++		return;
++
++	mbx.link_status.msg = NIC_MBOX_MSG_BGX_LINK_CHANGE;
++	if (lbk_link_up) {
++		nic->link[vf] = true;
++		nic->duplex[vf] = 1;
++		nic->speed[vf] = 1000;
++
++		mbx.link_status.link_up = true;
++		mbx.link_status.duplex = 1;
++		mbx.link_status.speed = 1000;
++		mbx.link_status.mac_type = LBK_MODE_LMAC;
++	} else {
++		nic->link[vf] = false;
++		nic->duplex[vf] = DUPLEX_UNKNOWN;
++		nic->speed[vf] = SPEED_UNKNOWN;
++
++		mbx.link_status.link_up = false;
++		mbx.link_status.duplex = DUPLEX_UNKNOWN;
++		mbx.link_status.speed = SPEED_UNKNOWN;
++		mbx.link_status.mac_type = LBK_MODE_LMAC;
++	}
++	nic_send_msg_to_vf(nic, vf, &mbx);
++}
++
++static void nic_create_lbk_interface(struct nicpf *nic)
++{
++	u64 lmac_credit;
++	u16 sdevid;
++
++	pci_read_config_word(nic->pdev, PCI_SUBSYSTEM_ID, &sdevid);
++	if (sdevid != PCI_SUBSYS_DEVID_83XX_NIC_PF)
++		return;
++	nic->num_vf_en++; /* Additional vf for LBK */
++
++	nic->lbk_vf = nic->num_vf_en - 1;
++	lmac_credit = nic_reg_read(nic, NIC_PF_LMAC_0_7_CREDIT +
++			(NIC_LBK_PKIO_LMAC * 8));
++
++	lmac_credit = (1ull << 1); /* channel credit enable */
++	lmac_credit |= (0x1ff << 2); /* Max outstanding pkt count */
++	lmac_credit |= (((16 * 1024 - NIC_HW_MAX_FRS) / 16) << 12);
++
++	nic_reg_write(nic, NIC_PF_LMAC_0_7_CREDIT +
++			(NIC_LBK_PKIO_LMAC * 8), lmac_credit);
++}
++
+ /* Responds to VF's READY message with VF's
+  * ID, node, MAC address e.t.c
+  * @vf: VF which sent READY message
+@@ -175,8 +257,8 @@ static void nic_mbx_send_ready(struct nicpf *nic, int vf)
+ 	mbx.nic_cfg.vf_id = vf;
+ 
+ 	mbx.nic_cfg.tns_mode = NIC_TNS_BYPASS_MODE;
++	if (vf < nic->num_vf_en && vf != nic->lbk_vf) {
+ 
+-	if (vf < nic->num_vf_en) {
+ 		bgx_idx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+ 		lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+ 
+@@ -185,6 +267,7 @@ static void nic_mbx_send_ready(struct nicpf *nic, int vf)
+ 			ether_addr_copy((u8 *)&mbx.nic_cfg.mac_addr, mac);
+ 	}
+ 	mbx.nic_cfg.sqs_mode = (vf >= nic->num_vf_en) ? true : false;
++	mbx.nic_cfg.lbk_mode = (vf == nic->lbk_vf) ? true : false;
+ 	mbx.nic_cfg.node_id = nic->node;
+ 
+ 	mbx.nic_cfg.loopback_supported = vf < nic->num_vf_en;
+@@ -368,6 +451,9 @@ static void nic_set_lmac_vf_mapping(struct nicpf *nic)
+ 			break;
+ 		}
+ 	}
++
++	/* Create additional primary nic for lbk on 83xx */
++	nic_create_lbk_interface(nic);
+ }
+ 
+ static void nic_free_lmacmem(struct nicpf *nic)
+@@ -431,6 +517,9 @@ static int nic_get_hw_info(struct nicpf *nic)
+ 
+ 	/* Allocate memory for LMAC tracking elements */
+ 	max_lmac = hw->bgx_cnt * MAX_LMAC_PER_BGX;
++	if (sdevid == PCI_SUBSYS_DEVID_83XX_NIC_PF)
++		max_lmac++; /* Additional LBK interface*/
++
+ 	nic->vf_lmac_map = kmalloc_array(max_lmac, sizeof(u8), GFP_KERNEL);
+ 	if (!nic->vf_lmac_map)
+ 		goto error;
+@@ -530,10 +619,15 @@ static void nic_config_cpi(struct nicpf *nic, struct cpi_cfg_msg *cfg)
+ 	u8  qset, rq_idx = 0;
+ 
+ 	vnic = cfg->vf_id;
+-	bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vnic]);
+-	lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vnic]);
++	if (vnic == nic->lbk_vf) {
++		lmac = NIC_LBK_PKIO_LMAC;
++		chan = NIC_LBK_CHAN_BASE + NIC_LBK_PKIO * hw->chans_per_lbk;
++	} else {
++		bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vnic]);
++		lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vnic]);
++		chan = (lmac * hw->chans_per_lmac) + (bgx * hw->chans_per_bgx);
++	}
+ 
+-	chan = (lmac * hw->chans_per_lmac) + (bgx * hw->chans_per_bgx);
+ 	cpi_base = vnic * NIC_MAX_CPI_PER_LMAC;
+ 	rssi_base = vnic * hw->rss_ind_tbl_size;
+ 
+@@ -676,7 +770,7 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
+ 			       struct sq_cfg_msg *sq)
+ {
+ 	struct hw_info *hw = nic->hw;
+-	u32 bgx, lmac, chan;
++	u32 bgx = 0, lmac, chan;
+ 	u32 tl2, tl3, tl4;
+ 	u32 rr_quantum;
+ 	u8 sq_idx = sq->sq_num;
+@@ -688,8 +782,15 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
+ 	else
+ 		pqs_vnic = vnic;
+ 
+-	bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[pqs_vnic]);
+-	lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[pqs_vnic]);
++	if (vnic == nic->lbk_vf) {
++		lmac = NIC_LBK_PKIO_LMAC;
++		chan = NIC_LBK_CHAN_BASE + NIC_LBK_PKIO * hw->chans_per_lbk;
++	} else {
++		bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[pqs_vnic]);
++		lmac =
++		      NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[pqs_vnic]);
++		chan = (lmac * hw->chans_per_lmac) + (bgx * hw->chans_per_bgx);
++	}
+ 
+ 	/* 24 bytes for FCS, IPG and preamble */
+ 	rr_quantum = ((NIC_HW_MAX_FRS + 24) / 4);
+@@ -730,7 +831,6 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
+ 	 * On 81xx/83xx TL3_CHAN reg should be configured with channel
+ 	 * within LMAC i.e 0-7 and not the actual channel number like on 88xx
+ 	 */
+-	chan = (lmac * hw->chans_per_lmac) + (bgx * hw->chans_per_bgx);
+ 	if (hw->tl1_per_bgx)
+ 		nic_reg_write(nic, NIC_PF_TL3_0_255_CHAN | (tl3 << 3), chan);
+ 	else
+@@ -1191,12 +1291,18 @@ static void nic_handle_mbx_intr(struct nicpf *nic, int vf)
+ 			ret = -1; /* NACK */
+ 			break;
+ 		}
++		if (vf == nic->lbk_vf) {
++			ret = 0;
++			break;
++		}
+ 		lmac = mbx.mac.vf_id;
+ 		bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[lmac]);
+ 		lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[lmac]);
+ 		bgx_set_lmac_mac(nic->node, bgx, lmac, mbx.mac.mac_addr);
+ 		break;
+ 	case NIC_MBOX_MSG_SET_MAX_FRS:
++		if (vf == nic->lbk_vf)
++			break;
+ 		ret = nic_update_hw_frs(nic, mbx.frs.max_frs,
+ 					mbx.frs.vf_id);
+ 		break;
+@@ -1212,7 +1318,10 @@ static void nic_handle_mbx_intr(struct nicpf *nic, int vf)
+ 		break;
+ 	case NIC_MBOX_MSG_CFG_DONE:
+ 		/* Last message of VF config msg sequence */
+-		nic_enable_vf(nic, vf, true);
++		if (vf == nic->lbk_vf)
++			nic->vf_enabled[vf] = true;
++		else
++			nic_enable_vf(nic, vf, true);
+ 		goto unlock;
+ 	case NIC_MBOX_MSG_SHUTDOWN:
+ 		/* First msg in VF teardown sequence */
+@@ -1221,7 +1330,10 @@ static void nic_handle_mbx_intr(struct nicpf *nic, int vf)
+ 				nic->vf_sqs[vf][i] = NIC_VF_UNASSIGNED;
+ 		}
+ 		nic->pqs_vf[vf] = NIC_VF_UNASSIGNED;
+-		nic_enable_vf(nic, vf, false);
++		if (vf == nic->lbk_vf)
++			nic->vf_enabled[vf] = false;
++		else
++			nic_enable_vf(nic, vf, false);
+ 		break;
+ 	case NIC_MBOX_MSG_ALLOC_SQS:
+ 		nic_alloc_sqs(nic, vf, &mbx.sqs_alloc);
+@@ -1464,6 +1576,11 @@ static void nic_poll_for_link(struct work_struct *work)
+ 		/* Poll only if VF is UP */
+ 		if (!nic->vf_enabled[vf])
+ 			continue;
++		if (vf == nic->lbk_vf) {
++			if (lbk_link_up != nic->link[vf])
++				nic_lbk_link_update(nic);
++			continue;
++		}
+ 
+ 		/* Get BGX, LMAC indices for the VF */
+ 		bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+@@ -1601,6 +1718,7 @@ static int nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	}
+ 
+ 	nic->node = nic_get_node_id(pdev);
++	nic->lbk_vf = -1; /* Default No lbk interface assigned*/
+ 
+ 	/* Initialize hardware */
+ 	err = nic_init_hw(nic);
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_ethtool.c b/drivers/net/ethernet/cavium/thunder/nicvf_ethtool.c
+index e257ebeff114..6038c7eb5d55 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_ethtool.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_ethtool.c
+@@ -766,7 +766,8 @@ static void nicvf_get_pauseparam(struct net_device *dev,
+ 	/* Supported only for 10G/40G interfaces */
+ 	if ((nic->mac_type == BGX_MODE_SGMII) ||
+ 	    (nic->mac_type == BGX_MODE_QSGMII) ||
+-	    (nic->mac_type == BGX_MODE_RGMII))
++	    (nic->mac_type == BGX_MODE_RGMII) ||
++	    (nic->mac_type == LBK_MODE_LMAC))
+ 		return;
+ 
+ 	mbx.pfc.msg = NIC_MBOX_MSG_PFC;
+@@ -787,7 +788,8 @@ static int nicvf_set_pauseparam(struct net_device *dev,
+ 	/* Supported only for 10G/40G interfaces */
+ 	if ((nic->mac_type == BGX_MODE_SGMII) ||
+ 	    (nic->mac_type == BGX_MODE_QSGMII) ||
+-	    (nic->mac_type == BGX_MODE_RGMII))
++	    (nic->mac_type == BGX_MODE_RGMII) ||
++	    (nic->mac_type == LBK_MODE_LMAC))
+ 		return -EOPNOTSUPP;
+ 
+ 	if (pause->autoneg)
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_main.c b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+index aa29be8ca8a9..b0f351db78f0 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+@@ -193,6 +193,7 @@ static void  nicvf_handle_mbx_intr(struct nicvf *nic)
+ 	switch (mbx.msg.msg) {
+ 	case NIC_MBOX_MSG_READY:
+ 		nic->pf_acked = true;
++		nic->lbk_mode = mbx.nic_cfg.lbk_mode;
+ 		nic->vf_id = mbx.nic_cfg.vf_id & 0x7F;
+ 		nic->tns_mode = mbx.nic_cfg.tns_mode & 0x7F;
+ 		nic->node = mbx.nic_cfg.node_id;
+@@ -1458,6 +1459,8 @@ void nicvf_update_lmac_stats(struct nicvf *nic)
+ 	int stat = 0;
+ 	union nic_mbx mbx = {};
+ 
++	if (nic->lbk_mode)
++		return;
+ 	if (!netif_running(nic->netdev))
+ 		return;
+ 
+@@ -1831,6 +1834,12 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	INIT_WORK(&nic->reset_task, nicvf_reset_task);
+ 
++	if (nic->lbk_mode) {
++		if (dev_alloc_name(netdev, "lbk%d") < 0)
++			goto err_unregister_interrupts;
++		netdev->hw_features &= ~NETIF_F_LOOPBACK;
++	}
++
+ 	err = register_netdev(netdev);
+ 	if (err) {
+ 		dev_err(dev, "Failed to register netdevice\n");
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+index 8e47935d53df..cc897bf1a39a 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+@@ -272,6 +272,7 @@ enum LMAC_TYPE {
+ 	BGX_MODE_RGMII = 5,
+ 	BGX_MODE_QSGMII = 6,
+ 	BGX_MODE_INVALID = 7,
++	LBK_MODE_LMAC = 8,
+ };
+ 
+ #endif /* THUNDER_BGX_H */
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_lbk.h b/drivers/net/ethernet/cavium/thunder/thunder_lbk.h
+new file mode 100644
+index 000000000000..9b6a3e82e712
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/thunder/thunder_lbk.h
+@@ -0,0 +1,20 @@
++/*
++ * Copyright (C) 2017 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef THUNDER_LBK_H
++#define THUNDER_LBK_H
++
++struct thunder_lbk_com_s {
++	int (*port_start)(void);
++	void (*port_stop)(void);
++	int (*get_port_pkind)(void);
++};
++
++extern struct thunder_lbk_com_s thunder_lbk_com;
++
++#endif /* THUNDER_LBK_H */
+-- 
+2.14.1
+

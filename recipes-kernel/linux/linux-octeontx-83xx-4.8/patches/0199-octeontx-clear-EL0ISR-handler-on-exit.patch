@@ -1,0 +1,62 @@
+From 089132c73f9820d79d711ee7f72c80371f2f4997 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Mon, 5 Jun 2017 17:25:59 -0700
+Subject: [PATCH 199/375] octeontx: clear EL0ISR handler on exit
+
+clear El0 irq handlers on app exit
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ .../net/ethernet/cavium/octeontx-83xx/octeontx_main.c   | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 241ffcddfb02..8629a96e0b7e 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -701,12 +701,20 @@ static unsigned long __install_el3_inthandler(unsigned long gpio_num,
+ 	return res.a0;
+ }
+ 
++static void __remove_el3_inthandler(unsigned long gpio_num)
++{
++	struct arm_smccc_res res;
++
++	arm_smccc_smc(THUNDERX_REMOVE_GPIO_INT, gpio_num,
++		      0, 0, 0, 0, 0, 0, &res);
++}
++
+ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ {
+ 	int err = 0;
+ 	struct octtx_gpio_usr_data gpio_usr;
+ 	int ret;
+-	struct task_struct *task = current;
++	//struct task_struct *task = current;
+ 
+ 	if (!gpio.in_use)
+ 		return -EINVAL;
+@@ -741,6 +749,10 @@ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ //		       __FILE__, __LINE__, gpio.ttbr, gpio.sp, gpio.isr_base);
+ 		break;
+ 	case OCTTX_IOC_CLR_GPIO_HANDLER: /*Clear GPIO ISR handler*/
++		ret = copy_from_user(&gpio_usr, (void *)arg, _IOC_SIZE(cmd));
++		if (ret)
++			return -EFAULT;
++		__remove_el3_inthandler(gpio_usr.gpio_num);
+ 		break;
+ 	default:
+ 		return -ENOTTY;
+@@ -762,6 +774,9 @@ static int octtx_dev_release(struct inode *inode, struct file *fp)
+ 	if (gpio.in_use == 0)
+ 		return -EINVAL;
+ 
++	if (gpio.gpio_num)
++		__remove_el3_inthandler(gpio.gpio_num);
++
+ 	gpio.in_use = 0;
+ 	return 0;
+ }
+-- 
+2.14.1
+

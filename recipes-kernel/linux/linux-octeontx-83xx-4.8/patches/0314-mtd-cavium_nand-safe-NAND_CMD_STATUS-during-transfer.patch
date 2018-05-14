@@ -1,0 +1,43 @@
+From ee53661e093cab40e29a2d3d1ee9867179de800d Mon Sep 17 00:00:00 2001
+From: Peter Swain <pswain@cavium.com>
+Date: Mon, 26 Feb 2018 19:44:57 -0800
+Subject: [PATCH 314/375] mtd: cavium_nand: safe NAND_CMD_STATUS during
+ transfer
+
+NAND_CMD_STATUS probes can be issued to check the status of ongoing
+read/write transfers.
+Prevously they set tn->use_status, to indicate they do not use the
+usual result buffer, changing not only the behavior of their own
+read_byte() method, but that of the ongoing transfer.
+
+Happened infrequently, but seen in mtd_speedtest.
+
+But NAND_CMD_STATUS is always synchronous, ends before another read_byte
+is issued, and never within another NAND_CMD_STATUS, so making use_status
+a one-time override safely removes the ambiguity, as all is serialized
+under mtd locks
+
+Signed-off-by: Peter Swain <pswain@cavium.com>
+---
+ drivers/mtd/nand/cavium_nand.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/mtd/nand/cavium_nand.c b/drivers/mtd/nand/cavium_nand.c
+index 041581d7ecba..c41cb3f4b6eb 100644
+--- a/drivers/mtd/nand/cavium_nand.c
++++ b/drivers/mtd/nand/cavium_nand.c
+@@ -351,8 +351,10 @@ static u8 cvm_nand_read_byte(struct mtd_info *mtd)
+ 	struct nand_chip *nand = mtd_to_nand(mtd);
+ 	struct cvm_nfc *tn = to_cvm_nfc(nand->controller);
+ 
+-	if (tn->use_status)
++	if (tn->use_status) {
++		tn->use_status = false;
+ 		return *tn->stat;
++	}
+ 
+ 	if (tn->buf.data_index < tn->buf.data_len)
+ 		return tn->buf.dmabuf[tn->buf.data_index++];
+-- 
+2.14.1
+

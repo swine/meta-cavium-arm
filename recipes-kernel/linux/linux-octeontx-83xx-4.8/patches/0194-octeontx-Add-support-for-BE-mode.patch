@@ -1,0 +1,95 @@
+From 1158c709f7a224f211d903af6f4a1451dd076637 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Mon, 17 Apr 2017 16:12:30 -0700
+Subject: [PATCH 194/375] octeontx: Add support for BE mode.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c | 17 +++++++++++++----
+ drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c |  9 +++++++++
+ drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c |  5 ++++-
+ 3 files changed, 26 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index a8a1000747fc..131b5e75ec4d 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -80,7 +80,12 @@ static void reset_port_reg(struct pki_t *pki, struct pki_port *port)
+ 	pki_reg_write(pki, PKI_STYLEX_TAG_SEL(style), cfg);
+ 	pki_reg_write(pki, PKI_STYLEX_WQ2(style), cfg);
+ 	pki_reg_write(pki, PKI_STYLEX_WQ4(style), cfg);
+-	cfg = 0x1800020;
++
++	cfg = 0x6ull << PKI_STYLEX_BUF_FIRST_SKIP_SHIFT |
++#ifdef __BIG_ENDIAN
++		0x1ull << PKI_STYLEX_BUF_WQE_BEND_SHIFT |
++#endif
++		0x20ull << PKI_STYLEX_BUF_MB_SIZE_SHIFT;
+ 	pki_reg_write(pki, PKI_STYLEX_BUF(style), cfg);
+ 	cfg = 0;
+ 	for (i = 0; i < port->num_entry; i++) {
+@@ -139,11 +144,15 @@ void init_styles(struct pki_t *pki)
+ 
+ {
+ 	u32 i, j;
+-	u64 cfg = 0;
+-
+-	cfg |= (0x1ULL << PKI_STYLE_CFG_DROP_SHIFT);
++	u64 cfg = 0x1ull << PKI_STYLE_CFG_DROP_SHIFT;
++	u64 buf = 0x6ull << PKI_STYLEX_BUF_FIRST_SKIP_SHIFT |
++#ifdef __BIG_ENDIAN
++		0x1ull << PKI_STYLEX_BUF_WQE_BEND_SHIFT |
++#endif
++		0x20ull << PKI_STYLEX_BUF_MB_SIZE_SHIFT;
+ 
+ 	for (i = 0; i < pki->max_fstyles; i++) {
++		pki_reg_write(pki, PKI_STYLEX_BUF(i), buf);
+ 		for (j = 0; j < pki->max_cls; j++)
+ 			pki_reg_write(pki, PKI_CLX_STYLEX_CFG(j, i), cfg);
+ 	}
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+index 787abcfb3c40..b666654e8289 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+@@ -982,6 +982,15 @@ static int pko_init(struct pkopf *pko)
+ 		pko_reg_write(pko, PKO_PF_FORMATX_CTL(i), 0x0);
+ 	pko_reg_write(pko, PKO_PF_FORMATX_CTL(1), 0x101);
+ 
++	reg = pko_reg_read(pko, PKO_PF_DQ_CONST);
++	n = (reg & ((1ull << 16) - 1)) / pko->dqs_per_vf;
++#ifdef __BIG_ENDIAN
++	reg = 1ull << 24; /*BE*/
++#else
++	reg = 0;
++#endif
++	for (i = 0; i < n; i++)
++		pko_reg_write(pko, PKO_PF_VFX_GMCTL(i), reg);
+ 	return 0;
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+index 4c2e0e0b4d48..5380e7391a0f 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+@@ -27,7 +27,7 @@
+ #define TIM_PF_MSIX_COUNT	2
+ 
+ #define TIM_DEV_PER_NODE	1
+-#define TIM_VFS_PER_DEV		4
++#define TIM_VFS_PER_DEV		64
+ 
+ #define TIM_RINGS_PER_DEV	TIM_VFS_PER_DEV
+ #define TIM_RING_NODE_SHIFT	6 /* 2 pow(6) */
+@@ -406,6 +406,9 @@ static int tim_init(struct timpf *tim)
+ 
+ 	/* Initialize TIM rings.*/
+ 	reg = (1ull << 48) |  /*LOCK_EN*/
++#ifdef __BIG_ENDIAN
++		(1ull << 54) | /*BE*/
++#endif
+ 		(1ull << 44); /*ENA_LDWB*/
+ 	for (i = 0; i < TIM_RINGS_PER_DEV; i++) {
+ 		tim_reg_write(tim, TIM_RING_CTL1(i), reg);
+-- 
+2.14.1
+

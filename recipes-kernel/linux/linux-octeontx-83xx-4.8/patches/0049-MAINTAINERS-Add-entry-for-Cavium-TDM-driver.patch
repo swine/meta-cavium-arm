@@ -1,0 +1,30 @@
+From cf965c97f94d1677cc6677f0327554d58743a0c0 Mon Sep 17 00:00:00 2001
+From: Peter Swain <peter.swain@cavium.com>
+Date: Fri, 27 Apr 2018 11:33:33 -0700
+Subject: [PATCH 049/375] MAINTAINERS: Add entry for Cavium TDM driver
+
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ MAINTAINERS | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 6357514c7c73..665eaab83645 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -2934,6 +2934,12 @@ W:	http://www.cavium.com
+ S:	Supported
+ F:	drivers/mtd/nand/cavium*
+ 
++CAVIUM TDM DRIVER
++M:	Peter Swain <pswain@cavium.com>
++W:	http://www.cavium.com
++S:	Supported
++F:	drivers/misc/cavium-tdm.c
++
+ CC2520 IEEE-802.15.4 RADIO DRIVER
+ M:	Varka Bhadram <varkabhadram@gmail.com>
+ L:	linux-wpan@vger.kernel.org
+-- 
+2.14.1
+

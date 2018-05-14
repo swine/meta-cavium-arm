@@ -1,0 +1,777 @@
+From c7c739b808eaa9cd425a0a65491f46b5de6afdd1 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Fri, 25 Aug 2017 12:44:14 -0700
+Subject: [PATCH 235/375] net: thunderx: Add packet rerouting between
+ interfaces (no XDP)
+
+This patch allows to reroute packets from one interface to another. This
+capabilies are used for connecting Linux and Dataplane.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+
+XDP changed dropped for yocto-4.8 backport
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c    |  54 +++-----
+ drivers/net/ethernet/cavium/thunder/nic.h          |  31 +++++
+ drivers/net/ethernet/cavium/thunder/nic_main.c     |  36 ++++-
+ drivers/net/ethernet/cavium/thunder/nicvf_main.c   | 150 ++++++++++++++++++---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c |  25 ++--
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.h |   8 ++
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c  |  16 ++-
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.h  |   3 +
+ 8 files changed, 256 insertions(+), 67 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+index 5601897ea087..c2410d2cc59a 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -209,9 +209,6 @@ static int bgx_port_initial_config(struct octtx_bgx_port *port)
+ 	if (!bgx)
+ 		return -ENODEV;
+ 
+-	/* Stop the port first */
+-	bgx_port_stop(port);
+-
+ 	/* Adjust TX FIFO and BP thresholds to LMAC type */
+ 	if (port->lmac_type == OCTTX_BGX_LMAC_TYPE_40GR) {
+ 		reg = 0x400;
+@@ -231,11 +228,10 @@ static int bgx_port_initial_config(struct octtx_bgx_port *port)
+ 	reg |= CMR_X2P_SELECT_PKI | CMR_P2X_SELECT_PKO;
+ 	bgx_reg_write(bgx, port->lmac, BGX_CMR_CONFIG, reg);
+ 	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_ID_MAP, 0);
+-
+ 	return 0;
+ }
+ 
+-static int save_lmac_cfg(struct octtx_bgx_port *port)
++static int bgx_port_save_config(struct octtx_bgx_port *port)
+ {
+ 	struct lmac_cfg *cfg;
+ 	const u8 *mac_addr;
+@@ -245,10 +241,6 @@ static int save_lmac_cfg(struct octtx_bgx_port *port)
+ 	if (!port)
+ 		return -EINVAL;
+ 
+-	if (port->bgx >= MAX_BGX_PER_CN83XX ||
+-	    port->lmac >= MAX_LMAC_PER_BGX)
+-		return -EINVAL;
+-
+ 	bgx = get_bgx_dev(port->node, port->bgx);
+ 	if (!bgx)
+ 		return -ENODEV;
+@@ -290,11 +282,10 @@ static int save_lmac_cfg(struct octtx_bgx_port *port)
+ 	/* Save mac address */
+ 	mac_addr = thbgx->get_mac_addr(port->node, port->bgx, port->lmac);
+ 	memcpy(cfg->mac, mac_addr, ETH_ALEN);
+-
+ 	return 0;
+ }
+ 
+-static int restore_lmac_cfg(struct octtx_bgx_port *port)
++static int bgx_port_restore_config(struct octtx_bgx_port *port)
+ {
+ 	struct lmac_cfg *cfg;
+ 	struct bgxpf *bgx;
+@@ -303,18 +294,10 @@ static int restore_lmac_cfg(struct octtx_bgx_port *port)
+ 	if (!port)
+ 		return -EINVAL;
+ 
+-	if (port->bgx >= MAX_BGX_PER_CN83XX ||
+-	    port->lmac >= MAX_LMAC_PER_BGX)
+-		return -EINVAL;
+-
+ 	bgx = get_bgx_dev(port->node, port->bgx);
+ 	if (!bgx)
+ 		return -ENODEV;
+ 
+-	bgx = get_bgx_dev(port->node, port->bgx);
+-		if (!bgx)
+-			return -ENODEV;
+-
+ 	idx = port->bgx * MAX_LMAC_PER_BGX + port->lmac;
+ 	lmac_idx = port->lmac;
+ 	cfg = &lmac_saved_cfg[idx];
+@@ -809,7 +792,9 @@ static int bgx_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ 	list_for_each_entry(port, &octeontx_bgx_ports, list) {
+ 		if (port->node == id && port->domain_id == domain_id) {
+ 			/* Return port to Linux */
+-			restore_lmac_cfg(port);
++			bgx_port_restore_config(port);
++			thbgx->switch_ctx(port->node, port->bgx, port->lmac,
++					  NIC_PORT_CTX_LINUX, 0);
+ 
+ 			/* sysfs entry: */
+ 			if (port->kobj.state_initialized) {
+@@ -863,6 +848,19 @@ static int bgx_create_domain(u32 id, u16 domain_id,
+ 			gport->domain_id = domain_id;
+ 			gport->dom_port_idx = port_idx;
+ 
++			/* Stop and reconfigure the port.*/
++			bgx_port_stop(port);
++			ret = bgx_port_save_config(port);
++			if (ret)
++				goto err_unlock;
++
++			thbgx->switch_ctx(port->node, port->bgx, port->lmac,
++					  NIC_PORT_CTX_DATAPLANE, port_idx);
++
++			ret = bgx_port_initial_config(port);
++			if (ret)
++				goto err_unlock;
++
+ 			/* sysfs entry: */
+ 			ret = kobject_init_and_add(&port->kobj, get_ktype(kobj),
+ 						   kobj, "net%d", port_idx);
+@@ -872,18 +870,6 @@ static int bgx_create_domain(u32 id, u16 domain_id,
+ 						&bgx_port_stats_attr.attr);
+ 			if (ret < 0)
+ 				goto err_unlock;
+-
+-			/* Call this function to save lmac configuration and do
+-			 * it before any modification to BGX registers are done
+-			 * We restore lmac configuration when we destroy domain
+-			 */
+-			ret = save_lmac_cfg(port);
+-			if (ret)
+-				goto err_unlock;
+-
+-			ret = bgx_port_initial_config(port);
+-			if (ret)
+-				goto err_unlock;
+ 		}
+ 	}
+ 	spin_unlock(&octeontx_bgx_lock);
+@@ -919,9 +905,7 @@ static int bgx_set_pkind(u32 id, u16 domain_id, int port, int pkind)
+ 	gport = get_bgx_port(domain_id, port);
+ 	if (!gport)
+ 		return -EINVAL;
+-	/* Domain port: */
+ 	gport->pkind = pkind;
+-
+ 	return 0;
+ }
+ 
+@@ -960,6 +944,8 @@ struct bgx_com_s *bgx_octeontx_init(void)
+ 		return NULL;
+ 
+ 	bgx_map = thbgx->get_bgx_count(node);
++	if (!bgx_map)
++		return NULL;
+ 
+ 	for_each_set_bit(bgx_idx, (unsigned long *)&bgx_map,
+ 			 sizeof(bgx_map) * 8) {
+diff --git a/drivers/net/ethernet/cavium/thunder/nic.h b/drivers/net/ethernet/cavium/thunder/nic.h
+index 7b78fa0b3997..e69d5a15e016 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic.h
++++ b/drivers/net/ethernet/cavium/thunder/nic.h
+@@ -283,6 +283,8 @@ struct nicvf {
+ 	bool                    sqs_mode;
+ 	bool			hw_tso;
+ 	bool			t88;
++	u8			port_ctx;
++	u8			port_dp_idx;
+ 
+ 	/* Receive buffer alloc */
+ 	u32			rb_page_offset;
+@@ -382,6 +384,7 @@ struct nicvf {
+ #define	NIC_MBOX_MSG_RESET_STAT_COUNTER 0x17	/* Reset statistics counters */
+ #define	NIC_MBOX_MSG_PFC		0x18	/* Pause frame control */
+ #define	NIC_MBOX_MSG_PTP_CFG		0x19	/* HW packet timestamp */
++#define	NIC_MBOX_MSG_PORT_CTX		0x20	/* Change port oper.context */
+ #define	NIC_MBOX_MSG_CFG_DONE		0xF0	/* VF configuration done */
+ #define	NIC_MBOX_MSG_SHUTDOWN		0xF1	/* VF is being shutdown */
+ 
+@@ -501,6 +504,33 @@ struct set_loopback {
+ 	bool  enable;
+ };
+ 
++#define NIC_PORT_CTX_LINUX	0 /* Control plane/Linux */
++#define NIC_PORT_CTX_DATAPLANE	1 /* Data plane */
++
++#define LBK_IF_IDX	0xff /* LBK virtual port index */
++
++struct port_context {
++	u8    msg;
++	u8    vf_id;
++	u8    ctx;
++	u8    dp_idx;
++};
++
++/* Packet tunnelling 32-bytes meta block (Ethernet header + meta data).
++ * It needs to be consistent with Dataplane version of this structure.
++ */
++#define PKT_TMH_TYPE		0x0770
++#define PKT_TMH_FLAG_STRIP	0x01	/* Strip TMH. */
++
++#define PKT_TMH_DATA_LEN	(32 - (6 + 6 + 2 + 1))
++struct __attribute__((__packed__)) pkt_tmhdr {
++	u8 dmac[6];
++	u8 smac[6];
++	u16 etype;
++	u8 flags;	/* PKT_TMH_FLAG_nnn */
++	u8 data[PKT_TMH_DATA_LEN];
++};
++
+ /* Reset statistics counters */
+ struct reset_stat_cfg {
+ 	u8    msg;
+@@ -559,6 +589,7 @@ union nic_mbx {
+ 	struct reset_stat_cfg	reset_stat;
+ 	struct pfc		pfc;
+ 	struct set_ptp		ptp;
++	struct port_context	ctx;
+ };
+ 
+ #define NIC_NODE_ID_MASK	0x03
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index ef3cd5183bd4..156f22e2d3f2 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -163,6 +163,29 @@ static void nic_send_msg_to_vf(struct nicpf *nic, int vf, union nic_mbx *mbx)
+ 	}
+ }
+ 
++/* NIC PF control and configuraiton block. */
++static struct nicpf *nicpf_ctl;
++
++void nic_bgx_port_ctx_set(int node, int bgx, int lmac, int ctx, int dp_idx)
++{
++	int vf;
++	union nic_mbx mbx = {};
++	struct nicpf *nic = nicpf_ctl;
++	u8 bgxlmac = NIC_SET_VF_LMAC_MAP(bgx, lmac);
++
++	for (vf = 0; vf < nic->num_vf_en; vf++) {
++		if (nic->vf_enabled[vf] && nic->vf_lmac_map[vf] == bgxlmac) {
++			mbx.ctx.msg = NIC_MBOX_MSG_PORT_CTX;
++			mbx.ctx.vf_id = vf;
++			mbx.ctx.ctx = ctx;
++			mbx.ctx.dp_idx = dp_idx;
++			nic_send_msg_to_vf(nic, vf, &mbx);
++			break;
++		}
++	}
++}
++EXPORT_SYMBOL(nic_bgx_port_ctx_set);
++
+ #define LBK_PKIND 15
+ 
+ static u8 lbk_link_up;
+@@ -174,13 +197,11 @@ static int nic_get_lbk_port_pkind(void)
+ 
+ static int nic_start_lbk_port(void)
+ {
+-	lbk_link_up = 1;
+ 	return 0;
+ }
+ 
+ static void nic_stop_lbk_port(void)
+ {
+-	lbk_link_up = 0;
+ }
+ 
+ struct thunder_lbk_com_s thunder_lbk_com = {
+@@ -241,6 +262,8 @@ static void nic_create_lbk_interface(struct nicpf *nic)
+ 
+ 	nic_reg_write(nic, NIC_PF_LMAC_0_7_CREDIT +
+ 			(NIC_LBK_PKIO_LMAC * 8), lmac_credit);
++	/* LBK link is always up. */
++	lbk_link_up = 1;
+ }
+ 
+ /* Responds to VF's READY message with VF's
+@@ -261,7 +284,6 @@ static void nic_mbx_send_ready(struct nicpf *nic, int vf)
+ 
+ 		bgx_idx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+ 		lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+-
+ 		mac = bgx_get_lmac_mac(nic->node, bgx_idx, lmac);
+ 		if (mac)
+ 			ether_addr_copy((u8 *)&mbx.nic_cfg.mac_addr, mac);
+@@ -1576,6 +1598,7 @@ static void nic_poll_for_link(struct work_struct *work)
+ 		/* Poll only if VF is UP */
+ 		if (!nic->vf_enabled[vf])
+ 			continue;
++
+ 		if (vf == nic->lbk_vf) {
+ 			if (lbk_link_up != nic->link[vf])
+ 				nic_lbk_link_update(nic);
+@@ -1667,9 +1690,15 @@ static int nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	struct device *dev = &pdev->dev;
+ 	struct nicpf *nic;
+ 	int    err, vf, sqs;
++	struct thunder_bgx_com_s *thbgx;
+ 
+ 	BUILD_BUG_ON(sizeof(union nic_mbx) > 16);
+ 
++	thbgx = try_then_request_module(symbol_get(thunder_bgx_com),
++					"thunder_bgx");
++	if (thbgx)
++		thbgx->init_ctx_set_cb(nic_bgx_port_ctx_set);
++
+ 	nic = devm_kzalloc(dev, sizeof(*nic), GFP_KERNEL);
+ 	if (!nic)
+ 		return -ENOMEM;
+@@ -1761,6 +1790,7 @@ static int nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	INIT_DELAYED_WORK(&nic->dwork, nic_poll_for_link);
+ 	queue_delayed_work(nic->check_link, &nic->dwork, 0);
+ 
++	nicpf_ctl = nic;
+ 	return 0;
+ 
+ err_remove_sysfs_attr:
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_main.c b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+index b0f351db78f0..2bab3c3cc8bc 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+@@ -64,6 +64,14 @@ module_param(cpi_alg, int, S_IRUGO);
+ MODULE_PARM_DESC(cpi_alg,
+ 		 "PFC algorithm (0=none, 1=VLAN, 2=VLAN16, 3=IP Diffserv)");
+ 
++static struct net_device *netdev_lbk0;
++static struct net_device *netdev_ethx[NIC_MAX_PKIND];
++
++struct nicvf_xdp_tx {
++	u64 dma_addr;
++	u8  qidx;
++};
++
+ static inline u8 nicvf_netdev_qidx(struct nicvf *nic, u8 qidx)
+ {
+ 	if (nic->sqs_mode)
+@@ -266,6 +274,11 @@ static void  nicvf_handle_mbx_intr(struct nicvf *nic)
+ 		nic->pfc.fc_tx = mbx.pfc.fc_tx;
+ 		nic->pf_acked = true;
+ 		break;
++	case NIC_MBOX_MSG_PORT_CTX:
++		nic->port_ctx = mbx.ctx.ctx;
++		nic->port_dp_idx = mbx.ctx.dp_idx;
++		nic->pf_acked = true;
++		break;
+ 	default:
+ 		netdev_err(nic->netdev,
+ 			   "Invalid message from PF, msg 0x%x\n", mbx.msg.msg);
+@@ -631,24 +644,64 @@ static inline void nicvf_set_rxtstamp(struct nicvf *nic, struct sk_buff *skb)
+ 	__skb_pull(skb, 8);
+ }
+ 
++static struct net_device *rcv_pkt_reroute(struct net_device *netdev,
++					  struct sk_buff *skb,
++					  struct nicvf **nic)
++{
++	struct nicvf *snic = *nic;
++	struct pkt_tmhdr *tmh;
++	u8 ifx;
++
++	/* Drop packets coming from BGX interfaces.*/
++	if (!snic->lbk_mode)
++		return NULL;
++	/* Use Tunnelling Meta Header (TMH) to determine the destination
++	 * interface. The current implementation of packet routing assumes,
++	 * that TMH is located at the beginning (prepending) of the packet.
++	 * NOTE: Routing customization is possible here.
++	 * The default routing -- packets go ethX pointed by tmh.dmac[5].
++	 * This needs be be coordinated with the Dataplane program.
++	 */
++	tmh = (struct pkt_tmhdr *)skb->data;
++	ifx = tmh->dmac[5];
++	if (ntohs(tmh->etype) != PKT_TMH_TYPE ||
++	    (ifx >= NIC_MAX_PKIND && ifx != LBK_IF_IDX))
++		return NULL;
++
++	/* Strip TMH, if requested.*/
++	if (tmh->flags & PKT_TMH_FLAG_STRIP)
++		skb_pull(skb, sizeof(struct pkt_tmhdr));
++
++	/* Do not change SKB and netdev, if packet goes to lbk0.*/
++	if (ifx == LBK_IF_IDX)
++		return netdev;
++
++	netdev = netdev_ethx[ifx];
++	snic = netdev_priv(netdev);
++	/* Drop packet, if destination interface belongs to Linux context.*/
++	if (snic->port_ctx == NIC_PORT_CTX_LINUX)
++		return NULL;
++	/* Update SKB and netdev.*/
++	skb->dev = netdev;
++	*nic = snic;
++	return netdev;
++}
++
+ static void nicvf_rcv_pkt_handler(struct net_device *netdev,
+ 				  struct napi_struct *napi,
+ 				  struct cqe_rx_t *cqe_rx)
+ {
+-	struct sk_buff *skb;
++	int err = 0;
++	struct sk_buff *skb = NULL;
+ 	struct nicvf *nic = netdev_priv(netdev);
+ 	struct nicvf *snic = nic;
+-	int err = 0;
+-	int rq_idx;
+-
+-	rq_idx = nicvf_netdev_qidx(nic, cqe_rx->rq_idx);
++	int rq_idx = nicvf_netdev_qidx(nic, cqe_rx->rq_idx);
+ 
+ 	if (nic->sqs_mode) {
+ 		/* Use primary VF's 'nicvf' struct */
+ 		nic = nic->pnicvf;
+ 		netdev = nic->netdev;
+ 	}
+-
+ 	/* Check for errors */
+ 	if (cqe_rx->err_level || cqe_rx->err_opcode) {
+ 		err = nicvf_check_cqe_rx_errs(nic, cqe_rx);
+@@ -668,17 +721,21 @@ static void nicvf_rcv_pkt_handler(struct net_device *netdev,
+ 		print_hex_dump(KERN_INFO, "", DUMP_PREFIX_OFFSET, 16, 1,
+ 			       skb->data, skb->len, true);
+ 	}
+-
+-	/* If error packet, drop it here */
+-	if (err) {
+-		dev_kfree_skb_any(skb);
+-		return;
++	if (err)
++		goto drop;
++
++	/* Reroute RX packets, if interface belongs to Dataplane. */
++	if (nic->port_ctx == NIC_PORT_CTX_DATAPLANE) {
++		/* Reroute packets arriving from LBK to ethX or lbk0. */
++		netdev = rcv_pkt_reroute(netdev, skb, &nic);
++		if (!netdev)
++			goto drop;
+ 	}
+-
+ 	nicvf_set_rxtstamp(nic, skb);
+ 	nicvf_set_rxhash(netdev, cqe_rx, skb);
+ 
+ 	skb_record_rx_queue(skb, rq_idx);
++
+ 	if (netdev->hw_features & NETIF_F_RXCSUM) {
+ 		/* HW by default verifies TCP/UDP/SCTP checksums */
+ 		skb->ip_summed = CHECKSUM_UNNECESSARY;
+@@ -697,6 +754,9 @@ static void nicvf_rcv_pkt_handler(struct net_device *netdev,
+ 		napi_gro_receive(napi, skb);
+ 	else
+ 		netif_receive_skb(skb);
++	return;
++drop:
++	dev_kfree_skb_any(skb);
+ }
+ 
+ static int nicvf_cq_intr_handler(struct net_device *netdev, u8 cq_idx,
+@@ -1118,20 +1178,57 @@ static int nicvf_register_misc_interrupt(struct nicvf *nic)
+ 	return 0;
+ }
+ 
++static struct net_device *snd_pkt_reroute(struct net_device *netdev,
++					  struct sk_buff *skb,
++					  struct nicvf **nic)
++{
++	struct pkt_tmhdr *tmh;
++
++	if (!netdev_lbk0)
++		return NULL;
++	/* Add and initialize Tunnelling Meta Header (TMH),
++	 * if not already present.
++	 * NOTE: Usage of TMH needs to be coordinated with Dataplane program,
++	 * which processes this packet.
++	 */
++	tmh = (struct pkt_tmhdr *)skb->data;
++	if (ntohs(tmh->etype) != PKT_TMH_TYPE) {
++		tmh = (struct pkt_tmhdr *)skb_push(skb,
++						   sizeof(struct pkt_tmhdr));
++		tmh->dmac[5] = (*nic)->port_dp_idx;
++		tmh->etype = htons(PKT_TMH_TYPE);
++		tmh->flags = 0;
++	}
++	/* Update SKB and netdev.*/
++	*nic = netdev_priv(netdev_lbk0);
++	skb->dev = netdev_lbk0;
++	return netdev_lbk0;
++}
++
+ static netdev_tx_t nicvf_xmit(struct sk_buff *skb, struct net_device *netdev)
+ {
+ 	struct nicvf *nic = netdev_priv(netdev);
+-	int qid = skb_get_queue_mapping(skb);
+-	struct netdev_queue *txq = netdev_get_tx_queue(netdev, qid);
++	struct netdev_queue *txq;
+ 	struct nicvf *snic;
+ 	struct snd_queue *sq;
+-	int tmp;
++	int qid, tmp;
+ 
+ 	/* Check for minimum packet length */
+ 	if (skb->len <= ETH_HLEN) {
+ 		dev_kfree_skb(skb);
+ 		return NETDEV_TX_OK;
+ 	}
++	/* Reroute packets from ethX, if interface belongs to Dataplane.*/
++	if (!nic->lbk_mode && nic->port_ctx == NIC_PORT_CTX_DATAPLANE) {
++		/* Use LBK media */
++		netdev = snd_pkt_reroute(netdev, skb, &nic);
++		if (!netdev) {
++			dev_kfree_skb(skb);
++			return NETDEV_TX_OK;
++		}
++	}
++	snic = nic;
++	qid = skb_get_queue_mapping(skb);
+ 
+ 	/* Get secondary Qset's SQ structure */
+ 	if (qid >= MAX_SND_QUEUES_PER_QS) {
+@@ -1148,8 +1245,11 @@ static netdev_tx_t nicvf_xmit(struct sk_buff *skb, struct net_device *netdev)
+ 	}
+ 
+ 	sq = &snic->qs->sq[qid];
+-	if (!netif_tx_queue_stopped(txq) &&
+-	    !nicvf_sq_append_skb(snic, sq, skb, qid)) {
++	txq = netdev_get_tx_queue(netdev, qid);
++
++	if (netif_tx_queue_stopped(txq)) {
++		dev_kfree_skb(skb);
++	} else if (!nicvf_sq_append_skb(snic, sq, skb, qid)) {
+ 		netif_tx_stop_queue(txq);
+ 
+ 		/* Barrier, so that stop_queue visible to other cpus */
+@@ -1167,7 +1267,6 @@ static netdev_tx_t nicvf_xmit(struct sk_buff *skb, struct net_device *netdev)
+ 		}
+ 		return NETDEV_TX_BUSY;
+ 	}
+-
+ 	return NETDEV_TX_OK;
+ }
+ 
+@@ -1722,6 +1821,7 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	struct net_device *netdev;
+ 	struct nicvf *nic;
+ 	int    err, qcount;
++	long   i;
+ 	u16    sdevid;
+ 
+ 	err = pci_enable_device(pdev);
+@@ -1831,6 +1931,7 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	netdev->netdev_ops = &nicvf_netdev_ops;
+ 	netdev->watchdog_timeo = NICVF_TX_TIMEOUT;
++	netdev->needed_headroom = 128;
+ 
+ 	INIT_WORK(&nic->reset_task, nicvf_reset_task);
+ 
+@@ -1839,7 +1940,6 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 			goto err_unregister_interrupts;
+ 		netdev->hw_features &= ~NETIF_F_LOOPBACK;
+ 	}
+-
+ 	err = register_netdev(netdev);
+ 	if (err) {
+ 		dev_err(dev, "Failed to register netdevice\n");
+@@ -1847,9 +1947,17 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	}
+ 
+ 	nic->msg_enable = debug;
+-
+ 	nicvf_set_ethtool_ops(netdev);
+ 
++	if (nic->lbk_mode) {
++		netdev_lbk0 = netdev;
++		nic->port_ctx = NIC_PORT_CTX_DATAPLANE;
++		nic->port_dp_idx = LBK_IF_IDX;
++	} else {
++		err = kstrtol(netdev->name + 3, 10, &i); /* ethX */
++		if (!err && i < NIC_MAX_PKIND)
++			netdev_ethx[i] = netdev;
++	}
+ 	return 0;
+ 
+ err_unregister_interrupts:
+@@ -1908,7 +2016,7 @@ static struct pci_driver nicvf_driver = {
+ static int __init nicvf_init_module(void)
+ {
+ 	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
+-
++	netdev_lbk0 = NULL;
+ 	return pci_register_driver(&nicvf_driver);
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index 5f75f18ea787..977490adb5ad 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -819,6 +819,7 @@ static void nicvf_snd_queue_config(struct nicvf *nic, struct queue_set *qs,
+ 		netif_set_xps_queue(nic->netdev,
+ 				    &sq->affinity_mask, qidx);
+ 	}
++	spin_lock_init(&sq->lock);
+ }
+ 
+ /* Configures receive buffer descriptor ring */
+@@ -1318,7 +1319,6 @@ static inline void nicvf_sq_doorbell(struct nicvf *nic, struct sk_buff *skb,
+ 	txq = netdev_get_tx_queue(nic->pnicvf->netdev,
+ 				  skb_get_queue_mapping(skb));
+ 
+-	netdev_tx_sent_queue(txq, skb->len);
+ 
+ 	/* make sure all memory stores are done before ringing doorbell */
+ 	smp_wmb();
+@@ -1397,11 +1397,12 @@ static int nicvf_sq_append_tso(struct nicvf *nic, struct snd_queue *sq,
+ int nicvf_sq_append_skb(struct nicvf *nic, struct snd_queue *sq,
+ 			struct sk_buff *skb, u8 sq_num)
+ {
+-	int i, size;
++	int i, size, ret = 0;
+ 	int subdesc_cnt, hdr_sqe = 0;
+ 	int qentry;
+ 	u64 dma_addr;
+ 
++	spin_lock_bh(&sq->lock);
+ 	subdesc_cnt = nicvf_sq_subdesc_required(nic, skb);
+ 	if (subdesc_cnt > atomic_read(&sq->free_cnt))
+ 		goto append_fail;
+@@ -1409,8 +1410,10 @@ int nicvf_sq_append_skb(struct nicvf *nic, struct snd_queue *sq,
+ 	qentry = nicvf_get_sq_desc(sq, subdesc_cnt);
+ 
+ 	/* Check if its a TSO packet */
+-	if (skb_shinfo(skb)->gso_size && !nic->hw_tso)
+-		return nicvf_sq_append_tso(nic, sq, sq_num, qentry, skb);
++	if (skb_shinfo(skb)->gso_size && !nic->hw_tso) {
++		ret = nicvf_sq_append_tso(nic, sq, sq_num, qentry, skb);
++		goto unlock_exit;
++	}
+ 
+ 	/* Add SQ header subdesc */
+ 	nicvf_sq_add_hdr_subdesc(nic, sq, qentry, subdesc_cnt - 1,
+@@ -1426,7 +1429,7 @@ int nicvf_sq_append_skb(struct nicvf *nic, struct snd_queue *sq,
+ 				      DMA_TO_DEVICE, DMA_ATTR_SKIP_CPU_SYNC);
+ 	if (dma_mapping_error(&nic->pdev->dev, dma_addr)) {
+ 		nicvf_rollback_sq_desc(sq, qentry, subdesc_cnt);
+-		return 0;
++		goto unlock_exit;
+ 	}
+ 
+ 	nicvf_sq_add_gather_subdesc(sq, qentry, size, dma_addr);
+@@ -1453,7 +1456,7 @@ int nicvf_sq_append_skb(struct nicvf *nic, struct snd_queue *sq,
+ 			 */
+ 			nicvf_unmap_sndq_buffers(nic, sq, hdr_sqe, i);
+ 			nicvf_rollback_sq_desc(sq, qentry, subdesc_cnt);
+-			return 0;
++			goto unlock_exit;
+ 		}
+ 		nicvf_sq_add_gather_subdesc(sq, qentry, size, dma_addr);
+ 	}
+@@ -1465,14 +1468,16 @@ doorbell:
+ 	}
+ 
+ 	nicvf_sq_doorbell(nic, skb, sq_num, subdesc_cnt);
+-
++	spin_unlock_bh(&sq->lock);
+ 	return 1;
+ 
+ append_fail:
+ 	/* Use original PCI dev for debug log */
+ 	nic = nic->pnicvf;
+ 	netdev_dbg(nic->netdev, "Not enough SQ descriptors to xmit pkt\n");
+-	return 0;
++unlock_exit:
++	spin_unlock_bh(&sq->lock);
++	return ret;
+ }
+ 
+ static inline unsigned frag_num(unsigned i)
+@@ -1665,6 +1670,10 @@ void nicvf_update_sq_stats(struct nicvf *nic, int sq_idx)
+ /* Check for errors in the receive cmp.queue entry */
+ int nicvf_check_cqe_rx_errs(struct nicvf *nic, struct cqe_rx_t *cqe_rx)
+ {
++	/* "Disable" packet parsing in promiscuos mode.*/
++	if (nic->netdev->flags & IFF_PROMISC)
++		return 0;
++
+ 	if (netif_msg_rx_err(nic))
+ 		netdev_err(nic->netdev,
+ 			   "%s: RX error CQE err_level 0x%x err_opcode 0x%x\n",
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.h b/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
+index da4836601d8c..d411a7e40dfd 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
+@@ -270,6 +270,14 @@ struct snd_queue {
+ 	u64		*skbuff;
+ 	void		*desc;
+ 
++	/* xdp only ... */
++	spinlock_t      lock; /* Lock to serialize access to TX queue.*/
++	u64		*xdp_page;
++	u16		xdp_desc_cnt;
++	u16		xdp_free_cnt;
++	bool		is_xdp;
++	/* ... xdp only */
++
+ #define	TSO_HEADER_SIZE	128
+ 	/* For TSO segment's header */
+ 	char		*tso_hdrs;
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index 5d5cf77e343d..5669aede8591 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -60,6 +60,8 @@ struct bgx {
+ static struct bgx *bgx_vnic[MAX_BGX_THUNDER];
+ static int lmac_count; /* Total no of LMACs in system */
+ 
++static int (*bgx_port_ctx_set)(int node, int bgx, int lmac,
++			       int ctx, int dp_idx);
+ static int bgx_xaui_check_link(struct lmac *lmac);
+ 
+ /* Supported devices */
+@@ -237,6 +239,17 @@ void bgx_set_lmac_mac(int node, int bgx_idx, int lmacid, const u8 *mac)
+ }
+ EXPORT_SYMBOL(bgx_set_lmac_mac);
+ 
++void bgx_init_ctx_set_cb(const void *cb)
++{
++	bgx_port_ctx_set = cb;
++}
++
++void bgx_switch_ctx(int node, int bgx_idx, int lmacid, int ctx, int dp_idx)
++{
++	if (bgx_port_ctx_set)
++		bgx_port_ctx_set(node, bgx_idx, lmacid, ctx, dp_idx);
++}
++
+ void bgx_lmac_rx_tx_enable(int node, int bgx_idx, int lmacid, bool enable)
+ {
+ 	struct bgx *bgx = get_bgx(node, bgx_idx);
+@@ -500,6 +513,8 @@ struct thunder_bgx_com_s thunder_bgx_com = {
+ 	.set_mac_addr = bgx_set_lmac_mac,
+ 	.enable = bgx_enable_rx_tx,
+ 	.disable = bgx_disable_rx_tx,
++	.init_ctx_set_cb = bgx_init_ctx_set_cb,
++	.switch_ctx = bgx_switch_ctx,
+ };
+ EXPORT_SYMBOL(thunder_bgx_com);
+ 
+@@ -1536,7 +1551,6 @@ static struct pci_driver bgx_driver = {
+ static int __init bgx_init_module(void)
+ {
+ 	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
+-
+ 	return pci_register_driver(&bgx_driver);
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+index cc897bf1a39a..8a523e5274a1 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+@@ -251,6 +251,9 @@ struct thunder_bgx_com_s {
+ 			     int lmac_idx, const u8 *mac);
+ 	void (*enable)(int node, int bgx_idx, int lmac_idx);
+ 	void (*disable)(int node, int bgx_idx, int lmac_idx);
++	void (*init_ctx_set_cb)(const void *cb);
++	void (*switch_ctx)(int node, int bgx_idx, int lmac_idx,
++			   int ctx, int dp_idx);
+ };
+ 
+ extern struct thunder_bgx_com_s thunder_bgx_com;
+-- 
+2.14.1
+

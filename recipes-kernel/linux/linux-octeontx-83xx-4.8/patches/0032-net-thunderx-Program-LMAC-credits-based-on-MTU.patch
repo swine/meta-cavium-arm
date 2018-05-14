@@ -1,0 +1,56 @@
+From 46caf584c7532c65c75c8bac4851ee11feca64d0 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 15 Nov 2016 17:37:36 +0530
+Subject: [PATCH 032/375] net: thunderx: Program LMAC credits based on MTU
+
+Programming LMAC credits taking 9K frame size by default is incorrect
+as for an interface which is one of the many on the same BGX/QLM
+no of credits available will be less as Tx FIFO will be divided
+across all interfaces. So let's say a BGX with 40G interface and another
+BGX with multiple 10G, bandwidth of 10G interfaces will be effected when
+traffic is running on both 40G and 10G interfaces simultaneously.
+
+This patch fixes this issue by programming credits based on netdev's MTU.
+Also fixed configuring MTU to HW and added CQE counter for pkts which
+exceed this value.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.h | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.h b/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
+index 2e3c940c1093..9fd56a31e817 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
+@@ -172,6 +172,26 @@ enum CQ_TX_ERROP_E {
+ 	CQ_TX_ERROP_ENUM_LAST = 0x8a,
+ };
+ 
++struct cmp_queue_stats {
++	struct tx_stats {
++		u64 good;
++		u64 desc_fault;
++		u64 hdr_cons_err;
++		u64 subdesc_err;
++		u64 max_size_exceeded;
++		u64 imm_size_oflow;
++		u64 data_seq_err;
++		u64 mem_seq_err;
++		u64 lock_viol;
++		u64 data_fault;
++		u64 tstmp_conflict;
++		u64 tstmp_timeout;
++		u64 mem_fault;
++		u64 csum_overlap;
++		u64 csum_overflow;
++	} tx;
++} ____cacheline_aligned_in_smp;
++
+ enum RQ_SQ_STATS {
+ 	RQ_SQ_STATS_OCTS,
+ 	RQ_SQ_STATS_PKTS,
+-- 
+2.14.1
+

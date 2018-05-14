@@ -1,0 +1,2633 @@
+From 14fee62e94347fe450760655bdac483537783bfd Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Thu, 9 Mar 2017 15:06:22 -0800
+Subject: [PATCH 124/375] octeontx-sso: add sso and ssow support
+
+Add support for SSO co processor
+
+SSO is responsible for MBOX
+and does scheduling work to cores.
+
+Signed-off-by: Santosh Shukla <santosh.shukla@caviumnetworks.com>
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/Kconfig                |   18 +
+ drivers/net/ethernet/cavium/octeontx-83xx/Makefile |    4 +
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.c  |  244 ++++
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  |    5 +
+ drivers/net/ethernet/cavium/octeontx-83xx/sso.h    |  306 +++++
+ .../net/ethernet/cavium/octeontx-83xx/ssopf_main.c | 1367 ++++++++++++++++++++
+ .../ethernet/cavium/octeontx-83xx/ssowpf_main.c    |  601 +++++++++
+ 7 files changed, 2545 insertions(+)
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/sso.h
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index 45a5edc10983..1518c04a330e 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -95,7 +95,25 @@ config OCTEONTX_FPA_VF
+ config OCTEONTX_RST
+ 	tristate "OcteonTX Reset driver(RST)"
+ 	depends on 64BIT
++	default y
+ 	help
+ 	  Select this option to enable RST.
+ 
++config OCTEONTX_SSO_PF
++	tristate "OcteonTX SSO physical function driver(SSO_PF)"
++	depends on 64BIT && OCTEONTX_FPA_PF && OCTEONTX_FPA_VF && OCTEONTX_RST
++	default y
++	help
++	  Select this option to enable SSO Physical function.
++          SSO is a way to submit work from Cores.
++
++config OCTEONTX_SSOW_PF
++	tristate "OcteonTX SSOW physical function driver(SSOW_PF)"
++	depends on 64BIT
++	default y
++	help
++	  Select this option to enable SSOW Physical function.
++          SSOW is a way to get work for cores.
++
++
+ endif # NET_VENDOR_CAVIUM
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+index 06da4f766f57..874d94ad804d 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+@@ -5,7 +5,11 @@
+ obj-$(CONFIG_OCTEONTX_FPA_PF) += fpapf.o
+ obj-$(CONFIG_OCTEONTX_FPA_VF) += fpavf.o
+ obj-$(CONFIG_OCTEONTX_RST) += rst.o
++obj-$(CONFIG_OCTEONTX_SSO_PF) += ssopf.o
++obj-$(CONFIG_OCTEONTX_SSOW_PF) += ssowpf.o
+ 
+ fpapf-objs := fpapf_main.o
+ fpavf-objs := fpavf_main.o
+ rst-objs := rst_main.o
++ssopf-objs := ssopf_main.o octeontx_mbox.o
++ssowpf-objs := ssowpf_main.o
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c
+new file mode 100644
+index 000000000000..84d8d27d599f
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c
+@@ -0,0 +1,244 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/delay.h>
++
++#include "sso.h"
++#include "octeontx_mbox.h"
++
++/* Mbox operation timeout in milliseconds */
++#define MBOX_WAIT_TIME 100
++
++/* MBOX state */
++typedef enum {
++	MBOX_CHAN_STATE_REQ = 1,
++	MBOX_CHAN_STATE_RES = 0
++} mbox_chan_state_t;
++
++/* enum for channel specification */
++typedef enum {
++	MBOX_CHAN_OWN = 0, /* channel which we control */
++	MBOX_CHAN_PARTY = 1, /* channel which other party control */
++} mbox_chan_t;
++
++#define MBOX_VERSION 0x010000 /* 1.0.0 */
++
++/* macro return proper channel index depending on which channel we control and
++ * if we TX/RX
++ */
++#define MBOX_CHAN_IDX(_mbox, _own) \
++	(((((_mbox)->chan_own) & 0x1) + ((_own) & 0x1)) & 0x1)
++
++/* macro return the channell MBOX register address depending if we RX or TX */
++#define MBOX_REGISTER(_mbox, _own) \
++	((_mbox)->mbox_base + (MBOX_CHAN_IDX((_mbox), (_own)) * sizeof(uint64_t)))
++
++/* macro return the RAM MBOX address depending if we RX or TX */
++#define MBOX_RAM_ADDRESS(_mbox, _own) ( \
++	((_mbox)->ram_base + \
++	 (MBOX_CHAN_IDX(_mbox, _own) ? 0 : ((_mbox)->ram_size / 2))))
++
++void mbox_init(struct mbox *mbox, void *mbox_base, void *ram_base,
++	       size_t ram_size, mbox_side_t side)
++{
++	atomic64_t *ram_hdr_addr;
++	struct mbox_ram_hdr old_hdr;
++	struct mbox_ram_hdr new_hdr;
++
++	mbox->mbox_base = mbox_base;
++	mbox->ram_base = ram_base;
++	mbox->ram_size = ram_size;
++	mbox->hdr_party.val = 0;
++	mbox->chan_own =
++		(side == MBOX_SIDE_PF) ? 0 : 1;
++
++	/* skip remain setup if RAMBOX is missing */
++	if (!ram_base)
++		return;
++	ram_hdr_addr = MBOX_RAM_ADDRESS(mbox, MBOX_CHAN_OWN);
++
++	/* initialize the channel with tag left by last setup
++	 * the value of tag does not mather. What mathers is that new tag value
++	 * must be +1 so we notify that previous transactions are invalid
++	 */
++	old_hdr.val = atomic64_read(ram_hdr_addr);
++	mbox->tag_own = (old_hdr.tag + 2) & (~0x1ul); /* next even number */
++	new_hdr.val = 0;
++	new_hdr.tag = mbox->tag_own;
++	atomic64_set(ram_hdr_addr, new_hdr.val);
++}
++
++int mbox_send(struct mbox *mbox, struct mbox_hdr *hdr, const void *txmsg,
++	      size_t txsize, void *rxmsg, size_t rxsize)
++{
++	atomic64_t *ram_hdr_addr = MBOX_RAM_ADDRESS(mbox, MBOX_CHAN_OWN);
++	 /* body is right after hdr */
++	void *ram_body_addr =
++	    (void *)((uint8_t *)ram_hdr_addr + sizeof(struct mbox_ram_hdr));
++	void *mbox_reg = MBOX_REGISTER(mbox, MBOX_CHAN_OWN);
++	struct mbox_ram_hdr ram_hdr;
++	size_t wait;
++	size_t len;
++
++	/* cannot send msg if RAMBOX is missing */
++	if (!mbox->ram_base)
++		return -1;
++
++	if (txsize > mbox->ram_size)
++		return -1;
++
++	/* \TODO we should check the channel state before overwriting the
++	 * message - full sequence will came in next commit
++	 */
++
++	/* copy msg body first */
++	if (txmsg)
++		memcpy(ram_body_addr, txmsg, txsize);
++
++	/* prepare new ram_hdr */
++	ram_hdr.val = 0;
++	ram_hdr.chan_state = MBOX_CHAN_STATE_REQ;
++	ram_hdr.coproc = hdr->coproc;
++	ram_hdr.msg = hdr->msg;
++	ram_hdr.vfid = hdr->vfid;
++	ram_hdr.tag = ++(mbox->tag_own);
++	ram_hdr.len = txsize;
++
++	/* write the msg header and at the same time change the channel state */
++	atomic64_set(ram_hdr_addr, ram_hdr.val);
++	/* notify about new msg - write to MBOX reg will cause IRQ generation */
++	writeq_relaxed(MBOX_TRIGGER_NORMAL, mbox_reg);
++
++	/* wait for response */
++	wait = MBOX_WAIT_TIME;
++	while (wait) {
++		usleep_range(10000, 20000);
++		ram_hdr.val = atomic64_read(ram_hdr_addr);
++		if (ram_hdr.chan_state == MBOX_CHAN_STATE_RES)
++			break;
++		wait -= 10;
++	}
++	if (!wait)
++		return -1; /* timeout */
++	if ((mbox->tag_own + 1) != ram_hdr.tag)
++		return -1; /* tag mismatch */
++	(mbox->tag_own)++;
++
++	len = min_t(size_t, (size_t)ram_hdr.len, rxsize);
++	memcpy(rxmsg, ram_body_addr, len);
++	hdr->res_code = ram_hdr.res_code;
++
++	return len;
++}
++
++int mbox_receive(struct mbox *mbox, struct mbox_hdr *hdr, void *rxmsg,
++		 size_t rxsize)
++{
++	atomic64_t *ram_hdr_addr = MBOX_RAM_ADDRESS(mbox, MBOX_CHAN_PARTY);
++	/* body is right after hdr */
++	void *ram_body_addr =
++		(void *)((uint8_t *)ram_hdr_addr + sizeof(struct mbox_ram_hdr));
++	void *mbox_reg = MBOX_REGISTER(mbox, MBOX_CHAN_PARTY);
++	struct mbox_ram_hdr ram_hdr;
++	u64 trg_val;
++	size_t len;
++
++	/* clear the mbox_hdr fields */
++	memset(hdr, 0, sizeof(*hdr));
++
++	/* check if this is normal msg delivery of out of band request */
++	trg_val = readq_relaxed(mbox_reg);
++	if (trg_val != MBOX_TRIGGER_NORMAL) {
++		if (trg_val & MBOX_TRIGGER_OOB_RES)
++			return -1; /* no msg nor OOB */
++
++		mbox->oob = trg_val;
++		hdr->oob = trg_val;
++		hdr->res_code = MBOX_RET_SUCCESS;
++		return 0; /* return only OOB info, no msg or its body */
++	}
++	mbox->oob = MBOX_TRIGGER_NORMAL; /* no OOB */
++
++	/* Non-OOB messages require RAMBOX */
++	if (!mbox->ram_base)
++		return -1;
++
++	/* read the header to see if there is a message for us */
++	ram_hdr.val = atomic64_read(ram_hdr_addr);
++	if (ram_hdr.chan_state != MBOX_CHAN_STATE_REQ)
++		return -1;
++
++	/* store the received header for reply */
++	mbox->hdr_party = ram_hdr;
++
++	/* also update the hdr so application can use it */
++	hdr->vfid = ram_hdr.vfid;
++	hdr->coproc = ram_hdr.coproc;
++	hdr->msg = ram_hdr.msg;
++	hdr->oob = MBOX_TRIGGER_NORMAL; /* no OOB */
++	hdr->res_code = MBOX_RET_SUCCESS;
++
++	/* copy the msg body */
++	len = min_t(size_t, (size_t)ram_hdr.len, rxsize);
++	memcpy(rxmsg, ram_body_addr, len);
++	return len;
++}
++
++int mbox_reply(struct mbox *mbox, uint8_t res_code, const void *txmsg,
++	       size_t txsize)
++{
++	atomic64_t *ram_hdr_addr = MBOX_RAM_ADDRESS(mbox, MBOX_CHAN_PARTY);
++	/* body is right after hdr */
++	void *ram_body_addr =
++		(void *)((uint8_t *)ram_hdr_addr + sizeof(struct mbox_ram_hdr));
++	void *mbox_reg = MBOX_REGISTER(mbox, MBOX_CHAN_PARTY);
++	struct mbox_ram_hdr ram_hdr;
++
++	/* \TODO we should check the channel state before overwriting the
++	 * message - full sequence will came in next commit
++	 */
++
++	/* check if last msg was OOB */
++	if (mbox->oob != MBOX_TRIGGER_NORMAL) {
++		/* only OOB use mbox register for reply so there is no race */
++		writeq_relaxed(mbox->oob | MBOX_TRIGGER_OOB_RES, mbox_reg);
++		mbox->oob = MBOX_TRIGGER_NORMAL;
++		return 0; /* return with success */
++	}
++
++	/* Non-OOB messages require RAMBOX */
++	if (!mbox->ram_base)
++		return -1;
++
++	/* copy msg body first to reply RAM channel
++	 * truncate the message if it is too big
++	 */
++	if (txmsg) {
++		txsize = min(txsize, mbox->ram_size);
++		memcpy(ram_body_addr, txmsg, txsize);
++	} else {
++		txsize = 0;
++	}
++
++	/* prepare new hdr by copy of most fields and update some of them */
++	ram_hdr = mbox->hdr_party;
++	ram_hdr.chan_state = MBOX_CHAN_STATE_RES;
++	ram_hdr.tag = mbox->hdr_party.tag + 1;
++	ram_hdr.len = txsize;
++	ram_hdr.res_code = res_code;
++
++	/* change the channel state and notify about new msg - write to MBOX
++	 * register is just for IRQ generation, the value written there is
++	 * not so important
++	 */
++	atomic64_set(ram_hdr_addr, ram_hdr.val);
++
++	return 0;
++}
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index 858aa8176a0f..ab3c536a237a 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -48,6 +48,11 @@ enum coproc_t {
+ #define MBOX_RET_INVALID	0x2
+ #define MBOX_RET_INTERNAL_ERR	0x3
+ 
++/* magic values used for normal and oob data notification */
++#define MBOX_TRIGGER_NORMAL	0x00 /* normal msg transport */
++#define MBOX_TRIGGER_OOB_RESET	0x01 /* OOB reset request */
++#define MBOX_TRIGGER_OOB_RES	0x80 /* OOB response mask */
++
+ #define MBOX_MAX_MSG_SIZE	1024
+ 
+ /* Structure used for mbox synchronization
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/sso.h b/drivers/net/ethernet/cavium/octeontx-83xx/sso.h
+new file mode 100644
+index 000000000000..033928782669
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/sso.h
+@@ -0,0 +1,306 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef SSO_H
++#define SSO_H
++
++#include <linux/pci.h>
++#include "octeontx.h"
++
++/* PCI DEV IDs */
++#define PCI_DEVICE_ID_OCTEONTX_SSO_PF	0xA04A
++#define PCI_DEVICE_ID_OCTEONTX_SSO_VF	0xA04B
++#define PCI_DEVICE_ID_OCTEONTX_SSOW_PF	0xA04C
++#define PCI_DEVICE_ID_OCTEONTX_SSOW_VF	0xA04D
++
++#define SSO_MAX_VF			64
++#define SSOW_MAX_VF			32
++
++#define PCI_SSO_PF_CFG_BAR		0
++#define PCI_SSO_PF_MSIX_BAR		4
++#define SSO_PF_MSIX_COUNT		4
++
++#define PCI_SSO_VF_CFG_BAR		0
++#define PCI_SSO_VF_ADD_WORK_BAR		2
++#define PCI_SSO_VF_MSIX_BAR		4
++#define SSO_VF_MSIX_COUNT		1
++
++#define PCI_SSOW_VF_CFG_BAR		0
++#define PCI_SSOW_VF_LMT_BAR		2
++#define PCI_SSOW_VF_MBOX_BAR		4
++
++#define SSO_VF_OFFSET(x)		(0x800000000 | (0x100000 * (x)))
++#define SSO_VF_CFG_SIZE			0x100000
++
++#define SSOW_VF_BASE(x)			(0x861800000000ULL | (0x100000 * (x)))
++#define SSOW_VF_SIZE			0x100000
++
++/* SSO PF register offsets */
++#define SSO_PF_CONST			0x1000
++#define SSO_PF_CONST1			0x1008
++#define SSO_PF_WQ_INT_PC		0x1020
++#define SSO_PF_NW_TIM			0x1028
++#define	SSO_PF_NOS_CNT			0x1040
++#define SSO_PF_AW_WE			0x1080
++#define SSO_PF_WS_CFG			0x1088
++#define SSO_PF_PAGE_CNT			0x1090
++#define	SSO_PF_GWE_CFG			0x1098
++#define SSO_PF_GWE_RANDOM		0x10B0
++#define SSO_PF_AW_STATUS		0x10E0
++#define SSO_PF_AW_CFG			0x10F0
++#define SSO_PF_RESET			0x10F8
++#define SSO_PF_ACTIVE_CYCLES0		0x1100
++#define SSO_PF_ACTIVE_CYCLES1		0x1108
++#define SSO_PF_ACTIVE_CYCLES2		0x1110
++#define SSO_PF_BIST_STATUS0		0x1200
++#define SSO_PF_BIST_STATUS1		0x1208
++#define SSO_PF_BIST_STATUS2		0x1210
++#define SSO_PF_ERR0			0x1220
++#define SSO_PF_ERR0_W1S			0x1228
++#define SSO_PF_ERR0_ENA_W1C		0x1230
++#define SSO_PF_ERR0_ENA_W1S		0x1238
++#define SSO_PF_ERR1			0x1240
++#define SSO_PF_ERR1_W1S			0x1248
++#define SSO_PF_ERR1_ENA_W1C		0x1250
++#define SSO_PF_ERR1_ENA_W1S		0x1258
++#define SSO_PF_ERR2			0x1260
++#define SSO_PF_ERR2_W1S			0x1268
++#define SSO_PF_ERR2_ENA_W1C		0x1270
++#define SSO_PF_ERR2_ENA_W1S		0x1278
++#define SSO_PF_UNMAP_INFO		0x12f0
++#define SSO_PF_UNMAP_INFO2		0x1300
++#define SSO_PF_MBOX_INT			0x1400
++#define SSO_PF_MBOX_INT_W1S		0x1440
++#define SSO_PF_MBOX_ENA_W1C		0x1480
++#define SSO_PF_MBOX_ENA_W1S		0x14C0
++#define SSO_PF_AW_INP_CTL		0x2070
++#define SSO_PF_AW_ADD			0x2080
++#define SSO_PF_AW_READ_ARB		0x2090
++#define SSO_PF_AW_TAG_REQ_PC		0x20A0
++#define SSO_PF_AW_TAG_LATENCY_PC	0x20A8
++#define SSO_PF_XAQ_REQ_PC		0x20B0
++#define SSO_PF_XAQ_LATENCY_PC		0x20B8
++#define SSO_PF_TAQ_CNT			0x20C0
++#define SSO_PF_TAQ_ADD			0x20E0
++#define SSO_PF_XAQ_AURA			0x2100
++#define SSO_PF_XAQ_GMCTL		0x2110
++#define SSO_PF_MAPX(x)			(0x4000 | ((x) << 3))
++#define SSO_PF_XAQX_HEAD_PTR(x)		(0x80000 | ((x) << 3))
++#define SSO_PF_XAQX_TAIL_PTR(x)		(0x90000 | ((x) << 3))
++#define SSO_PF_XAQX_HEAD_NEXT(x)	(0xA0000 | ((x) << 3))
++#define SSO_PF_XAQX_TAIL_NEXT(x)	(0xB0000 | ((x) << 3))
++#define SSO_PF_TIAQX_STATUS(x)		(0xC0000 | ((x) << 3))
++#define SSO_PF_TOAQX_STATUS(x)		(0xD0000 | ((x) << 3))
++#define SSO_PF_GRPX_IAQ_THR(x)		(0x20000000 | ((x) << 20))
++#define SSO_PF_GRPX_TAQ_THR(x)		(0x20000100 | ((x) << 20))
++#define SSO_PF_GRPX_PRI(x)		(0x20000200 | ((x) << 20))
++#define SSO_PF_GRPX_XAQ_LIMIT(x)	(0x20000220 | ((x) << 20))
++#define SSO_PF_VHGRPX_MBOX(x, y)	(0x20000400 | ((x) << 20) | \
++					 ((y) << 3))
++#define SSO_PF_GRPX_WS_PC(x)		(0x20001000 | ((x) << 20))
++#define SSO_PF_GRPX_EXT_PC(x)		(0x20001100 | ((x) << 20))
++#define SSO_PF_GRPX_WA_PC(x)		(0x20001200 | ((x) << 20))
++#define SSO_PF_GRPX_TS_PC(x)		(0x20001300 | ((x) << 20))
++#define SSO_PF_GRPX_DS_PC(x)		(0x20001400 | ((x) << 20))
++#define SSO_PF_HWSX_ARB(x)		(0x40000100 | ((x) << 20))
++#define SSO_PF_HWSX_GMCTL(x)		(0x40000200 | ((x) << 20))
++#define SSO_PF_HWSX_SX_GRPMASK(x, y)	(0x40001000 | ((x) << 20) | \
++					 (((y) & 1) << 5))
++#define SSO_PF_IPL_FREEX(x)		(0x80000000 | ((x) << 3))
++#define SSO_PF_IPL_IAQ(x)		(0x80040000 | ((x) << 3))
++#define SSO_PF_IPL_DESCHED(x)		(0x80060000 | ((x) << 3))
++#define SSO_PF_IPL_CONF(x)		(0x80080000 | ((x) << 3))
++#define SSO_PF_IENTX_TAG(x)		(0xA0000000 | ((x) << 3))
++#define SSO_PF_IENTX_GRP(x)		(0xA0020000 | ((x) << 3))
++#define SSO_PF_IENTX_PENDTAG(x)		(0xA0040000 | ((x) << 3))
++#define SSO_PF_IENTX_LINKS(x)		(0xA0060000 | ((x) << 3))
++#define SSO_PF_IENTX_QLINKS(x)		(0xA0080000 | ((x) << 3))
++#define SSO_PF_IENTX_WQP(x)		(0xA00A0000 | ((x) << 3))
++#define SSO_PF_TAQX_LINK(x)		(0xC0000000 | ((x) << 12))
++#define SSO_PF_TAQX_WAEX_TAG(x, y)	(0xD0000000 | ((x) << 12) | ((y) << 4))
++#define SSO_PF_TAQX_WAEX_WQP(x, y)	(0xD0000008 | ((x) << 12) | ((y) << 4))
++
++/* SSO VF register offsets */
++#define SSO_VF_VHGRPX_QCTL(x)		(0x10ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_INT(x)		(0x100ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_INT_W1S(x)	(0x108ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_INT_ENA_W1S(x)	(0x110ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_INT_ENA_W1C(x)	(0x118ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_INT_THR(x)	(0x140ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_INT_CNT(x)	(0x180ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_XAQ_CNT(x)	(0x1B0ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_AQ_CNT(x)		(0x1C0ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_AQ_THR(x)		(0x1E0ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_PF_MBOXX(x, y)	(0x200ULL | ((x) << 20) | ((y) << 3))
++
++/* bar2 */
++#define SSO_VF_VHGRPX_OP_ADD_WORK0(x)	(0x00ULL | ((x) << 20))
++#define SSO_VF_VHGRPX_OP_ADD_WORK1(x)	(0x08ULL | ((x) << 20))
++
++/* SSOW VF register offsets */
++#define SSOW_VF_VHWSX_GRPMSK_CHGX(x, y) (0x80ULL | ((x) << 20) | ((y) << 3))
++#define SSOW_VF_VHWSX_TAG(x)		(0x300ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_WQP(x)		(0x308ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_LINKS(x)		(0x310ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_PENDTAG(x)	(0x340ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_PENDWQP(x)	(0x348ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_SWTP(x)		(0x400ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_ALLOC_WE(x)	(0x410ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_UPD_WQP_GRP0(x)	(0x440ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_UPD_WQP_GRP1(x)	(0x448ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_UNTAG(x)	(0x490ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_CLR(x)	(0x820ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_DESCHED(x)	(0x860ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_DESCHED_NOSCH(x)	(0x870ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_DESCHED(x)	(0x8C0ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_NOSCHED(x)	(0x8D0ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTP_SET(x)	(0xC20ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_NORM(x)	(0xC80ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_FULL0(x)	(0xCA0ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_SWTAG_FULL1(x)	(0xCA8ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_CLR_NSCHED(x)	(0x10000ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_GET_WORK0(x)	(0x80000ULL | ((x) << 20))
++#define SSOW_VF_VHWSX_OP_GET_WORK1(x)	(0x80008ULL | ((x) << 20))
++
++#define SSO_CONST_GRP_SHIFT		0
++#define SSO_CONST_GRP_MASK		0xffff
++#define SSO_CONST_IUE_SHIFT		16
++#define SSO_CONST_IUE_MASK		0xffff
++#define SSO_CONST_HWS_SHIFT		56
++#define SSO_CONST_HWS_MASK		0xff
++
++#define SSO_CONST1_XAQ_BUF_SIZE_SHIFT	0
++#define SSO_CONST1_XAQ_BUF_SIZE_MASK	0xffff
++#define SSO_CONST1_XAE_WAES_SHIFT	16
++#define SSO_CONST1_XAE_WAES_MASK	0xffff
++#define SSO_CONST1_MAPS_SHIFT		32
++#define SSO_CONST1_MAPS_MASK		0xfff
++
++#define SSO_AW_WE_FREE_CNT_SHIFT        0
++#define SSO_AW_WE_FREE_CNT_MASK         0x1fff
++#define SSO_AW_WE_RSVD_CNT_SHIFT        16
++#define SSO_AW_WE_RSVD_CNT_MASK         0x1fff
++
++#define SSO_TAQ_CNT_FREE_CNT_SHIFT      0
++#define SSO_TAQ_CNT_FREE_CNT_MASK       0x7ff
++#define SSO_TAQ_CNT_RSVD_CNT_SHIFT      16
++#define SSO_TAQ_CNT_RSVD_CNT_MASK       0x7ff
++
++#define SSO_GRP_IAQ_THR_RSVD_SHIFT      0
++#define SSO_GRP_IAQ_THR_RSVD_MASK       0x1fff
++#define SSO_GRP_IAQ_THR_MAX_SHIFT       32
++#define SSO_GRP_IAQ_THR_MAX_MASK        0x1fff
++
++#define SSO_AW_ADD_RSVD_SHIFT           16
++#define SSO_AW_ADD_RSVD_MASK            0x3fff
++
++#define SSO_GRP_TAQ_THR_RSVD_SHIFT      0
++#define SSO_GRP_TAQ_THR_RSVD_MASK       0x7ff
++#define SSO_GRP_TAQ_THR_MAX_SHIFT       32
++#define SSO_GRP_TAQ_THR_MAX_MASK        0x7ff
++
++#define SSO_TAQ_ADD_RSVD_SHIFT          16
++#define SSO_TAQ_ADD_RSVD_MASK           0x1fff
++
++#define SSO_IENT_GRP_GRP_SHIFT		48
++#define SSO_IENT_GRP_GRP_MASK		0xff
++
++#define SSO_IENT_MAX			1024
++
++#define SSO_ERR0			((0xffffffULL << 32) | 0xfff)
++#define SSO_ERR1			0xffff
++#define SSO_ERR2		((0xffffULL << 32) | (0x7ULL << 28) | 0x3fff)
++#define SSO_MBOX			0xffffffffffffffffULL
++
++#define SSO_MAP_GMID(x)			(((x) & 0xffff) << 0)
++#define SSO_MAP_GGRP(x)			(((x) & 0x3ff) << 16)
++#define SSO_MAP_VHGRP(x)		(((0ull | (x)) & 0x3fULL) << 32)
++#define SSO_MAP_VALID(x)		(((0ull | (x)) & 0x1ULL) << 63)
++
++#define SSO_VF_INT			0x100000000000000fULL
++#define SSOW_RAM_MBOX_SIZE		0x10000
++#define SSOW_RAM_MBOX(x)		(0x1400000 | ((x) << 16))
++
++struct ssopf_vf {
++	struct octeontx_pf_vf	domain;
++	struct mbox		mbox;
++	u64			grp_mask;
++};
++
++struct ssopf {
++	struct pci_dev		*pdev;
++	void __iomem		*reg_base;
++	int			id;
++	struct msix_entry	*msix_entries;
++	struct list_head	list;
++
++	int			total_vfs;
++	int			vfs_in_use;
++#define SSO_SRIOV_ENABLED	0x1
++	u32			flags;
++
++	u32			xaq_buf_size;
++	u32			num_iue;
++	struct ssopf_vf		vf[SSO_MAX_VF];
++	struct work_struct	mbox_work;
++};
++
++struct ssopf_com_s {
++	u64 (*create_domain)(u32, u16, u32, void *, void *,
++			     struct kobject *kobj, char *g_name);
++	int (*free_domain)(u32, u16);
++	int (*reset_domain)(u32, u16);
++	int (*send_message)(u32, u16, struct mbox_hdr *hdr,
++			    union mbox_data *, union mbox_data *);
++	int (*set_mbox_ram)(u32 node, u16 domain_id,
++			    void *mbox_addr, u64 mbox_size);
++	int (*get_vf_count)(u32 id);
++};
++
++extern struct ssopf_com_s ssopf_com;
++
++struct ssowpf_vf {
++	struct octeontx_pf_vf	domain;
++	void			*ram_mbox_addr;
++};
++
++struct ssowpf {
++	struct pci_dev		*pdev;
++	void __iomem		*reg_base;
++	int			id;
++	struct list_head	list;
++
++	int			total_vfs;
++	int			vfs_in_use;
++#define SSOW_SRIOV_ENABLED	0x1
++	u32			flags;
++
++	struct ssowpf_vf	vf[SSOW_MAX_VF];
++};
++
++struct ssowpf_com_s {
++	int (*create_domain)(u32, u16, u32, void *, void *,
++			     struct kobject *kobj, char *g_name);
++	int (*free_domain)(u32, u16);
++	int (*reset_domain)(u32, u16, u64);
++	int (*receive_message)(u32 id, u16 domain_id,
++			       struct mbox_hdr *hdr,
++			       union mbox_data *req,
++			       union mbox_data *resp);
++	int (*get_vf_count)(u32 id);
++	int (*get_ram_mbox_addr)(u32 node, u16 domain_id,
++				 void **ram_mbox_addr);
++};
++
++extern struct ssowpf_com_s ssowpf_com;
++
++int sso_pf_set_value(u32 id, u64 offset, u64 val);
++int sso_pf_get_value(u32 id, u64 offset, u64 *val);
++int sso_vf_get_value(u32 id, int vf_id, u64 offset, u64 *val);
++
++#endif
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+new file mode 100644
+index 000000000000..27a67059f8e8
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+@@ -0,0 +1,1367 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/types.h>
++#include <linux/stat.h>
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/delay.h>
++
++#include "sso.h"
++#include "fpa.h"
++#include "rst.h"
++
++#define DRV_NAME "octeontx-sso"
++#define DRV_VERSION "0.1"
++
++static atomic_t sso_count = ATOMIC_INIT(0);
++static DEFINE_SPINLOCK(octeontx_sso_devices_lock);
++static LIST_HEAD(octeontx_sso_devices);
++static DEFINE_MUTEX(pf_mbox_lock);
++
++static struct fpapf_com_s *fpapf;
++static struct fpavf_com_s *fpavf;
++static struct fpavf *fpa;
++static struct rst_com_s *rst;
++
++void *ram_mbox_buf;	/* Temp backing buff for rambox */
++
++static unsigned int max_grps = 32;
++module_param(max_grps, uint, 0444);
++MODULE_PARM_DESC(max_grps,
++		 "Limit the number of sso groups(0=maximum number of groups");
++static unsigned int max_events = 100000;
++module_param(max_events, int, 0444);
++MODULE_PARM_DESC(max_events,
++		 "Number of DRAM event entries");
++
++#define MAX_SSO_RST_TIMEOUT_US  3000
++
++#define CLKS2NSEC(c, sclk_freq)		((c) * NSEC_PER_SEC / (sclk_freq))
++#define NSEC2CLKS(ns, sclk_freq)	(((ns) * (sclk_freq)) / NSEC_PER_SEC)
++
++#define MIN_NW_TIM_CLK	1024
++#define MAX_NW_TIM_CLK	(1024 * 1024)	/* nw_tim is 10 bit wide ~ 1024*/
++
++/* In Cavium OcteonTX SoCs, all accesses to the device registers are
++ * implicitly strongly ordered.
++ * So writeq_relaxed() and readq_relaxed() are safe to use
++ * with out any memory barriers.
++ */
++
++/* Register read/write APIs */
++static void sso_reg_write(struct ssopf *sso, u64 offset, u64 val)
++{
++	writeq_relaxed(val, sso->reg_base + offset);
++}
++
++static u64 sso_reg_read(struct ssopf *sso, u64 offset)
++{
++	return readq_relaxed(sso->reg_base + offset);
++}
++
++/* Caller is responsible for locks */
++static struct ssopf_vf *get_vf(struct ssopf *sso, u16 domain_id,
++			       u16 subdomain_id, size_t *vf_idx)
++
++{
++	size_t i;
++
++	for (i = 0; i < sso->total_vfs; i++) {
++		if (sso->vf[i].domain.in_use &&
++		    sso->vf[i].domain.domain_id == domain_id &&
++		    sso->vf[i].domain.subdomain_id == 0) {
++			if (vf_idx)
++				*vf_idx = i;
++			return &sso->vf[i];
++		}
++	}
++
++	return NULL;
++}
++
++static u64 sso_pf_min_tmo(u8 node)
++{
++	u64 ns, sclk_freq;
++
++	/* Get SCLK */
++	sclk_freq = rst->get_sclk_freq(node);
++
++	/* Convert min_nw_tim to ns */
++	ns = CLKS2NSEC(MIN_NW_TIM_CLK, sclk_freq);
++
++	return ns;
++}
++
++static u64 sso_pf_max_tmo(u8 node)
++{
++	u64 ns, sclk_freq;
++
++	/* Get SCLK */
++	sclk_freq = rst->get_sclk_freq(node);
++
++	/* Convert max_nw_tim to ns */
++	ns = CLKS2NSEC(MAX_NW_TIM_CLK, sclk_freq);
++
++	return ns;
++}
++
++static u64 sso_pf_get_tmo(struct ssopf *sso)
++{
++	u64 ns, sclk_freq;
++	u64 nw_clk;
++
++	/* Get current tick */
++	nw_clk = sso_reg_read(sso, SSO_PF_NW_TIM) & 0x3ff;
++
++	/* Get SCLK */
++	sclk_freq = rst->get_sclk_freq(sso->id);
++
++	/* Convert current tick to ns */
++	ns = CLKS2NSEC(nw_clk, sclk_freq);
++	return ns;
++}
++
++static void sso_pf_set_tmo(struct ssopf *sso, u64 ns)
++{
++	u64 sclk_freq, nw_clk;
++
++	/* Get SCLK */
++	sclk_freq = rst->get_sclk_freq(sso->id);
++
++	/* Transalate nsec to clock */
++	nw_clk = NSEC2CLKS(ns, sclk_freq);
++
++	/* write new clk value to Bit pos 9:0 of SSO_NW_TIM */
++	sso_reg_write(sso, SSO_PF_NW_TIM, nw_clk & 0x3ff);
++}
++
++static u32 sso_pf_ns_to_iter(struct ssopf *sso, u32 wait_ns)
++{
++	u64 sclk_freq, new_tmo, cur_tmo;
++	u32 getwork_iter;
++
++	/* Get SCLK */
++	sclk_freq = rst->get_sclk_freq(sso->id);
++
++	/* Transalate nsec to clock */
++	new_tmo = NSEC2CLKS(wait_ns, sclk_freq);
++
++	/* 2. Get NW_TIM clock and translate to sclk_freq */
++	cur_tmo = sso_reg_read(sso, SSO_PF_NW_TIM) & 0x3ff;
++	cur_tmo *= PLL_REF_CLK;
++
++	if (new_tmo > cur_tmo)
++		getwork_iter = (new_tmo - cur_tmo) / cur_tmo;
++	else
++		getwork_iter = 1; /* min 1 iter */
++
++	return getwork_iter;
++}
++
++static void identify(struct ssopf_vf *vf, u16 domain_id, u16 subdomain_id)
++{
++	u64 reg = (((u64)subdomain_id << 16) | domain_id);
++
++	writeq_relaxed(reg, vf->domain.reg_base + SSO_VF_VHGRPX_AQ_THR(0));
++}
++
++int ssopf_master_send_message(struct mbox_hdr *hdr,
++			      union mbox_data *req,
++			      union mbox_data *resp,
++			      void *master_data,
++			      void *add_data)
++{
++	struct ssopf *sso = master_data;
++	int ret;
++
++	if (hdr->coproc == FPA_COPROC) {
++		ret = fpapf->receive_message(
++			sso->id, FPA_SSO_XAQ_GMID,
++			hdr, req, resp, add_data);
++	} else {
++		dev_err(&sso->pdev->dev, "SSO messahe dispatch, wrong VF type\n");
++		ret = -1;
++	}
++
++	return ret;
++}
++
++static struct octeontx_master_com_t sso_master_com = {
++	.send_message = ssopf_master_send_message,
++};
++
++static int sso_pf_remove_domain(u32 id, u16 domain_id)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++	int i, vf_idx;
++	u64 reg;
++
++	vf_idx = 0;
++	reg = 0;
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < sso->total_vfs; i++) {
++		if (sso->vf[i].domain.in_use &&
++		    sso->vf[i].domain.domain_id == domain_id) {
++			sso->vf[i].domain.in_use = 0;
++			sso->vf[i].domain.master_data = NULL;
++			sso->vf[i].domain.master = NULL;
++
++			dev_info(&sso->pdev->dev, "Free vf[%d] from domain_id:%d subdomain_id:%d\n",
++				 i, sso->vf[i].domain.domain_id, vf_idx);
++			memset(&sso->vf[i], 0, sizeof(struct octeontx_pf_vf));
++			/* Unmap groups */
++			reg = SSO_MAP_VALID(0) | SSO_MAP_VHGRP(i) |
++				SSO_MAP_GGRP(0) |
++				SSO_MAP_GMID(sso->vf[i].domain.gmid);
++			sso_reg_write(sso, SSO_PF_MAPX(i), reg);
++
++			vf_idx++;
++			iounmap(sso->vf[i].domain.reg_base);
++			sso->vf[i].domain.in_use = false;
++		}
++	}
++
++	sso->vfs_in_use -= vf_idx;
++	spin_unlock(&octeontx_sso_devices_lock);
++	return 0;
++}
++
++static u64 sso_pf_create_domain(u32 id, u16 domain_id,
++				u32 num_grps, void *master, void *master_data,
++				struct kobject *kobj, char *g_name)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++	u64 i, reg;
++	resource_size_t vf_start;
++	int vf_idx;
++	unsigned long grp_mask = 0;
++	struct pci_dev *virtfn;
++
++	reg = 0;
++	vf_idx = 0;
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return 0;
++	}
++
++	for (i = 0; i < sso->total_vfs; i++) {
++		if (sso->vf[i].domain.in_use) {
++			continue;
++		} else {
++			sso->vf[i].domain.domain_id = domain_id;
++			sso->vf[i].domain.subdomain_id = vf_idx;
++			sso->vf[i].domain.gmid = get_gmid(domain_id);
++
++			sso->vf[i].domain.in_use = 1;
++			sso->vf[i].domain.master = master;
++			sso->vf[i].domain.master_data = master_data;
++
++			/* Map num_grps resources
++			 * - Assumes all the ggrp belong to one domain
++			 */
++			reg = SSO_MAP_VALID(1ULL) |
++			     SSO_MAP_VHGRP(i) |
++			     SSO_MAP_GGRP(sso->vf[i].domain.subdomain_id) |
++			     SSO_MAP_GMID(sso->vf[i].domain.gmid);
++			sso_reg_write(sso, SSO_PF_MAPX(i), reg);
++
++			/* Configure default prio that can later be changed by
++			 * SSO_GRP_SET_PRIORITY call from userspace
++			 */
++			reg = ((0x3fULL) << 16) | ((0xfULL) << 8) | (0ULL);
++			sso_reg_write(sso, SSO_PF_GRPX_PRI(i), reg);
++			vf_start = pci_resource_start(sso->pdev,
++						      PCI_SSO_PF_CFG_BAR);
++			vf_start += SSO_VF_OFFSET(i);
++
++			sso->vf[i].domain.reg_base =
++				ioremap(vf_start, SSO_VF_CFG_SIZE);
++
++			if (kobj && g_name) {
++				virtfn = pci_get_domain_bus_and_slot(
++						pci_domain_nr(sso->pdev->bus),
++						pci_iov_virtfn_bus(sso->pdev,
++								   i),
++						pci_iov_virtfn_devfn(sso->pdev,
++								     i));
++				if (!virtfn)
++					break;
++				sysfs_add_link_to_group(kobj, g_name,
++							&virtfn->dev.kobj,
++							virtfn->dev.kobj.name);
++			}
++			/* write did/sdid in temp register for vf probe
++			 * to get to know his vf_idx/subdomainid
++			 * this mechanism is simmilar to all VF types
++			 */
++			identify(&sso->vf[i], domain_id, vf_idx);
++
++			mbox_init(&sso->vf[i].mbox,
++				  sso->reg_base + SSO_PF_VHGRPX_MBOX(i, 0),
++				  NULL, 0,
++				  MBOX_SIDE_PF);
++
++			vf_idx++;
++			set_bit(i, &grp_mask);
++			if (vf_idx == num_grps) {
++				sso->vfs_in_use += num_grps;
++				break;
++			}
++		}
++	}
++
++	spin_unlock(&octeontx_sso_devices_lock);
++
++	if (vf_idx != num_grps) {
++		sso_pf_remove_domain(id, domain_id);
++		return 0;
++	}
++
++	return grp_mask;
++}
++
++static int sso_pf_send_message(u32 id, u16 domain_id,
++			       struct mbox_hdr *hdr,
++			       union mbox_data *req, union mbox_data *resp)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++	int i;
++	int vf_idx = -1;
++	int ret;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -ENODEV;
++	}
++
++	/* locate the SSO VF master of domain (vf_idx == 0) */
++	for (i = 0; i < sso->total_vfs; i++) {
++		if (sso->vf[i].domain.in_use &&
++		    sso->vf[i].domain.domain_id == domain_id &&
++		    sso->vf[i].domain.subdomain_id == 0) {
++			vf_idx = i;
++			break;
++		}
++	}
++
++	spin_unlock(&octeontx_sso_devices_lock);
++
++	if (vf_idx == -1)
++		return -ENODEV; /* SSOVF for domain not found */
++
++	ret = mbox_send(
++		&sso->vf[vf_idx].mbox, hdr,
++		req, sizeof(*req), resp, sizeof(*resp));
++	if (ret < 0) {
++		dev_err(&sso->pdev->dev, "Error durring MBOX transmsion\n");
++		return ret;
++	}
++
++	return 0;
++}
++
++static int sso_pf_set_mbox_ram(u32 node, u16 domain_id,
++			       void *mbox_addr, u64 mbox_size)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++	size_t i, vf_idx = -1;
++
++	if (!mbox_addr || !mbox_size)
++		return -EINVAL;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == node) {
++			sso = curr;
++			break;
++		}
++	}
++
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -ENODEV;
++	}
++
++	/* locate the SSO VF master of domain (vf_idx == 0) */
++	for (i = 0; i < sso->total_vfs; i++) {
++		if (sso->vf[i].domain.in_use &&
++		    sso->vf[i].domain.domain_id == domain_id &&
++		    sso->vf[i].domain.subdomain_id == 0) {
++			vf_idx = i;
++			break;
++		}
++	}
++
++	spin_unlock(&octeontx_sso_devices_lock);
++
++	if (vf_idx < 0)
++		return -ENODEV; /* SSOVF for domain not found */
++
++	mbox_init(&sso->vf[i].mbox,
++		  sso->reg_base + SSO_PF_VHGRPX_MBOX(vf_idx, 0),
++		  mbox_addr, mbox_size,
++		  MBOX_SIDE_PF);
++
++	return 0;
++}
++
++static int sso_pf_get_vf_count(u32 id)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return 0;
++	}
++
++	spin_unlock(&octeontx_sso_devices_lock);
++	return sso->total_vfs;
++}
++
++int sso_reset_domain(u32 id, u16 domain_id)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++	int i;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -EINVAL;
++	}
++
++	for (i = 0; i < sso->total_vfs; i++) {
++		if (sso->vf[i].domain.in_use &&
++		    sso->vf[i].domain.domain_id == domain_id) {
++			identify(&sso->vf[i], domain_id,
++				 sso->vf[i].domain.subdomain_id);
++		}
++	}
++
++	spin_unlock(&octeontx_sso_devices_lock);
++	return 0;
++}
++
++int sso_pf_set_value(u32 id, u64 offset, u64 val)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -EINVAL;
++	}
++	sso_reg_write(sso, offset, val);
++	spin_unlock(&octeontx_sso_devices_lock);
++	return 0;
++}
++EXPORT_SYMBOL(sso_pf_set_value);
++
++int sso_pf_get_value(u32 id, u64 offset, u64 *val)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -EINVAL;
++	}
++
++	*val = sso_reg_read(sso, offset);
++	spin_unlock(&octeontx_sso_devices_lock);
++	return 0;
++}
++EXPORT_SYMBOL(sso_pf_get_value);
++
++int sso_vf_get_value(u32 id, int vf_id, u64 offset, u64 *val)
++{
++	struct ssopf *sso = NULL;
++	struct ssopf *curr;
++
++	spin_lock(&octeontx_sso_devices_lock);
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->id == id) {
++			sso = curr;
++			break;
++		}
++	}
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return -EINVAL;
++	}
++
++	*val = readq_relaxed((sso->vf[vf_id].domain.reg_base + offset));
++	spin_unlock(&octeontx_sso_devices_lock);
++	return 0;
++}
++EXPORT_SYMBOL(sso_vf_get_value);
++
++struct ssopf_com_s ssopf_com = {
++	.create_domain = sso_pf_create_domain,
++	.free_domain = sso_pf_remove_domain,
++	.reset_domain = sso_reset_domain,
++	.send_message = sso_pf_send_message,
++	.set_mbox_ram = sso_pf_set_mbox_ram,
++	.get_vf_count = sso_pf_get_vf_count
++};
++EXPORT_SYMBOL(ssopf_com);
++
++static int handle_mbox_msg_from_sso_vf(struct ssopf *sso,
++				       u16 domain_id,
++				       struct mbox_hdr *hdr,
++				       union mbox_data *req,
++				       union mbox_data *resp,
++				       void *add_data)
++{
++	struct ssopf_vf *vf;
++	struct mbox_sso_get_dev_info *get_dev_info = NULL;
++	struct mbox_sso_getwork_wait *getwork_wait = NULL;
++	struct mbox_sso_convert_ns_getworks_iter *ns_to_getworks_iter = NULL;
++	struct mbox_sso_grp_priority *grp_prio = NULL;
++	u64 reg;
++	size_t vf_idx;
++	int ret = -1;
++
++	hdr->res_code = MBOX_RET_INVALID;
++	resp->data = 0;
++
++	vf = get_vf(sso, domain_id, hdr->vfid, &vf_idx);
++	/* hdr->vfid cound be out of range, use common error response */
++	if (!vf)
++		return -1;
++
++	switch (hdr->msg) {
++	case IDENTIFY:
++		/* test code only */
++		identify(vf, vf->domain.domain_id, vf->domain.subdomain_id);
++		hdr->res_code = MBOX_RET_SUCCESS;
++		ret = 0;
++		break;
++	case SSO_GETDOMAINCFG:
++		/* This is temp, this will be moved to octeontx*/
++		hdr->res_code = MBOX_RET_SUCCESS;
++		resp->cfg.sso_count = 1;
++		resp->cfg.ssow_count = 32;
++		resp->cfg.fpa_count = 1;
++		resp->cfg.pko_count = 1;
++		resp->cfg.tim_count = 0;
++		/* Note:
++		 * - remove above resp-> value update and always
++		 * use add_data for resp message
++		 * - above resp-> update gonna become redundent as
++		 *   because coming patch will get rid of *resp param
++		 *   from function
++		 */
++		memcpy(add_data, resp, sizeof(*resp));
++		resp->data = sizeof(*resp);
++		ret = 0;
++		break;
++
++	case SSO_GET_DEV_INFO:
++		get_dev_info = add_data;
++
++		get_dev_info->min_getwork_wait_ns = sso_pf_min_tmo(sso->id);
++		get_dev_info->max_getwork_wait_ns = sso_pf_max_tmo(sso->id);
++		get_dev_info->max_events = max_events;
++
++		hdr->res_code = MBOX_RET_SUCCESS;
++		/* update len */
++		resp->data = sizeof(struct mbox_sso_get_dev_info);
++		ret = 0;
++		break;
++	case SSO_GET_GETWORK_WAIT:
++		getwork_wait = add_data;
++
++		getwork_wait->wait_ns = sso_pf_get_tmo(sso);
++
++		hdr->res_code = MBOX_RET_SUCCESS;
++		/* update len */
++		resp->data = sizeof(*getwork_wait);
++		ret = 0;
++		break;
++	case SSO_SET_GETWORK_WAIT:
++		getwork_wait = add_data;
++
++		sso_pf_set_tmo(sso, getwork_wait->wait_ns);
++
++		hdr->res_code = MBOX_RET_SUCCESS;
++		/* update len */
++		resp->data = 0;
++		ret = 0;
++		break;
++	case SSO_CONVERT_NS_GETWORK_ITER:
++		ns_to_getworks_iter = add_data;
++
++		ns_to_getworks_iter->getwork_iter =
++		sso_pf_ns_to_iter(sso, ns_to_getworks_iter->wait_ns);
++
++		hdr->res_code = MBOX_RET_SUCCESS;
++		/* update len */
++		resp->data = sizeof(*ns_to_getworks_iter);
++		ret = 0;
++		break;
++	case SSO_GRP_GET_PRIORITY:
++		/* NOTE: Until pf_mapping make way into pf driver
++		 * ,. Follow simple mapping approach ie.. vhgrp = pool = vf_id
++		 * Next change set for pf_mapping will address mapping.(Todo)
++		 */
++		grp_prio = add_data;
++
++		reg = sso_reg_read(sso, SSO_PF_GRPX_PRI(vf_idx));
++
++		/* now update struct _grp_priority fields {} */
++		grp_prio->vhgrp_id = vf_idx;
++		grp_prio->wgt_left = (reg >> 24) & 0x3f;
++		grp_prio->weight = (reg >> 16) & 0x3f;
++		grp_prio->affinity = (reg >> 8) & 0xf;
++		grp_prio->pri = reg & 0x7;
++
++		hdr->res_code = MBOX_RET_SUCCESS;
++		/* update len */
++		resp->data = sizeof(*grp_prio);
++		ret = 0;
++		break;
++	case SSO_GRP_SET_PRIORITY:
++		grp_prio = add_data;
++
++		reg = 0;
++		reg = (((u64)(grp_prio->wgt_left & 0x3f) << 24) |
++			((u64)(grp_prio->weight & 0x3f) << 16) |
++			((u64)(grp_prio->affinity & 0xf) << 8) |
++			(grp_prio->pri & 0x7));
++
++		sso_reg_write(sso, SSO_PF_GRPX_PRI(vf_idx), reg);
++
++		hdr->res_code = MBOX_RET_SUCCESS;
++		/* update len */
++		resp->data = 0;
++		ret = 0;
++		break;
++	default:
++		dev_err(&sso->pdev->dev, "invalid mbox message to sso\n");
++		ret = -1; /* use common error resp->nse */
++		break;
++	}
++
++	return ret;
++}
++
++static void handle_mbox_msg_from_vf(struct ssopf *sso, int vf_idx)
++{
++	struct mbox_hdr hdr = {0};
++	union mbox_data resp;
++	union mbox_data req;
++	int req_size;
++	int ret = 0;
++	const void *replymsg = NULL;
++	size_t replysize;
++
++	req_size = mbox_receive(&sso->vf[vf_idx].mbox, &hdr, ram_mbox_buf,
++				MBOX_MAX_MSG_SIZE);
++	if (req_size < 0) {
++		dev_dbg(&sso->pdev->dev,
++			"MBox return no message, spurious IRQ?\n");
++		return;
++	}
++
++	/* For SSO_VF inactive or other than subdomain_id=0,
++	 * we skip the message processing
++	 * We still reply with error
++	 */
++	if (!sso->vf[vf_idx].domain.in_use ||
++	    sso->vf[vf_idx].domain.subdomain_id != 0) {
++		replymsg = NULL;
++		replysize = 0;
++		ret = -1;
++		goto send_resp;
++	}
++
++	resp.data = 0;
++	switch (hdr.coproc) {
++	case SSO_COPROC:
++		memcpy(&req, ram_mbox_buf, sizeof(req));
++		ret = handle_mbox_msg_from_sso_vf(
++			sso, sso->vf[vf_idx].domain.domain_id,
++			&hdr,
++			&req /* Unused for sso */,
++			&resp,
++			ram_mbox_buf);
++		/* prep for replymsg */
++		replymsg = ram_mbox_buf;
++		replysize = resp.data;
++		break;
++	default:
++		/* call octtx_master_receive_message for msg dispatch */
++		ret = sso->vf[vf_idx].domain.master->receive_message(
++			&hdr, &req, &resp,
++			sso->vf[vf_idx].domain.master_data,
++			ram_mbox_buf);
++
++		/* prep for replymsg */
++		replymsg = ram_mbox_buf;
++		replysize = resp.data;
++		break;
++	}
++	/* Note:
++	 * resp.data = 0 --> set operation by drv
++	 * resp.data > 0 --> get operation by drv
++	 */
++	if (resp.data >= MBOX_MAX_MSG_SIZE) {
++		ret = -1;
++		replymsg = NULL;
++		replysize = 0;
++	}
++	dev_dbg(&sso->pdev->dev, "print replymsg %p replymsg_data %llx replysize %zu\n",
++		replymsg, *(u64 *)replymsg, replysize);
++
++send_resp:
++	if (mbox_reply(&sso->vf[vf_idx].mbox,
++		       ret ? MBOX_RET_INVALID : hdr.res_code,
++		       replymsg, replysize))
++		dev_err(&sso->pdev->dev, "MBox error on PF response\n");
++}
++
++static void handle_mbox(struct work_struct *wq)
++{
++	struct ssopf *sso = container_of(wq, struct ssopf, mbox_work);
++	u64 reg;
++	int vf_idx;
++
++	mutex_lock(&pf_mbox_lock);
++	while (true) {
++		reg = sso_reg_read(sso, SSO_PF_MBOX_INT);
++		if (!reg)
++			break;
++
++		for_each_set_bit(vf_idx, (unsigned long *)&reg,
++				 sizeof(reg) * 8) {
++			/* SSO VF should handle msg only if it is a domain
++			 * master
++			 */
++			if (sso->vf[vf_idx].domain.in_use)
++				handle_mbox_msg_from_vf(sso, vf_idx);
++		}
++
++		sso_reg_write(sso, SSO_PF_MBOX_INT, reg);
++	}
++	mutex_unlock(&pf_mbox_lock);
++}
++
++static irqreturn_t sso_pf_mbox_intr_handler (int irq, void *sso_irq)
++{
++	struct ssopf *sso = (struct ssopf *)sso_irq;
++
++	/* schedule work and be done*/
++	schedule_work(&sso->mbox_work);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t sso_pf_err_intr_handler (int irq, void *sso_irq)
++{
++	struct ssopf *sso = (struct ssopf *)sso_irq;
++	u64 sso_reg;
++
++	dev_err(&sso->pdev->dev, "errors recievd\n");
++	sso_reg = sso_reg_read(sso, SSO_PF_ERR0);
++	dev_err(&sso->pdev->dev, "err0:%llx\n", sso_reg);
++	sso_reg = sso_reg_read(sso, SSO_PF_ERR1);
++	dev_err(&sso->pdev->dev, "err1:%llx\n", sso_reg);
++	sso_reg = sso_reg_read(sso, SSO_PF_ERR2);
++	dev_err(&sso->pdev->dev, "err2:%llx\n", sso_reg);
++
++	sso_reg = sso_reg_read(sso, SSO_PF_UNMAP_INFO);
++	dev_err(&sso->pdev->dev, "unamp_info:%llx\n", sso_reg);
++	sso_reg = sso_reg_read(sso, SSO_PF_UNMAP_INFO2);
++	dev_err(&sso->pdev->dev, "unamp_info2:%llx\n", sso_reg);
++
++	/* clear all interrupts*/
++	sso_reg = SSO_ERR0;
++	sso_reg_write(sso, SSO_PF_ERR0, sso_reg);
++	sso_reg = SSO_ERR1;
++	sso_reg_write(sso, SSO_PF_ERR1, sso_reg);
++	sso_reg = SSO_ERR2;
++	sso_reg_write(sso, SSO_PF_ERR2, sso_reg);
++	return IRQ_HANDLED;
++}
++
++static int sso_irq_init(struct ssopf *sso)
++{
++	int ret = 0;
++	u64 sso_reg;
++	int i;
++
++	/* clear all interrupts*/
++	sso_reg = SSO_ERR0;
++	sso_reg_write(sso, SSO_PF_ERR0, sso_reg);
++	sso_reg = SSO_ERR1;
++	sso_reg_write(sso, SSO_PF_ERR1, sso_reg);
++	sso_reg = SSO_ERR2;
++	sso_reg_write(sso, SSO_PF_ERR2, sso_reg);
++	sso_reg = SSO_MBOX;
++	sso_reg_write(sso, SSO_PF_MBOX_INT, sso_reg);
++
++	/*clear all ena */
++	sso_reg = SSO_ERR0;
++	sso_reg_write(sso, SSO_PF_ERR0_ENA_W1C, sso_reg);
++	sso_reg = SSO_ERR1;
++	sso_reg_write(sso, SSO_PF_ERR1_ENA_W1C, sso_reg);
++	sso_reg = SSO_ERR2;
++	sso_reg_write(sso, SSO_PF_ERR2_ENA_W1C, sso_reg);
++	sso_reg = SSO_MBOX;
++	sso_reg_write(sso, SSO_PF_MBOX_ENA_W1C, sso_reg);
++
++	sso->msix_entries = devm_kzalloc(&sso->pdev->dev,
++			SSO_PF_MSIX_COUNT *
++			sizeof(struct msix_entry), GFP_KERNEL);
++	if (!sso->msix_entries)
++		return -ENOMEM;
++	for (i = 0; i < SSO_PF_MSIX_COUNT; i++)
++		sso->msix_entries[i].entry = i;
++
++	ret = pci_enable_msix(sso->pdev, sso->msix_entries, SSO_PF_MSIX_COUNT);
++	if (ret) {
++		dev_err(&sso->pdev->dev, "Enabling msix failed(%d)\n", ret);
++		return ret;
++	}
++
++	/* register ERR intr handler */
++	for (i = 0; i < (SSO_PF_MSIX_COUNT - 1); i++) {
++		ret = request_irq(sso->msix_entries[i].vector,
++				  sso_pf_err_intr_handler, 0, "ssopf err", sso);
++		if (ret)
++			goto free_irq;
++	}
++
++	/* register MBOX intr handler */
++	ret = request_irq(sso->msix_entries[i].vector, sso_pf_mbox_intr_handler,
++			  0, "ssopf mbox", sso);
++	if (ret)
++		goto free_irq;
++
++	/*Enable all intr */
++	sso_reg = SSO_ERR0;
++	sso_reg_write(sso, SSO_PF_ERR0_ENA_W1S, sso_reg);
++	sso_reg = SSO_ERR1;
++	sso_reg_write(sso, SSO_PF_ERR1_ENA_W1S, sso_reg);
++	sso_reg = SSO_ERR2;
++	sso_reg_write(sso, SSO_PF_ERR2_ENA_W1S, sso_reg);
++	sso_reg = SSO_MBOX;
++	sso_reg_write(sso, SSO_PF_MBOX_ENA_W1S, sso_reg);
++
++	return 0;
++
++free_irq:
++	while (i) {
++		free_irq(sso->msix_entries[i - 1].vector, sso);
++		i--;
++	}
++
++	return ret;
++}
++
++static void sso_irq_free(struct ssopf *sso)
++{
++	int i;
++	u64 sso_reg;
++
++	/*clear all ena */
++	sso_reg = SSO_ERR0;
++	sso_reg_write(sso, SSO_PF_ERR0_ENA_W1C, sso_reg);
++	sso_reg = SSO_ERR1;
++	sso_reg_write(sso, SSO_PF_ERR1_ENA_W1C, sso_reg);
++	sso_reg = SSO_ERR2;
++	sso_reg_write(sso, SSO_PF_ERR2_ENA_W1C, sso_reg);
++	sso_reg = SSO_MBOX;
++	sso_reg_write(sso, SSO_PF_MBOX_ENA_W1C, sso_reg);
++
++	for (i = 0; i < SSO_PF_MSIX_COUNT; i++)
++		free_irq(sso->msix_entries[i].vector, sso);
++
++	pci_disable_msix(sso->pdev);
++}
++
++static inline void sso_configure_on_chip_res(struct ssopf *sso, u16 ssogrps)
++{
++	u64 tmp, add, grp_thr, grp_rsvd;
++	u64 iaq_free_cnt, iaq_max;
++	u32 iaq_rsvd, iaq_rsvd_cnt = 0;
++	u64 taq_free_cnt, taq_max;
++	u32 taq_rsvd, taq_rsvd_cnt = 0;
++	u32 counter = 0;
++	u16 grp;
++
++	/* Reset SSO */
++	sso_reg_write(sso, SSO_PF_RESET, 0x1);
++	/* After initiating reset, the SSO must not be sent any other
++	 * operations for 2500 coprocessor (SCLK) cycles. Assuming SCLK running
++	 * at >1MHz, A delay of 2500us would be enough for the worst case.
++	 */
++	mdelay(3);
++	while (sso_reg_read(sso, SSO_PF_RESET)) {
++		usleep_range(1, 100);
++		if (++counter > MAX_SSO_RST_TIMEOUT_US) {
++			dev_warn(&sso->pdev->dev, "failed to reset sso\n");
++			break;
++		}
++	}
++
++	/* Configure IAQ entries */
++	iaq_free_cnt = sso_reg_read(sso, SSO_PF_AW_WE) &
++				SSO_AW_WE_FREE_CNT_MASK;
++
++	/* Give out half of buffers fairly, rest left floating */
++	iaq_rsvd = iaq_free_cnt / ssogrps / 2;
++	/* Enforce minimum per HRM */
++	if (iaq_rsvd < 2)
++		iaq_rsvd = 2;
++	iaq_max = iaq_rsvd << 7;
++	if (iaq_max >= (1 << 13))
++		iaq_max = (1 << 13) - 1;
++	dev_dbg(&sso->pdev->dev, "iaq: free_cnt:0x%llx rsvd:0x%x max:0x%llx\n",
++		iaq_free_cnt, iaq_rsvd, iaq_max);
++
++	/* Configure TAQ entries */
++	taq_free_cnt = sso_reg_read(sso, SSO_PF_TAQ_CNT) &
++					SSO_TAQ_CNT_FREE_CNT_MASK;
++	/* Give out half of all buffers fairly, other half floats */
++	taq_rsvd = taq_free_cnt / ssogrps / 2;
++	/* Enforce minimum per HRM */
++	if (taq_rsvd < 3)
++		taq_rsvd = 3;
++
++	taq_max = taq_rsvd << 3;
++	if (taq_max >= (1 << 11))
++		taq_max = (1 << 11) - 1;
++	dev_dbg(&sso->pdev->dev, "taq: free_cnt:0x%llx rsvd:0x%x max:0x%llx\n",
++		taq_free_cnt, taq_rsvd, taq_max);
++
++	for (grp = 0; grp < ssogrps; grp++) {
++		tmp = sso_reg_read(sso, SSO_PF_GRPX_IAQ_THR(grp));
++		grp_rsvd = tmp & SSO_GRP_IAQ_THR_RSVD_MASK;
++		add = iaq_rsvd - grp_rsvd;
++
++		grp_thr = iaq_rsvd & SSO_GRP_IAQ_THR_RSVD_MASK;
++		grp_thr |= ((iaq_max & SSO_GRP_IAQ_THR_MAX_MASK) <<
++				 SSO_GRP_IAQ_THR_MAX_SHIFT);
++
++		sso_reg_write(sso, SSO_PF_GRPX_IAQ_THR(grp), grp_thr);
++		/* Add the delta of added rsvd iaq entries */
++		if (add)
++			sso_reg_write(sso, SSO_PF_AW_ADD,
++				      ((add & SSO_AW_ADD_RSVD_MASK) <<
++					 SSO_AW_ADD_RSVD_SHIFT));
++		iaq_rsvd_cnt += iaq_rsvd;
++
++		tmp = sso_reg_read(sso, SSO_PF_GRPX_TAQ_THR(grp));
++		grp_rsvd = tmp & SSO_GRP_TAQ_THR_RSVD_MASK;
++		add = taq_rsvd - grp_rsvd;
++
++		grp_thr = taq_rsvd & SSO_GRP_TAQ_THR_RSVD_MASK;
++		grp_thr |= ((taq_max & SSO_GRP_TAQ_THR_MAX_MASK) <<
++				SSO_GRP_TAQ_THR_MAX_SHIFT);
++		sso_reg_write(sso, SSO_PF_GRPX_TAQ_THR(grp), grp_thr);
++		/* Add the delta of added rsvd taq entries */
++		if (add)
++			sso_reg_write(sso, SSO_PF_TAQ_ADD,
++				      ((add & SSO_TAQ_ADD_RSVD_MASK) <<
++					SSO_TAQ_ADD_RSVD_SHIFT));
++		taq_rsvd_cnt += taq_rsvd;
++	}
++
++	dev_dbg(&sso->pdev->dev, "iaq-rsvd=0x%x/0x%llx taq-rsvd=0x%x/0x%llx\n",
++		iaq_rsvd_cnt, iaq_free_cnt, taq_rsvd_cnt, taq_free_cnt);
++	/* Verify SSO_AW_WE[RSVD_FREE], TAQ_CNT[RSVD_FREE] are greater than
++	 * or equal to sum of IAQ[RSVD_THR], TAQ[RSRVD_THR] fields
++	 */
++	tmp = sso_reg_read(sso, SSO_PF_AW_WE) >> SSO_AW_WE_RSVD_CNT_SHIFT;
++	tmp &= SSO_AW_WE_RSVD_CNT_MASK;
++	if (tmp < iaq_rsvd_cnt) {
++		dev_warn(&sso->pdev->dev, "wrong iaq res alloc math %llx:%x\n",
++			 tmp, iaq_rsvd_cnt);
++		sso_reg_write(sso, SSO_PF_AW_WE,
++			      (iaq_rsvd_cnt & SSO_AW_WE_RSVD_CNT_MASK) <<
++				SSO_AW_WE_RSVD_CNT_SHIFT);
++	}
++	tmp = sso_reg_read(sso, SSO_PF_TAQ_CNT) >> SSO_TAQ_CNT_RSVD_CNT_SHIFT;
++	tmp &= SSO_TAQ_CNT_FREE_CNT_MASK;
++	if (tmp < taq_rsvd_cnt) {
++		dev_warn(&sso->pdev->dev, "wrong taq res alloc math %llx:%x\n",
++			 tmp, taq_rsvd_cnt);
++		sso_reg_write(sso, SSO_PF_TAQ_CNT,
++			      (taq_rsvd_cnt & SSO_TAQ_CNT_RSVD_CNT_MASK) <<
++				SSO_TAQ_CNT_RSVD_CNT_SHIFT);
++	}
++}
++
++static inline void sso_max_grps_update(struct ssopf *sso)
++{
++	u64 sso_reg;
++	u16 nr_grps;
++
++	sso_reg = sso_reg_read(sso, SSO_PF_CONST);
++	nr_grps = (sso_reg >> SSO_CONST_GRP_SHIFT) &
++		SSO_CONST_GRP_MASK;
++
++	if (!max_grps || max_grps > nr_grps)
++		max_grps = nr_grps;
++}
++
++static int sso_init(struct ssopf *sso)
++{
++	u64 sso_reg;
++	u32 max_maps;
++	u32 xaq_buf_size;
++	u32 xae_waes;
++	u16 nr_grps;
++	int i;
++	int err;
++	u32 xaq_buffers;
++	u64 xaq_buf;
++
++	sso_configure_on_chip_res(sso, max_grps);
++
++	/* init sso.domain.master/master_data/mbox_addr to null */
++	for (i = 0; i < SSO_MAX_VF; i++) {
++		sso->vf[i].domain.in_use = 0;
++		sso->vf[i].domain.master = NULL;
++		sso->vf[i].domain.master_data = NULL;
++	}
++
++	sso_reg = sso_reg_read(sso, SSO_PF_CONST1);
++	xaq_buf_size = (sso_reg >> SSO_CONST1_XAQ_BUF_SIZE_SHIFT) &
++		SSO_CONST1_XAQ_BUF_SIZE_MASK;
++	max_maps = (sso_reg >> SSO_CONST1_MAPS_SHIFT) &
++		SSO_CONST1_MAPS_MASK;
++	xae_waes = (sso_reg >> SSO_CONST1_XAE_WAES_SHIFT) &
++		SSO_CONST1_XAE_WAES_MASK;
++	sso_reg = sso_reg_read(sso, SSO_PF_CONST);
++	nr_grps = (sso_reg >> SSO_CONST_GRP_SHIFT) &
++		SSO_CONST_GRP_MASK;
++
++	sso_reg_write(sso, SSO_PF_NW_TIM, 0x4);
++
++	sso->xaq_buf_size = xaq_buf_size;
++
++	rst = try_then_request_module(symbol_get(rst_com), "rst");
++	if (!rst)
++		return -ENODEV;
++
++	fpapf = try_then_request_module(symbol_get(fpapf_com), "fpapf");
++	if (!fpapf)
++		return -ENODEV;
++
++	err = fpapf->create_domain(sso->id, FPA_SSO_XAQ_GMID, 1, NULL, NULL);
++	if (!err) {
++		dev_err(&sso->pdev->dev, "failed to create SSO_XAQ_DOMAIN\n");
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++
++	fpavf = try_then_request_module(symbol_get(fpavf_com), "fpavf");
++	if (!fpavf) {
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++
++	fpa = fpavf->get(FPA_SSO_XAQ_GMID, 0, &sso_master_com, sso);
++	if (!fpa) {
++		dev_err(&sso->pdev->dev, "failed to get fpavf\n");
++		symbol_put(fpapf_com);
++		symbol_put(fpavf_com);
++		return -ENODEV;
++	}
++
++	xaq_buffers = (max_events + xae_waes - 1) / xae_waes;
++	xaq_buffers = (nr_grps * 2) + 48 + xaq_buffers;
++
++	err = fpavf->setup(fpa, xaq_buffers, xaq_buf_size,
++			FPA_VF_FLAG_CONT_MEM);
++	if (err) {
++		dev_err(&sso->pdev->dev, "failed to setup fpavf\n");
++		symbol_put(fpapf_com);
++		symbol_put(fpavf_com);
++		return -ENODEV;
++	}
++
++	/* Make sure the SSO is disabled */
++	sso_reg = sso_reg_read(sso, SSO_PF_AW_CFG);
++	sso_reg &= (~1ULL);
++	sso_reg_write(sso, SSO_PF_AW_CFG, sso_reg);
++
++	/* Init XAQ ring*/
++	for (i = 0; i < nr_grps; i++) {
++		xaq_buf = fpavf->alloc(fpa, FPA_SSO_XAQ_AURA);
++		if (!xaq_buf) {
++			dev_err(&sso->pdev->dev, "failed to setup XAQ:%d\n", i);
++			goto err;
++		}
++		sso_reg_write(sso, SSO_PF_XAQX_HEAD_PTR(i), xaq_buf);
++		sso_reg_write(sso, SSO_PF_XAQX_HEAD_NEXT(i), xaq_buf);
++		sso_reg_write(sso, SSO_PF_XAQX_TAIL_PTR(i), xaq_buf);
++		sso_reg_write(sso, SSO_PF_XAQX_TAIL_NEXT(i), xaq_buf);
++	}
++
++	sso_reg_write(sso, SSO_PF_XAQ_AURA, FPA_SSO_XAQ_AURA);
++	sso_reg_write(sso, SSO_PF_XAQ_GMCTL, FPA_SSO_XAQ_GMID);
++
++	dev_dbg(&sso->pdev->dev, "aura=%d gmid=%d xaq_buffers=%d\n",
++		FPA_SSO_XAQ_AURA, FPA_SSO_XAQ_GMID, xaq_buffers);
++
++	/* Enable XAQ*/
++	sso_reg = sso_reg_read(sso, SSO_PF_AW_CFG);
++	sso_reg |= 0xf;
++	sso_reg_write(sso, SSO_PF_AW_CFG, sso_reg);
++	return 0;
++err:
++	symbol_put(fpapf_com);
++	symbol_put(fpavf_com);
++	return -ENODEV;
++}
++
++static int sso_sriov_configure(struct pci_dev *pdev, int numvfs)
++{
++	struct ssopf *sso = pci_get_drvdata(pdev);
++	int ret = -EBUSY;
++	int disable = 0;
++
++	if (sso->vfs_in_use != 0)
++		return ret;
++
++	ret = 0;
++	if (sso->flags & SSO_SRIOV_ENABLED)
++		disable = 1;
++
++	if (disable) {
++		pci_disable_sriov(pdev);
++		sso->flags &= ~SSO_SRIOV_ENABLED;
++		sso->total_vfs = 0;
++	}
++
++	if (numvfs > 0) {
++		ret = pci_enable_sriov(pdev, numvfs);
++		if (ret == 0) {
++			sso->flags |= SSO_SRIOV_ENABLED;
++			sso->total_vfs = numvfs;
++
++			ret = numvfs;
++		}
++	}
++	return ret;
++}
++
++static int sso_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
++{
++	struct device *dev = &pdev->dev;
++	struct ssopf *sso;
++	int err = -ENOMEM;
++
++	sso = devm_kzalloc(dev, sizeof(*sso), GFP_KERNEL);
++	if (!sso)
++		return err;
++
++	pci_set_drvdata(pdev, sso);
++	sso->pdev = pdev;
++
++	err = pcim_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed\n");
++		return err;
++	}
++
++	/* Map CFG registers */
++	sso->reg_base = pcim_iomap(pdev, PCI_SSO_PF_CFG_BAR, 0);
++	if (!sso->reg_base) {
++		dev_err(dev, "Can't map CFG space\n");
++		err = -ENOMEM;
++		return err;
++	}
++
++	/* set SSO ID */
++	sso->id = atomic_add_return(1, &sso_count);
++	sso->id -= 1;
++
++	sso_max_grps_update(sso);
++
++	err = sso_init(sso);
++	if (err) {
++		atomic_sub_return(1, &sso_count);
++		return err;
++	}
++
++	err = sso_irq_init(sso);
++	if (err) {
++		dev_err(dev, "failed init irqs\n");
++		err = -EINVAL;
++		return err;
++	}
++
++	/* Alloc local memory to copy message to/from rambox.
++	 * This local memory in next revision will be removed.
++	 * such that kernel/user does message rd/wr on single
++	 * buffer called rambox, Implementing that design right
++	 * demands gaurantee for true mutual execusion for message
++	 * written accessed by one party at a time.
++	 * Current rambox design not truely accommodate that;
++	 * CAS implementation in future will gaurantee locking
++	 * parity between user/kernel space, then will get rid
++	 * of local buffer data copy approach.
++	 * - Assuiming max message buffer mey not exceed 1024.
++	 */
++	ram_mbox_buf = kzalloc(MBOX_MAX_MSG_SIZE, GFP_KERNEL);
++	if (!ram_mbox_buf) {
++		err = -ENOMEM;
++		return err;
++	}
++
++	INIT_WORK(&sso->mbox_work, handle_mbox);
++
++	INIT_LIST_HEAD(&sso->list);
++	spin_lock(&octeontx_sso_devices_lock);
++	list_add(&sso->list, &octeontx_sso_devices);
++	spin_unlock(&octeontx_sso_devices_lock);
++	return 0;
++}
++
++static void sso_fini(struct ssopf *sso)
++{
++	// TODO: add the meat
++	// look 11.13.2 Recovering Pointers
++}
++
++static void sso_remove(struct pci_dev *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct ssopf *sso = pci_get_drvdata(pdev);
++
++	if (!sso)
++		return;
++
++	flush_scheduled_work();
++	kfree(ram_mbox_buf);
++	fpapf->free_domain(sso->id, FPA_SSO_XAQ_GMID);
++	symbol_put(fpapf_com);
++	symbol_put(fpavf_com);
++	sso_irq_free(sso);
++	sso_sriov_configure(pdev, 0);
++	sso_fini(sso);
++
++	/* release probed resources */
++	spin_lock(&octeontx_sso_devices_lock);
++	list_del(&sso->list);
++	spin_unlock(&octeontx_sso_devices_lock);
++	pci_release_regions(pdev);
++	pci_disable_device(pdev);
++	pci_set_drvdata(pdev, NULL);
++	devm_kfree(dev, sso);
++}
++
++/* devices supported */
++static const struct pci_device_id sso_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_OCTEONTX_SSO_PF) },
++	{ 0, }  /* end of table */
++};
++
++static struct pci_driver sso_driver = {
++	.name = DRV_NAME,
++	.id_table = sso_id_table,
++	.probe = sso_probe,
++	.remove = sso_remove,
++	.sriov_configure = sso_sriov_configure,
++};
++
++MODULE_AUTHOR("Tirumalesh Chalamarla");
++MODULE_DESCRIPTION("Cavium OCTEONTX SSO Physical Function Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, sso_id_table);
++
++static int __init sso_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return pci_register_driver(&sso_driver);
++}
++
++static void __exit sso_cleanup_module(void)
++{
++	pci_unregister_driver(&sso_driver);
++}
++
++module_init(sso_init_module);
++module_exit(sso_cleanup_module);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+new file mode 100644
+index 000000000000..020f3ce40fc1
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+@@ -0,0 +1,601 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/pci.h>
++
++#include "sso.h"
++
++#define DRV_NAME "octeontx-ssow"
++#define DRV_VERSION "0.1"
++
++static atomic_t ssow_count = ATOMIC_INIT(0);
++static DEFINE_SPINLOCK(octeontx_ssow_devices_lock);
++static LIST_HEAD(octeontx_ssow_devices);
++
++static int ssow_pf_remove_domain(u32 id, u16 domain_id)
++{
++	struct ssowpf *ssow = NULL;
++	struct ssowpf *curr;
++	int i, vf_idx, ret;
++	u64 reg;
++
++	vf_idx = 0;
++	ret = 0;
++
++	spin_lock(&octeontx_ssow_devices_lock);
++	list_for_each_entry(curr, &octeontx_ssow_devices, list) {
++		if (curr->id == id) {
++			ssow = curr;
++			break;
++		}
++	}
++
++	if (!ssow) {
++		ret = -ENODEV;
++		goto unlock;
++	}
++
++	for (i = 0; i < ssow->total_vfs; i++) {
++		if (ssow->vf[i].domain.in_use &&
++		    ssow->vf[i].domain.domain_id == domain_id) {
++			ssow->vf[i].domain.domain_id = 0;
++			ssow->vf[i].domain.in_use = 0;
++
++			/* sso: clear hws's gmctl register */
++			reg = 0;
++			reg = SSO_MAP_GMID(1); /* write reset value '1'*/
++			ret = sso_pf_set_value(id, SSO_PF_HWSX_GMCTL(i), reg);
++			if (ret < 0) {
++				ret = -EIO;
++				goto unlock;
++			}
++			vf_idx++;	/* HWS cnt */
++			iounmap(ssow->vf[i].domain.reg_base);
++			ssow->vf[i].domain.in_use = false;
++		}
++	}
++
++unlock:
++	ssow->vfs_in_use -= vf_idx;
++
++	spin_unlock(&octeontx_ssow_devices_lock);
++
++	return ret;
++}
++
++static void identify(struct ssowpf_vf *vf, u16 domain_id,
++		     u16 subdomain_id)
++{
++	struct mbox_ssow_identify *ident;
++
++	ident = (struct mbox_ssow_identify *)vf->ram_mbox_addr;
++	ident->domain_id = domain_id;
++	ident->subdomain_id = subdomain_id;
++}
++
++static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
++				 void *master, void *master_data,
++				 struct kobject *kobj, char *g_name)
++{
++	struct ssowpf *ssow = NULL;
++	struct ssowpf *curr;
++	resource_size_t vf_start;
++	u64 i, reg;
++	int vf_idx, ret;
++	struct pci_dev *virtfn;
++
++	vf_idx = 0;
++	reg = 0;
++	ret = -ENODEV;
++
++	spin_lock(&octeontx_ssow_devices_lock);
++	list_for_each_entry(curr, &octeontx_ssow_devices, list) {
++		if (curr->id == id) {
++			ssow = curr;
++			break;
++		}
++	}
++
++	if (!ssow) {
++		ret = -ENODEV;
++		goto unlock;
++	}
++
++	for (i = 0; i < ssow->total_vfs; i++) {
++		if (ssow->vf[i].domain.in_use) {
++			continue;
++		} else {
++			ssow->vf[i].domain.domain_id = domain_id;
++			ssow->vf[i].domain.subdomain_id = vf_idx;
++			ssow->vf[i].domain.gmid = get_gmid(domain_id);
++
++			ssow->vf[i].domain.in_use = true;
++			ssow->vf[i].domain.master = master;
++			ssow->vf[i].domain.master_data = master_data;
++
++			reg = 0;
++			reg = SSO_MAP_GMID(ssow->vf[i].domain.gmid);
++			ret = sso_pf_set_value(id,
++					       SSO_PF_HWSX_GMCTL(i),
++					       reg);
++			if (ret < 0) {
++				ret = -EIO;
++				goto unlock;
++			}
++
++			/* Clear out groupmask, have VF enable the groups it
++			 * wants
++			 */
++			ret = sso_pf_set_value(id,
++					       SSO_PF_HWSX_SX_GRPMASK(i, 0), 0);
++			ret |= sso_pf_set_value(id,
++					       SSO_PF_HWSX_SX_GRPMASK(i, 1), 0);
++			if (ret < 0) {
++				ret = -EIO;
++				goto unlock;
++			}
++
++			ssow->vf[i].ram_mbox_addr =
++				ioremap(SSOW_RAM_MBOX(i),
++					SSOW_RAM_MBOX_SIZE);
++			if (!ssow->vf[i].ram_mbox_addr) {
++				ret = -ENOMEM;
++				goto unlock;
++			}
++			vf_start = SSOW_VF_BASE(i);
++			ssow->vf[i].domain.reg_base =
++				ioremap(vf_start, SSOW_VF_SIZE);
++			if (!ssow->vf[i].domain.reg_base)
++				return -ENOMEM;
++
++			if (kobj && g_name) {
++				virtfn = pci_get_domain_bus_and_slot(
++						pci_domain_nr(ssow->pdev->bus),
++						pci_iov_virtfn_bus(ssow->pdev,
++								   i),
++						pci_iov_virtfn_devfn(ssow->pdev,
++								     i));
++				if (!virtfn) {
++					ret = -ENODEV;
++					break;
++				}
++
++				sysfs_add_link_to_group(kobj, g_name,
++							&virtfn->dev.kobj,
++							virtfn->dev.kobj.name);
++			}
++			identify(&ssow->vf[i], domain_id, vf_idx);
++			vf_idx++;
++			if (vf_idx == vf_count) {
++				ssow->vfs_in_use += vf_count;
++				ret = 0;
++				break;
++			}
++		}
++	}
++
++unlock:
++	spin_unlock(&octeontx_ssow_devices_lock);
++	return ret;
++}
++
++static int ssow_pf_get_ram_mbox_addr(u32 node, u16 domain_id,
++				     void **ram_mbox_addr)
++{
++	struct ssowpf *ssow = NULL;
++	struct ssowpf *curr;
++	u64 i;
++
++	spin_lock(&octeontx_ssow_devices_lock);
++	list_for_each_entry(curr, &octeontx_ssow_devices, list) {
++		if (curr->id == node) {
++			ssow = curr;
++			break;
++		}
++	}
++
++	if (!ssow) {
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < ssow->total_vfs; i++) {
++		if (ssow->vf[i].domain.in_use &&
++		    ssow->vf[i].domain.domain_id == domain_id &&
++		    ssow->vf[i].domain.subdomain_id == 0) {
++			*ram_mbox_addr = ssow->vf[i].ram_mbox_addr;
++			break;
++		}
++	}
++	spin_unlock(&octeontx_ssow_devices_lock);
++
++	if (i != ssow->total_vfs)
++		return 0;
++	else
++		return -ENOENT;
++}
++
++static int ssow_pf_receive_message(u32 id, u16 domain_id,
++				   struct mbox_hdr *hdr,
++					union mbox_data *req,
++					union mbox_data *resp)
++{
++	struct ssowpf *ssow = NULL;
++	struct ssowpf *curr;
++	int vf_idx = -1;
++	int i;
++
++	resp->data = 0;
++	spin_lock(&octeontx_ssow_devices_lock);
++
++	list_for_each_entry(curr, &octeontx_ssow_devices, list) {
++		if (curr->id == id) {
++			ssow = curr;
++			break;
++		}
++	}
++	if (!ssow) {
++		hdr->res_code = MBOX_RET_INVALID;
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return -ENODEV;
++	}
++
++	/* locate the SSO VF master of domain (vf_idx == 0) */
++	for (i = 0; i < ssow->total_vfs; i++) {
++		if (ssow->vf[i].domain.in_use &&
++		    ssow->vf[i].domain.domain_id == domain_id &&
++		    ssow->vf[i].domain.subdomain_id == 0) {
++			vf_idx = i;
++			break;
++		}
++	}
++
++	if (vf_idx < 0) {
++		hdr->res_code = MBOX_RET_INVALID;
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return -ENODEV;
++	}
++
++	switch (hdr->msg) {
++	case IDENTIFY:
++		identify(&ssow->vf[i], domain_id, hdr->vfid);
++		hdr->res_code = MBOX_RET_SUCCESS;
++		break;
++	default:
++		hdr->res_code = MBOX_RET_INVALID;
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return -1;
++	}
++	spin_unlock(&octeontx_ssow_devices_lock);
++	return 0;
++}
++
++static int ssow_pf_get_vf_count(u32 id)
++{
++	struct ssowpf *ssow = NULL;
++	struct ssowpf *curr;
++
++	spin_lock(&octeontx_ssow_devices_lock);
++
++	list_for_each_entry(curr, &octeontx_ssow_devices, list) {
++		if (curr->id == id) {
++			ssow = curr;
++			break;
++		}
++	}
++	if (!ssow) {
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return 0;
++	}
++
++	spin_unlock(&octeontx_ssow_devices_lock);
++	return ssow->total_vfs;
++}
++
++void ssow_clear_nosched(u32 id, struct ssowpf_vf *vf, u64 grp_mask)
++{
++	u64 reg;
++	u64 grp;
++	int j;
++	int ret;
++
++	for (j = 0; j < SSO_IENT_MAX; j++) {
++		ret = sso_pf_get_value(id, SSO_PF_IENTX_GRP(j), &reg);
++		if (ret)
++			return;
++
++		grp = ((reg >> SSO_IENT_GRP_GRP_SHIFT) & SSO_IENT_GRP_GRP_MASK);
++		if (((grp_mask >> grp) & 0x1) == 0x1) {
++			reg = sso_pf_get_value(id, SSO_PF_IENTX_WQP(j), &reg);
++			if (reg != 0)
++				writeq_relaxed(reg, vf->domain.reg_base +
++						SSOW_VF_VHWSX_OP_CLR_NSCHED(0));
++		}
++	}
++}
++
++static void ssow_vf_get_work(u64 addr, struct wqe_s *wqe)
++{
++	u64 work0 = 0;
++	u64 work1 = 0;
++
++	asm volatile("ldp %0, %1, [%2]\n\t" : "=r" (work0), "=r" (work1)
++			: "r" (addr));
++
++	wqe->work0 = work0;
++	if (work1)
++		wqe->work1 = phys_to_virt(work1);
++	else
++		wqe->work1 = NULL;
++}
++
++static int __get_sso_group_pend(u32 id, u64 grp_mask)
++{
++	int cq_cnt;
++	int ds_cnt;
++	int aq_cnt;
++	int count = 0;
++	int i;
++	u64 reg;
++
++	for_each_set_bit(i, (const unsigned long *)&grp_mask,
++			 sizeof(grp_mask)) {
++		aq_cnt = 0;
++		cq_cnt = 0;
++		ds_cnt = 0;
++		sso_vf_get_value(id, i, SSO_VF_VHGRPX_AQ_CNT(0), &reg);
++		aq_cnt = reg & (0xffffffff);
++		sso_vf_get_value(id, i, SSO_VF_VHGRPX_INT_CNT(0), &reg);
++		ds_cnt = (reg >> 16) & 0x1fff;
++		cq_cnt = (reg >> 32) & 0x1fff;
++		count +=  cq_cnt + aq_cnt + ds_cnt;
++	}
++	return count;
++}
++
++int ssow_reset_domain(u32 id, u16 domain_id, u64 grp_mask)
++{
++	struct ssowpf *ssow = NULL;
++	struct ssowpf *curr;
++	int i, ret = 0;
++	bool de_sched = false;
++	int retry = 0;
++	u64 addr;
++	int count;
++	struct wqe_s wqe;
++	u64 reg;
++	void __iomem *reg_base;
++
++	spin_lock(&octeontx_ssow_devices_lock);
++	list_for_each_entry(curr, &octeontx_ssow_devices, list) {
++		if (curr->id == id) {
++			ssow = curr;
++			break;
++		}
++	}
++
++	if (!ssow) {
++		ret = -EINVAL;
++		goto unlock;
++	}
++
++	/*0. Clear any active TAG switches
++	 * 1. Loop thorugh SSO_ENT_GRP and clear NSCHED
++	 *2. do get_work on all HWS until VHGRP_INT_CNT and AQ_CNT == 0
++	 */
++
++	for (i = 0; i < ssow->total_vfs; i++) {
++		if (ssow->vf[i].domain.in_use &&
++		    ssow->vf[i].domain.domain_id == domain_id) {
++			sso_pf_set_value(id, SSO_PF_HWSX_SX_GRPMASK(i, 0),
++					 grp_mask);
++			sso_pf_set_value(id, SSO_PF_HWSX_SX_GRPMASK(i, 1),
++					 grp_mask);
++
++			reg_base = ssow->vf[i].domain.reg_base;
++			reg = readq_relaxed(reg_base +
++					    SSOW_VF_VHWSX_PENDTAG(0));
++			if (reg >> 63) {
++				if (((reg >> 32) & 0x3) < 2)
++					writeq_relaxed(0x0, reg_base +
++						       SSOW_VF_VHWSX_OP_DESCHED(0));
++			} else {
++				reg = readq_relaxed(reg_base +
++						    SSOW_VF_VHWSX_TAG(0));
++				if (((reg >> 32) & 0x3) < 2)
++					writeq_relaxed(0x0, reg_base +
++						       SSOW_VF_VHWSX_OP_SWTAG_UNTAG(0));
++			}
++
++			if (!de_sched) {
++				ssow_clear_nosched(id, &ssow->vf[i], grp_mask);
++				de_sched = true;
++			}
++
++			addr = ((u64)ssow->vf[i].domain.reg_base +
++					SSOW_VF_VHWSX_OP_GET_WORK0(0));
++			retry = 0;
++			do {
++				wqe.work0 = 0;
++				wqe.work1 = 0;
++				ssow_vf_get_work(addr, &wqe);
++				if (wqe.work1 == 0)
++					retry++;
++				count = __get_sso_group_pend(id, grp_mask);
++			} while (count && retry < 1000);
++			if (count)
++				dev_err(&ssow->pdev->dev,
++					"Failed to reset vf[%d]\n", i);
++			sso_pf_set_value(id, SSO_PF_HWSX_SX_GRPMASK(i, 0), 0);
++			sso_pf_set_value(id, SSO_PF_HWSX_SX_GRPMASK(i, 1), 0);
++		}
++	}
++
++	for (i = 0; i < ssow->total_vfs; i++) {
++		if (ssow->vf[i].domain.in_use &&
++		    ssow->vf[i].domain.domain_id == domain_id) {
++			identify(&ssow->vf[i], domain_id,
++				 ssow->vf[i].domain.subdomain_id);
++		}
++	}
++
++unlock:
++	spin_unlock(&octeontx_ssow_devices_lock);
++	return ret;
++}
++
++struct ssowpf_com_s ssowpf_com = {
++	.create_domain = ssow_pf_create_domain,
++	.free_domain = ssow_pf_remove_domain,
++	.reset_domain = ssow_reset_domain,
++	.receive_message = ssow_pf_receive_message,
++	.get_vf_count = ssow_pf_get_vf_count,
++	.get_ram_mbox_addr = ssow_pf_get_ram_mbox_addr
++};
++EXPORT_SYMBOL(ssowpf_com);
++
++static int ssow_sriov_configure(struct pci_dev *pdev, int numvfs)
++{
++	struct ssowpf *ssow = pci_get_drvdata(pdev);
++	int ret = -EBUSY;
++	int disable = 0;
++
++	if (ssow->vfs_in_use != 0)
++		return ret;
++
++	ret = 0;
++	if (ssow->flags & SSOW_SRIOV_ENABLED)
++		disable = 1;
++
++	if (disable) {
++		pci_disable_sriov(pdev);
++		ssow->flags &= ~SSOW_SRIOV_ENABLED;
++		ssow->total_vfs = 0;
++	}
++
++	if (numvfs > 0) {
++		ret = pci_enable_sriov(pdev, numvfs);
++		if (ret == 0) {
++			ssow->flags |= SSOW_SRIOV_ENABLED;
++			ssow->total_vfs = numvfs;
++			ret = numvfs;
++		}
++	}
++	return ret;
++}
++
++static int ssow_init(struct ssowpf *ssow)
++{
++	u64 sso_reg;
++	u16 nr_hws;
++	int i, ret;
++
++	ret = 0;
++
++	for (i = 0; i < SSOW_MAX_VF; i++) {
++		ssow->vf[i].domain.in_use = 0;
++		ssow->vf[i].domain.master = NULL;
++		ssow->vf[i].domain.master_data = NULL;
++	}
++
++	/* assuming for 83xx node = 0 */
++	ret = sso_pf_get_value(0, SSO_PF_CONST, &sso_reg);
++	if (ret < 0) {
++		dev_err(&ssow->pdev->dev, "Failed to read nw_hws from SSO_PF_CONST\n");
++		return -1;
++	}
++
++	nr_hws = (sso_reg >> SSO_CONST_HWS_SHIFT) & SSO_CONST_HWS_MASK;
++
++	return 0;
++}
++
++static int ssow_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
++{
++	struct device *dev = &pdev->dev;
++	struct ssowpf *ssow;
++	int err = -ENOMEM;
++
++	ssow = devm_kzalloc(dev, sizeof(*ssow), GFP_KERNEL);
++	if (!ssow)
++		return err;
++
++	pci_set_drvdata(pdev, ssow);
++	ssow->pdev = pdev;
++
++	err = pcim_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed\n");
++		return err;
++	}
++
++	/* set SSOW ID */
++	ssow->id = atomic_add_return(1, &ssow_count);
++	ssow->id -= 1;
++
++	err = ssow_init(ssow);
++	if (err < 0) {
++		atomic_sub_return(1, &ssow_count);
++		dev_err(dev, "failed to ssow_init\n");
++		err = -EPROBE_DEFER;
++		return err;
++	}
++
++	INIT_LIST_HEAD(&ssow->list);
++	spin_lock(&octeontx_ssow_devices_lock);
++	list_add(&ssow->list, &octeontx_ssow_devices);
++	spin_unlock(&octeontx_ssow_devices_lock);
++	return 0;
++}
++
++static void ssow_remove(struct pci_dev *pdev)
++{
++	ssow_sriov_configure(pdev, 0);
++}
++
++/* devices supported */
++static const struct pci_device_id ssow_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_OCTEONTX_SSOW_PF) },
++	{ 0, } /* end of table */
++};
++
++static struct pci_driver ssow_driver = {
++	.name = DRV_NAME,
++	.id_table = ssow_id_table,
++	.probe = ssow_probe,
++	.remove = ssow_remove,
++	.sriov_configure = ssow_sriov_configure,
++};
++
++MODULE_AUTHOR("Tirumalesh Chalamarla");
++MODULE_DESCRIPTION("Cavium OCTEONTX SSOW Physical Function Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, ssow_id_table);
++
++static int __init ssow_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return pci_register_driver(&ssow_driver);
++}
++
++static void __exit ssow_cleanup_module(void)
++{
++	pci_unregister_driver(&ssow_driver);
++}
++
++module_init(ssow_init_module);
++module_exit(ssow_cleanup_module);
+-- 
+2.14.1
+

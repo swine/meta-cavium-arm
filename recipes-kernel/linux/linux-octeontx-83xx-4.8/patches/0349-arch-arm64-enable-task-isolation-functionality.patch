@@ -1,0 +1,235 @@
+From 39f871aefcde65e5a2a69aaf1550a941cc3a255a Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:31 -0400
+Subject: [PATCH 349/375] arch/arm64: enable task isolation functionality
+
+In do_notify_resume(), call task_isolation_ready() for
+TIF_TASK_ISOLATION tasks when we are checking the thread-info flags;
+and after we've handled the other work, call task_isolation_enter()
+for such tasks.  To ensure we always call task_isolation_enter() when
+returning to userspace, add _TIF_TASK_ISOLATION to _TIF_WORK_MASK,
+while leaving the old bitmask value as _TIF_WORK_LOOP_MASK to
+check while looping.
+
+We tweak syscall_trace_enter() slightly to carry the "flags"
+value from current_thread_info()->flags for each of the tests,
+rather than doing a volatile read from memory for each one.  This
+avoids a small overhead for each test, and in particular avoids
+that overhead for TIF_NOHZ when TASK_ISOLATION is not enabled.
+
+We instrument the smp_send_reschedule() routine so that it checks for
+isolated tasks and generates a suitable warning if we are about
+to disturb one of them in strict or debug mode.
+
+Finally, report on page faults in task-isolation processes in
+do_page_faults().
+
+This patch is ported to kernel 4.9.x by Alex Belits.
+
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+Reviewed-by: Catalin Marinas <catalin.marinas@arm.com>
+Signed-off-by: Alex Belits <alex.belits@cavium.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ arch/arm64/Kconfig                   |  1 +
+ arch/arm64/include/asm/thread_info.h |  5 ++++-
+ arch/arm64/kernel/ptrace.c           | 18 +++++++++++++---
+ arch/arm64/kernel/signal.c           | 42 +++++++++++++++++++++++++++++-------
+ arch/arm64/kernel/smp.c              |  2 ++
+ arch/arm64/mm/fault.c                |  8 ++++++-
+ 6 files changed, 63 insertions(+), 13 deletions(-)
+
+diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
+index 9c15c6625eeb..dcef6acbd06e 100644
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -62,6 +62,7 @@ config ARM64
+ 	select HAVE_ARCH_MMAP_RND_BITS
+ 	select HAVE_ARCH_MMAP_RND_COMPAT_BITS if COMPAT
+ 	select HAVE_ARCH_SECCOMP_FILTER
++	select HAVE_ARCH_TASK_ISOLATION
+ 	select HAVE_ARCH_TRACEHOOK
+ 	select HAVE_ARCH_TRANSPARENT_HUGEPAGE
+ 	select HAVE_ARM_SMCCC
+diff --git a/arch/arm64/include/asm/thread_info.h b/arch/arm64/include/asm/thread_info.h
+index abd64bd1f6d9..bdc6426b9968 100644
+--- a/arch/arm64/include/asm/thread_info.h
++++ b/arch/arm64/include/asm/thread_info.h
+@@ -109,6 +109,7 @@ static inline struct thread_info *current_thread_info(void)
+ #define TIF_NEED_RESCHED	1
+ #define TIF_NOTIFY_RESUME	2	/* callback before returning to user */
+ #define TIF_FOREIGN_FPSTATE	3	/* CPU's FP state is not current's */
++#define TIF_TASK_ISOLATION	4
+ #define TIF_NOHZ		7
+ #define TIF_SYSCALL_TRACE	8
+ #define TIF_SYSCALL_AUDIT	9
+@@ -124,6 +125,7 @@ static inline struct thread_info *current_thread_info(void)
+ #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
+ #define _TIF_NOTIFY_RESUME	(1 << TIF_NOTIFY_RESUME)
+ #define _TIF_FOREIGN_FPSTATE	(1 << TIF_FOREIGN_FPSTATE)
++#define _TIF_TASK_ISOLATION	(1 << TIF_TASK_ISOLATION)
+ #define _TIF_NOHZ		(1 << TIF_NOHZ)
+ #define _TIF_SYSCALL_TRACE	(1 << TIF_SYSCALL_TRACE)
+ #define _TIF_SYSCALL_AUDIT	(1 << TIF_SYSCALL_AUDIT)
+@@ -132,7 +134,8 @@ static inline struct thread_info *current_thread_info(void)
+ #define _TIF_32BIT		(1 << TIF_32BIT)
+ 
+ #define _TIF_WORK_MASK		(_TIF_NEED_RESCHED | _TIF_SIGPENDING | \
+-				 _TIF_NOTIFY_RESUME | _TIF_FOREIGN_FPSTATE)
++				 _TIF_NOTIFY_RESUME | _TIF_FOREIGN_FPSTATE | \
++				 _TIF_TASK_ISOLATION)
+ 
+ #define _TIF_SYSCALL_WORK	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT | \
+ 				 _TIF_SYSCALL_TRACEPOINT | _TIF_SECCOMP | \
+diff --git a/arch/arm64/kernel/ptrace.c b/arch/arm64/kernel/ptrace.c
+index 8eedeef375d6..140d5c7686b0 100644
+--- a/arch/arm64/kernel/ptrace.c
++++ b/arch/arm64/kernel/ptrace.c
+@@ -37,6 +37,7 @@
+ #include <linux/regset.h>
+ #include <linux/tracehook.h>
+ #include <linux/elf.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/compat.h>
+ #include <asm/debug-monitors.h>
+@@ -1353,14 +1354,25 @@ static void tracehook_report_syscall(struct pt_regs *regs,
+ 
+ asmlinkage int syscall_trace_enter(struct pt_regs *regs)
+ {
+-	if (test_thread_flag(TIF_SYSCALL_TRACE))
++	unsigned long work = READ_ONCE(current_thread_info()->flags);
++
++	if (work & _TIF_SYSCALL_TRACE)
+ 		tracehook_report_syscall(regs, PTRACE_SYSCALL_ENTER);
+ 
+-	/* Do the secure computing after ptrace; failures should be fast. */
++	/*
++	 * In task isolation mode, we may prevent the syscall from
++	 * running, and if so we also deliver a signal to the process.
++	 */
++	if (work & _TIF_TASK_ISOLATION) {
++		if (task_isolation_syscall(regs->syscallno) == -1)
++			return -1;
++	}
++
++	/* Do the secure computing check early; failures should be fast. */
+ 	if (secure_computing(NULL) == -1)
+ 		return -1;
+ 
+-	if (test_thread_flag(TIF_SYSCALL_TRACEPOINT))
++	if (work & _TIF_SYSCALL_TRACEPOINT)
+ 		trace_sys_enter(regs, regs->syscallno);
+ 
+ 	audit_syscall_entry(regs->syscallno, regs->orig_x0, regs->regs[1],
+diff --git a/arch/arm64/kernel/signal.c b/arch/arm64/kernel/signal.c
+index a8eafdbc7cb8..f9b9b25636ca 100644
+--- a/arch/arm64/kernel/signal.c
++++ b/arch/arm64/kernel/signal.c
+@@ -25,6 +25,7 @@
+ #include <linux/uaccess.h>
+ #include <linux/tracehook.h>
+ #include <linux/ratelimit.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/debug-monitors.h>
+ #include <asm/elf.h>
+@@ -402,15 +403,40 @@ static void do_signal(struct pt_regs *regs)
+ asmlinkage void do_notify_resume(struct pt_regs *regs,
+ 				 unsigned int thread_flags)
+ {
+-	if (thread_flags & _TIF_SIGPENDING)
+-		do_signal(regs);
++	/*
++	 * The assembly code enters us with IRQs off, but it hasn't
++	 * informed the tracing code of that for efficiency reasons.
++	 * Update the trace code with the current status.
++	 */
++	trace_hardirqs_off();
++	do {
++		if (thread_flags & _TIF_NEED_RESCHED) {
++			schedule();
++		} else {
++			local_irq_enable();
++
++			if (thread_flags & _TIF_SIGPENDING)
++				do_signal(regs);
++
++			if (thread_flags & _TIF_NOTIFY_RESUME) {
++				clear_thread_flag(TIF_NOTIFY_RESUME);
++				tracehook_notify_resume(regs);
++			}
++
++			if (thread_flags & _TIF_FOREIGN_FPSTATE)
++				fpsimd_restore_current_state();
++
++			if (thread_flags & _TIF_TASK_ISOLATION)
++				task_isolation_enter();
++		}
+ 
+-	if (thread_flags & _TIF_NOTIFY_RESUME) {
+-		clear_thread_flag(TIF_NOTIFY_RESUME);
+-		tracehook_notify_resume(regs);
+-	}
++		local_irq_disable();
++		thread_flags = READ_ONCE(current_thread_info()->flags);
+ 
+-	if (thread_flags & _TIF_FOREIGN_FPSTATE)
+-		fpsimd_restore_current_state();
++		/* Clear task isolation from cached_flags manually. */
++		if ((thread_flags & _TIF_TASK_ISOLATION) &&
++		    task_isolation_ready())
++			thread_flags &= ~_TIF_TASK_ISOLATION;
+ 
++	} while (thread_flags & _TIF_WORK_MASK);
+ }
+diff --git a/arch/arm64/kernel/smp.c b/arch/arm64/kernel/smp.c
+index e2973724acdf..ba20a8309cfa 100644
+--- a/arch/arm64/kernel/smp.c
++++ b/arch/arm64/kernel/smp.c
+@@ -38,6 +38,7 @@
+ #include <linux/of.h>
+ #include <linux/irq_work.h>
+ #include <linux/kexec.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/alternative.h>
+ #include <asm/atomic.h>
+@@ -907,6 +908,7 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
+ 
+ void smp_send_reschedule(int cpu)
+ {
++	task_isolation_debug(cpu, "reschedule IPI");
+ 	smp_cross_call(cpumask_of(cpu), IPI_RESCHEDULE);
+ }
+ 
+diff --git a/arch/arm64/mm/fault.c b/arch/arm64/mm/fault.c
+index 5a7c435cde3e..b0e0d3038b4d 100644
+--- a/arch/arm64/mm/fault.c
++++ b/arch/arm64/mm/fault.c
+@@ -29,6 +29,7 @@
+ #include <linux/sched.h>
+ #include <linux/highmem.h>
+ #include <linux/perf_event.h>
++#include <linux/isolation.h>
+ #include <linux/preempt.h>
+ 
+ #include <asm/bug.h>
+@@ -411,8 +412,13 @@ retry:
+ 	 * Handle the "normal" case first - VM_FAULT_MAJOR
+ 	 */
+ 	if (likely(!(fault & (VM_FAULT_ERROR | VM_FAULT_BADMAP |
+-			      VM_FAULT_BADACCESS))))
++			      VM_FAULT_BADACCESS)))) {
++		/* No signal was generated, but notify task-isolation tasks. */
++		if (user_mode(regs))
++			task_isolation_quiet_exception("page fault at %#lx",
++						       addr);
+ 		return 0;
++	}
+ 
+ 	/*
+ 	 * If we are in kernel mode at this point, we have no context to
+-- 
+2.14.1
+

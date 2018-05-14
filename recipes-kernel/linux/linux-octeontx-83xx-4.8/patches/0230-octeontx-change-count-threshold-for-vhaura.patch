@@ -1,0 +1,32 @@
+From a2c28254b84c00d086aea60de942aa59a1f5d26c Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lb@semihalf.com>
+Date: Fri, 25 Aug 2017 15:37:21 +0200
+Subject: [PATCH 230/375] octeontx: change count threshold for vhaura
+
+When FPA_VHAURA_CNT is equal or crosses FPA_VHAURA_CNT_THRESHOLD then
+A_THRESH interrupt is generated. Previously FPA_VHAURA_CNT_THRESHOLD
+was set to half of the numbers of buffers in a pool. This patch
+changes FPA_VHAURA_CNT_THRESHOLD to a number of buffers in a pool
+minus one.
+
+Signed-off-by: Lukasz Bartosik <lb@semihalf.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+index 60d18f472158..b99f6265abd8 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+@@ -228,7 +228,7 @@ static int fpa_vf_setup(struct fpavf *fpa, u64 num_buffers, u32 buf_len,
+ 		fpa_vf_do_test(fpa, num_buffers);
+ 
+ 	/*Setup THRESHOLD*/
+-	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_THRESHOLD(0), num_buffers / 2);
++	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_THRESHOLD(0), num_buffers - 1);
+ 
+ 	return 0;
+ }
+-- 
+2.14.1
+

@@ -1,0 +1,61 @@
+From fbc122da5d3c1672fa8df4e04133e9e22529f250 Mon Sep 17 00:00:00 2001
+From: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+Date: Mon, 26 Dec 2016 22:40:33 -0800
+Subject: [PATCH 043/375] kernel config: Disable CONFIG_DMA_CMA
+
+Signed-off-by: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+---
+ configs/cavium-arm64.config | 14 ++++----------
+ 1 file changed, 4 insertions(+), 10 deletions(-)
+
+diff --git a/configs/cavium-arm64.config b/configs/cavium-arm64.config
+index 6a2a0748bc08..f030c0c6bec2 100644
+--- a/configs/cavium-arm64.config
++++ b/configs/cavium-arm64.config
+@@ -1,6 +1,6 @@
+ #
+ # Automatically generated file; DO NOT EDIT.
+-# Linux/arm64 4.9.0-rc6 Kernel Configuration
++# Linux/arm64 4.9.0 Kernel Configuration
+ #
+ CONFIG_ARM64=y
+ CONFIG_64BIT=y
+@@ -1042,17 +1042,11 @@ CONFIG_REGMAP_MMIO=y
+ CONFIG_REGMAP_IRQ=y
+ CONFIG_DMA_SHARED_BUFFER=y
+ # CONFIG_FENCE_TRACE is not set
+-CONFIG_DMA_CMA=y
+-
+-#
+-# Default contiguous memory area size:
+-#
+-CONFIG_CMA_SIZE_MBYTES=16
+-CONFIG_CMA_SIZE_SEL_MBYTES=y
++# CONFIG_DMA_CMA is not set
++# CONFIG_CMA_SIZE_SEL_MBYTES is not set
+ # CONFIG_CMA_SIZE_SEL_PERCENTAGE is not set
+ # CONFIG_CMA_SIZE_SEL_MIN is not set
+ # CONFIG_CMA_SIZE_SEL_MAX is not set
+-CONFIG_CMA_ALIGNMENT=8
+ 
+ #
+ # Bus devices
+@@ -1685,7 +1679,6 @@ CONFIG_DWMAC_GENERIC=m
+ CONFIG_DWMAC_IPQ806X=m
+ CONFIG_DWMAC_MESON=m
+ CONFIG_DWMAC_ROCKCHIP=m
+-# CONFIG_DWMAC_STM32 is not set
+ CONFIG_DWMAC_SUNXI=m
+ # CONFIG_STMMAC_PCI is not set
+ CONFIG_NET_VENDOR_SUN=y
+@@ -2422,6 +2415,7 @@ CONFIG_GPIO_PL061=y
+ CONFIG_GPIO_RCAR=y
+ # CONFIG_GPIO_SYSCON is not set
+ CONFIG_GPIO_TEGRA=y
++CONFIG_GPIO_THUNDERX=y
+ # CONFIG_GPIO_VX855 is not set
+ CONFIG_GPIO_XGENE=y
+ # CONFIG_GPIO_XGENE_SB is not set
+-- 
+2.14.1
+

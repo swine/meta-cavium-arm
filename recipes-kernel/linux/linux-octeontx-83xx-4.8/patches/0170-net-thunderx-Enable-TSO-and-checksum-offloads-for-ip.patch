@@ -1,0 +1,74 @@
+From ffa8bca24ffc5aa5eb01d0c8bf8342d8b291bd1f Mon Sep 17 00:00:00 2001
+From: Thanneeru Srinivasulu <tsrinivasulu@cavium.com>
+Date: Thu, 6 Apr 2017 16:12:26 +0530
+Subject: [PATCH 170/375] net: thunderx: Enable TSO and checksum offloads for
+ ipv6
+
+Adding support for TSO and checksum hardware offloads for ipv6.
+
+Signed-off-by: Thanneeru Srinivasulu <tsrinivasulu@cavium.com>
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_main.c   |  8 +++++---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c | 10 +++++++++-
+ 2 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_main.c b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+index b77d78a40b82..cc45d785feba 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+@@ -1668,8 +1668,9 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	if (err)
+ 		goto err_unregister_interrupts;
+ 
+-	netdev->hw_features = (NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_SG |
+-			       NETIF_F_TSO | NETIF_F_GRO |
++	netdev->hw_features = (NETIF_F_RXCSUM | NETIF_F_SG |
++			       NETIF_F_TSO | NETIF_F_GRO | NETIF_F_TSO6 |
++			       NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
+ 			       NETIF_F_HW_VLAN_CTAG_RX);
+ 
+ 	netdev->hw_features |= NETIF_F_RXHASH;
+@@ -1677,7 +1678,8 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	netdev->features |= netdev->hw_features;
+ 	netdev->hw_features |= NETIF_F_LOOPBACK;
+ 
+-	netdev->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO;
++	netdev->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM |
++				NETIF_F_IPV6_CSUM | NETIF_F_TSO | NETIF_F_TSO6;
+ 
+ 	netdev->netdev_ops = &nicvf_netdev_ops;
+ 	netdev->watchdog_timeo = NICVF_TX_TIMEOUT;
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index f13289f0d238..7b0fd8d871cc 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -1094,7 +1094,13 @@ nicvf_sq_add_hdr_subdesc(struct nicvf *nic, struct snd_queue *sq, int qentry,
+ {
+ 	int proto;
+ 	struct sq_hdr_subdesc *hdr;
++	union {
++		struct iphdr *v4;
++		struct ipv6hdr *v6;
++		unsigned char *hdr;
++	} ip;
+ 
++	ip.hdr = skb_network_header(skb);
+ 	hdr = (struct sq_hdr_subdesc *)GET_SQ_DESC(sq, qentry);
+ 	memset(hdr, 0, SND_QUEUE_DESC_SIZE);
+ 	hdr->subdesc_type = SQ_DESC_TYPE_HEADER;
+@@ -1119,7 +1125,9 @@ nicvf_sq_add_hdr_subdesc(struct nicvf *nic, struct snd_queue *sq, int qentry,
+ 		hdr->l3_offset = skb_network_offset(skb);
+ 		hdr->l4_offset = skb_transport_offset(skb);
+ 
+-		proto = ip_hdr(skb)->protocol;
++		proto = (ip.v4->version == 4) ? ip.v4->protocol :
++			ip.v6->nexthdr;
++
+ 		switch (proto) {
+ 		case IPPROTO_TCP:
+ 			hdr->csum_l4 = SEND_L4_CSUM_TCP;
+-- 
+2.14.1
+

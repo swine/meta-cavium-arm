@@ -1,0 +1,2129 @@
+From c7158fc4d4b5b68fb3cd4ff677d0e9bb6cee91d8 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Mon, 24 Apr 2017 13:33:57 +0200
+Subject: [PATCH 326/375] mmc: thunderx: Remove old mmc driver version
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+---
+ drivers/mmc/host/Kconfig               |   19 -
+ drivers/mmc/host/Makefile              |    4 -
+ drivers/mmc/host/cavium_core_mmc.c     | 1137 --------------------------------
+ drivers/mmc/host/cavium_mmc.h          |  425 ------------
+ drivers/mmc/host/octeon_platdrv_mmc.c  |  260 --------
+ drivers/mmc/host/thunderx_pcidrv_mmc.c |  216 ------
+ 6 files changed, 2061 deletions(-)
+ delete mode 100644 drivers/mmc/host/cavium_core_mmc.c
+ delete mode 100644 drivers/mmc/host/cavium_mmc.h
+ delete mode 100644 drivers/mmc/host/octeon_platdrv_mmc.c
+ delete mode 100644 drivers/mmc/host/thunderx_pcidrv_mmc.c
+
+diff --git a/drivers/mmc/host/Kconfig b/drivers/mmc/host/Kconfig
+index 38d740379546..5274f503a39a 100644
+--- a/drivers/mmc/host/Kconfig
++++ b/drivers/mmc/host/Kconfig
+@@ -343,25 +343,6 @@ config MMC_SDHCI_ST
+ 	  If you have a controller with this interface, say Y or M here.
+ 	  If unsure, say N.
+ 
+-config MMC_OCTEON
+-	tristate "Cavium OCTEON SD/MMC Card Interface support"
+-	depends on CAVIUM_OCTEON_SOC
+-	help
+-	  This selects Cavium OCTEON SD/MMC card Interface.
+-	  If you have an OCTEON board with a Multimedia Card slot,
+-	  say Y or M here.
+-
+-	  If unsure, say N.
+-
+-config MMC_THUNDERX
+-	tristate "Cavium ThunderX SD/MMC Card Interface support"
+-	depends on PCI && 64BIT && (ARM64 || COMPILE_TEST)
+-	help
+-	  This selects Cavium ThunderX SD/MMC Card Interface.
+-	  If you have an Cavium ARM64 board with a Multimedia Card slot
+-	  or builtin eMMC chip say Y or M here. If built as a module
+-	  the module will be called thunderx_mmc.ko.
+-
+ config MMC_OMAP
+ 	tristate "TI OMAP Multimedia Card Interface support"
+ 	depends on ARCH_OMAP
+diff --git a/drivers/mmc/host/Makefile b/drivers/mmc/host/Makefile
+index 488351fb47ac..e2bdaaf43184 100644
+--- a/drivers/mmc/host/Makefile
++++ b/drivers/mmc/host/Makefile
+@@ -21,10 +21,6 @@ obj-$(CONFIG_MMC_SDHCI_SPEAR)	+= sdhci-spear.o
+ obj-$(CONFIG_MMC_WBSD)		+= wbsd.o
+ obj-$(CONFIG_MMC_AU1X)		+= au1xmmc.o
+ obj-$(CONFIG_MMC_MTK)		+= mtk-sd.o
+-octeon_mmc-objs := cavium_core_mmc.o octeon_platdrv_mmc.o
+-obj-$(CONFIG_MMC_OCTEON)	+= octeon_mmc.o
+-thunderx_mmc-objs := cavium_core_mmc.o thunderx_pcidrv_mmc.o
+-obj-$(CONFIG_MMC_THUNDERX)	+= thunderx_mmc.o
+ obj-$(CONFIG_MMC_OMAP)		+= omap.o
+ obj-$(CONFIG_MMC_OMAP_HS)	+= omap_hsmmc.o
+ obj-$(CONFIG_MMC_ATMELMCI)	+= atmel-mci.o
+diff --git a/drivers/mmc/host/cavium_core_mmc.c b/drivers/mmc/host/cavium_core_mmc.c
+deleted file mode 100644
+index ca0748c765cc..000000000000
+--- a/drivers/mmc/host/cavium_core_mmc.c
++++ /dev/null
+@@ -1,1137 +0,0 @@
+-/*
+- * Shared part of driver for MMC/SDHC controller on Cavium OCTEON and
+- * ThunderX SOCs.
+- *
+- * This file is subject to the terms and conditions of the GNU General Public
+- * License.  See the file "COPYING" in the main directory of this archive
+- * for more details.
+- *
+- * Copyright (C) 2012-2016 Cavium Inc.
+- * Authors:
+- *   David Daney <david.daney@cavium.com>
+- *   Peter Swain <pswain@cavium.com>
+- *   Steven J. Hill <steven.hill@cavium.com>
+- *   Jan Glauber <jglauber@cavium.com>
+- */
+-#include <linux/delay.h>
+-#include <linux/dma-direction.h>
+-#include <linux/dma-mapping.h>
+-#include <linux/gpio/consumer.h>
+-#include <linux/interrupt.h>
+-#include <linux/mmc/mmc.h>
+-#include <linux/mmc/slot-gpio.h>
+-#include <linux/module.h>
+-#include <linux/scatterlist.h>
+-#include <linux/time.h>
+-
+-#include "cavium_mmc.h"
+-
+-/*
+- * The Cavium MMC host hardware assumes that all commands have fixed
+- * command and response types.  These are correct if MMC devices are
+- * being used.  However, non-MMC devices like SD use command and
+- * response types that are unexpected by the host hardware.
+- *
+- * The command and response types can be overridden by supplying an
+- * XOR value that is applied to the type.  We calculate the XOR value
+- * from the values in this table and the flags passed from the MMC
+- * core.
+- */
+-static struct cvm_mmc_cr_type cvm_mmc_cr_types[] = {
+-	{0, 0},		/* CMD0 */
+-	{0, 3},		/* CMD1 */
+-	{0, 2},		/* CMD2 */
+-	{0, 1},		/* CMD3 */
+-	{0, 0},		/* CMD4 */
+-	{0, 1},		/* CMD5 */
+-	{0, 1},		/* CMD6 */
+-	{0, 1},		/* CMD7 */
+-	{1, 1},		/* CMD8 */
+-	{0, 2},		/* CMD9 */
+-	{0, 2},		/* CMD10 */
+-	{1, 1},		/* CMD11 */
+-	{0, 1},		/* CMD12 */
+-	{0, 1},		/* CMD13 */
+-	{1, 1},		/* CMD14 */
+-	{0, 0},		/* CMD15 */
+-	{0, 1},		/* CMD16 */
+-	{1, 1},		/* CMD17 */
+-	{1, 1},		/* CMD18 */
+-	{3, 1},		/* CMD19 */
+-	{2, 1},		/* CMD20 */
+-	{0, 0},		/* CMD21 */
+-	{0, 0},		/* CMD22 */
+-	{0, 1},		/* CMD23 */
+-	{2, 1},		/* CMD24 */
+-	{2, 1},		/* CMD25 */
+-	{2, 1},		/* CMD26 */
+-	{2, 1},		/* CMD27 */
+-	{0, 1},		/* CMD28 */
+-	{0, 1},		/* CMD29 */
+-	{1, 1},		/* CMD30 */
+-	{1, 1},		/* CMD31 */
+-	{0, 0},		/* CMD32 */
+-	{0, 0},		/* CMD33 */
+-	{0, 0},		/* CMD34 */
+-	{0, 1},		/* CMD35 */
+-	{0, 1},		/* CMD36 */
+-	{0, 0},		/* CMD37 */
+-	{0, 1},		/* CMD38 */
+-	{0, 4},		/* CMD39 */
+-	{0, 5},		/* CMD40 */
+-	{0, 0},		/* CMD41 */
+-	{2, 1},		/* CMD42 */
+-	{0, 0},		/* CMD43 */
+-	{0, 0},		/* CMD44 */
+-	{0, 0},		/* CMD45 */
+-	{0, 0},		/* CMD46 */
+-	{0, 0},		/* CMD47 */
+-	{0, 0},		/* CMD48 */
+-	{0, 0},		/* CMD49 */
+-	{0, 0},		/* CMD50 */
+-	{0, 0},		/* CMD51 */
+-	{0, 0},		/* CMD52 */
+-	{0, 0},		/* CMD53 */
+-	{0, 0},		/* CMD54 */
+-	{0, 1},		/* CMD55 */
+-	{0xff, 0xff},	/* CMD56 */
+-	{0, 0},		/* CMD57 */
+-	{0, 0},		/* CMD58 */
+-	{0, 0},		/* CMD59 */
+-	{0, 0},		/* CMD60 */
+-	{0, 0},		/* CMD61 */
+-	{0, 0},		/* CMD62 */
+-	{0, 0}		/* CMD63 */
+-};
+-
+-static struct cvm_mmc_cr_mods cvm_mmc_get_cr_mods(struct mmc_command *cmd)
+-{
+-	struct cvm_mmc_cr_type *cr;
+-	u8 hardware_ctype, hardware_rtype;
+-	u8 desired_ctype = 0, desired_rtype = 0;
+-	struct cvm_mmc_cr_mods r;
+-
+-	cr = cvm_mmc_cr_types + (cmd->opcode & 0x3f);
+-	hardware_ctype = cr->ctype;
+-	hardware_rtype = cr->rtype;
+-	if (cmd->opcode == MMC_GEN_CMD)
+-		hardware_ctype = (cmd->arg & 1) ? 1 : 2;
+-
+-	switch (mmc_cmd_type(cmd)) {
+-	case MMC_CMD_ADTC:
+-		desired_ctype = (cmd->data->flags & MMC_DATA_WRITE) ? 2 : 1;
+-		break;
+-	case MMC_CMD_AC:
+-	case MMC_CMD_BC:
+-	case MMC_CMD_BCR:
+-		desired_ctype = 0;
+-		break;
+-	}
+-
+-	switch (mmc_resp_type(cmd)) {
+-	case MMC_RSP_NONE:
+-		desired_rtype = 0;
+-		break;
+-	case MMC_RSP_R1:/* MMC_RSP_R5, MMC_RSP_R6, MMC_RSP_R7 */
+-	case MMC_RSP_R1B:
+-		desired_rtype = 1;
+-		break;
+-	case MMC_RSP_R2:
+-		desired_rtype = 2;
+-		break;
+-	case MMC_RSP_R3: /* MMC_RSP_R4 */
+-		desired_rtype = 3;
+-		break;
+-	}
+-	r.ctype_xor = desired_ctype ^ hardware_ctype;
+-	r.rtype_xor = desired_rtype ^ hardware_rtype;
+-	return r;
+-}
+-
+-static void check_switch_errors(struct cvm_mmc_host *host)
+-{
+-	union mio_emm_switch emm_switch;
+-
+-	emm_switch.val = readq(host->base + MIO_EMM_SWITCH);
+-	if (emm_switch.s.switch_err0)
+-		dev_err(host->dev, "Switch power class error\n");
+-	if (emm_switch.s.switch_err1)
+-		dev_err(host->dev, "Switch hs timing error\n");
+-	if (emm_switch.s.switch_err2)
+-		dev_err(host->dev, "Switch bus width error\n");
+-}
+-
+-/*
+- * We never set the switch_exe bit since that would interfere
+- * with the commands send by the MMC core.
+- */
+-static void do_switch(struct cvm_mmc_host *host, u64 val)
+-{
+-	union mio_emm_rsp_sts rsp_sts;
+-	union mio_emm_switch emm_switch;
+-	int retries = 100;
+-	int bus_id;
+-
+-	emm_switch.val = val;
+-
+-	/*
+-	 * Modes setting only taken from slot 0. Work around that hardware
+-	 * issue by first switching to slot 0.
+-	 */
+-	bus_id = emm_switch.s.bus_id;
+-	emm_switch.s.bus_id = 0;
+-	writeq(emm_switch.val, host->base + MIO_EMM_SWITCH);
+-
+-	emm_switch.s.bus_id = bus_id;
+-	writeq(emm_switch.val, host->base + MIO_EMM_SWITCH);
+-
+-	/* wait for the switch to finish */
+-	do {
+-		rsp_sts.val = readq(host->base + MIO_EMM_RSP_STS);
+-		if (!rsp_sts.s.switch_val)
+-			break;
+-		udelay(10);
+-	} while (--retries);
+-
+-	check_switch_errors(host);
+-}
+-
+-static bool switch_val_changed(struct cvm_mmc_slot *slot, u64 new_val)
+-{
+-	/* Match BUS_ID, HS_TIMING, BUS_WIDTH, POWER_CLASS, CLK_HI, CLK_LO */
+-	u64 match = 0x3001070fffffffffull;
+-
+-	return (slot->cached_switch & match) != (new_val & match);
+-}
+-
+-static void set_wdog(struct cvm_mmc_slot *slot, unsigned int ns)
+-{
+-	u64 timeout;
+-
+-	WARN_ON_ONCE(!slot->clock);
+-	if (ns)
+-		timeout = (slot->clock * ns) / NSEC_PER_SEC;
+-	else
+-		timeout = (slot->clock * 850ull) / 1000ull;
+-	writeq(timeout, slot->host->base + MIO_EMM_WDOG);
+-}
+-
+-static void cvm_mmc_reset_bus(struct cvm_mmc_slot *slot)
+-{
+-	union mio_emm_switch emm_switch;
+-	u64 wdog = 0;
+-
+-	emm_switch.val = readq(slot->host->base + MIO_EMM_SWITCH);
+-	wdog = readq(slot->host->base + MIO_EMM_WDOG);
+-
+-	emm_switch.s.switch_exe = 0;
+-	emm_switch.s.switch_err0 = 0;
+-	emm_switch.s.switch_err1 = 0;
+-	emm_switch.s.switch_err2 = 0;
+-	emm_switch.s.bus_id = slot->bus_id;
+-	do_switch(slot->host, emm_switch.val);
+-
+-	slot->cached_switch = emm_switch.val;
+-
+-	msleep(20);
+-
+-	writeq(wdog, slot->host->base + MIO_EMM_WDOG);
+-}
+-
+-/* Switch to another slot if needed */
+-static void cvm_mmc_switch_to(struct cvm_mmc_slot *slot)
+-{
+-	struct cvm_mmc_host *host = slot->host;
+-	struct cvm_mmc_slot *old_slot;
+-	union mio_emm_switch emm_switch;
+-	union mio_emm_sample emm_sample;
+-
+-	if (slot->bus_id == host->last_slot)
+-		return;
+-
+-	if (host->last_slot >= 0 && host->slot[host->last_slot]) {
+-		old_slot = host->slot[host->last_slot];
+-		old_slot->cached_switch = readq(host->base + MIO_EMM_SWITCH);
+-		old_slot->cached_rca = readq(host->base + MIO_EMM_RCA);
+-	}
+-
+-	writeq(slot->cached_rca, host->base + MIO_EMM_RCA);
+-	emm_switch.val = slot->cached_switch;
+-	emm_switch.s.bus_id = slot->bus_id;
+-	do_switch(host, emm_switch.val);
+-
+-	emm_sample.val = 0;
+-	emm_sample.s.cmd_cnt = slot->cmd_cnt;
+-	emm_sample.s.dat_cnt = slot->dat_cnt;
+-	writeq(emm_sample.val, host->base + MIO_EMM_SAMPLE);
+-
+-	host->last_slot = slot->bus_id;
+-}
+-
+-static void do_read(struct cvm_mmc_host *host, struct mmc_request *req,
+-		    u64 dbuf)
+-{
+-	struct sg_mapping_iter *smi = &host->smi;
+-	int data_len = req->data->blocks * req->data->blksz;
+-	int bytes_xfered, shift = -1;
+-	u64 dat = 0;
+-
+-	/* Auto inc from offset zero */
+-	writeq((0x10000 | (dbuf << 6)), host->base + MIO_EMM_BUF_IDX);
+-
+-	for (bytes_xfered = 0; bytes_xfered < data_len;) {
+-		if (smi->consumed >= smi->length) {
+-			if (!sg_miter_next(smi))
+-				break;
+-			smi->consumed = 0;
+-		}
+-
+-		if (shift < 0) {
+-			dat = readq(host->base + MIO_EMM_BUF_DAT);
+-			shift = 56;
+-		}
+-
+-		while (smi->consumed < smi->length && shift >= 0) {
+-			((u8 *)smi->addr)[smi->consumed] = (dat >> shift) & 0xff;
+-			bytes_xfered++;
+-			smi->consumed++;
+-			shift -= 8;
+-		}
+-	}
+-
+-	sg_miter_stop(smi);
+-	req->data->bytes_xfered = bytes_xfered;
+-	req->data->error = 0;
+-}
+-
+-static void do_write(struct mmc_request *req)
+-{
+-	req->data->bytes_xfered = req->data->blocks * req->data->blksz;
+-	req->data->error = 0;
+-}
+-
+-static void set_cmd_response(struct cvm_mmc_host *host, struct mmc_request *req,
+-			     union mio_emm_rsp_sts *rsp_sts)
+-{
+-	u64 rsp_hi, rsp_lo;
+-
+-	if (!rsp_sts->s.rsp_val)
+-		return;
+-
+-	rsp_lo = readq(host->base + MIO_EMM_RSP_LO);
+-
+-	switch (rsp_sts->s.rsp_type) {
+-	case 1:
+-	case 3:
+-		req->cmd->resp[0] = (rsp_lo >> 8) & 0xffffffff;
+-		req->cmd->resp[1] = 0;
+-		req->cmd->resp[2] = 0;
+-		req->cmd->resp[3] = 0;
+-		break;
+-	case 2:
+-		req->cmd->resp[3] = rsp_lo & 0xffffffff;
+-		req->cmd->resp[2] = (rsp_lo >> 32) & 0xffffffff;
+-		rsp_hi = readq(host->base + MIO_EMM_RSP_HI);
+-		req->cmd->resp[1] = rsp_hi & 0xffffffff;
+-		req->cmd->resp[0] = (rsp_hi >> 32) & 0xffffffff;
+-		break;
+-	}
+-}
+-
+-static int get_dma_dir(struct mmc_data *data)
+-{
+-	return (data->flags & MMC_DATA_WRITE) ? DMA_TO_DEVICE : DMA_FROM_DEVICE;
+-}
+-
+-static int finish_dma_single(struct cvm_mmc_host *host, struct mmc_data *data)
+-{
+-	data->bytes_xfered = data->blocks * data->blksz;
+-	data->error = 0;
+-	return 1;
+-}
+-
+-static int finish_dma_sg(struct cvm_mmc_host *host, struct mmc_data *data)
+-{
+-	union mio_emm_dma_fifo_cfg fifo_cfg;
+-
+-	/* Check if there are any pending requests left */
+-	fifo_cfg.val = readq(host->dma_base + MIO_EMM_DMA_FIFO_CFG);
+-	if (fifo_cfg.s.count)
+-		dev_err(host->dev, "%u requests still pending\n",
+-			fifo_cfg.s.count);
+-
+-	data->bytes_xfered = data->blocks * data->blksz;
+-	data->error = 0;
+-
+-	/* Clear and disable FIFO */
+-	writeq(BIT_ULL(16), host->dma_base + MIO_EMM_DMA_FIFO_CFG);
+-	dma_unmap_sg(host->dev, data->sg, data->sg_len, get_dma_dir(data));
+-	return 1;
+-}
+-
+-static int finish_dma(struct cvm_mmc_host *host, struct mmc_data *data)
+-{
+-	if (host->use_sg && data->sg_len > 1)
+-		return finish_dma_sg(host, data);
+-	else
+-		return finish_dma_single(host, data);
+-}
+-
+-static bool bad_status(union mio_emm_rsp_sts *rsp_sts)
+-{
+-	if (rsp_sts->s.rsp_bad_sts || rsp_sts->s.rsp_crc_err ||
+-	    rsp_sts->s.rsp_timeout || rsp_sts->s.blk_crc_err ||
+-	    rsp_sts->s.blk_timeout || rsp_sts->s.dbuf_err)
+-		return true;
+-
+-	return false;
+-}
+-
+-/* Try to clean up failed DMA. */
+-static void cleanup_dma(struct cvm_mmc_host *host,
+-			union mio_emm_rsp_sts *rsp_sts)
+-{
+-	union mio_emm_dma emm_dma;
+-
+-	emm_dma.val = readq(host->base + MIO_EMM_DMA);
+-	emm_dma.s.dma_val = 1;
+-	emm_dma.s.dat_null = 1;
+-	emm_dma.s.bus_id = rsp_sts->s.bus_id;
+-	writeq(emm_dma.val, host->base + MIO_EMM_DMA);
+-}
+-
+-irqreturn_t cvm_mmc_interrupt(int irq, void *dev_id)
+-{
+-	struct cvm_mmc_host *host = dev_id;
+-	union mio_emm_rsp_sts rsp_sts;
+-	union mio_emm_int emm_int;
+-	struct mmc_request *req;
+-	unsigned long flags = 0;
+-	bool host_done;
+-
+-	if (host->need_irq_handler_lock)
+-		spin_lock_irqsave(&host->irq_handler_lock, flags);
+-	else
+-		__acquire(&host->irq_handler_lock);
+-
+-	/* Clear interrupt bits (write 1 clears ). */
+-	emm_int.val = readq(host->base + MIO_EMM_INT);
+-	writeq(emm_int.val, host->base + MIO_EMM_INT);
+-
+-	if (emm_int.s.switch_err)
+-		check_switch_errors(host);
+-
+-	req = host->current_req;
+-	if (!req)
+-		goto out;
+-
+-	rsp_sts.val = readq(host->base + MIO_EMM_RSP_STS);
+-	/*
+-	 * dma_val set means DMA is still in progress. Don't touch
+-	 * the request and wait for the interrupt indicating that
+-	 * the DMA is finished.
+-	 */
+-	if (rsp_sts.s.dma_val && host->dma_active)
+-		goto out;
+-
+-	if (!host->dma_active && emm_int.s.buf_done && req->data) {
+-		unsigned int type = (rsp_sts.val >> 7) & 3;
+-
+-		if (type == 1)
+-			do_read(host, req, rsp_sts.s.dbuf);
+-		else if (type == 2)
+-			do_write(req);
+-	}
+-
+-	host_done = emm_int.s.cmd_done || emm_int.s.dma_done ||
+-		    emm_int.s.cmd_err || emm_int.s.dma_err;
+-
+-	if (!(host_done && req->done))
+-		goto no_req_done;
+-
+-	if (bad_status(&rsp_sts))
+-		req->cmd->error = -EILSEQ;
+-	else
+-		req->cmd->error = 0;
+-
+-	if (host->dma_active && req->data)
+-		if (!finish_dma(host, req->data))
+-			goto no_req_done;
+-
+-	set_cmd_response(host, req, &rsp_sts);
+-	if (emm_int.s.dma_err && rsp_sts.s.dma_pend)
+-		cleanup_dma(host, &rsp_sts);
+-
+-	host->current_req = NULL;
+-	req->done(req);
+-
+-no_req_done:
+-	if (host->dmar_fixup_done)
+-		host->dmar_fixup_done(host);
+-	if (host_done)
+-		host->release_bus(host);
+-out:
+-	if (host->need_irq_handler_lock)
+-		spin_unlock_irqrestore(&host->irq_handler_lock, flags);
+-	else
+-		__release(&host->irq_handler_lock);
+-	return IRQ_RETVAL(emm_int.val != 0);
+-}
+-
+-/*
+- * Program DMA_CFG and if needed DMA_ADR.
+- * Returns 0 on error, DMA address otherwise.
+- */
+-static u64 prepare_dma_single(struct cvm_mmc_host *host, struct mmc_data *data)
+-{
+-	union mio_emm_dma_cfg dma_cfg;
+-	int count;
+-	u64 addr;
+-
+-	count = dma_map_sg(host->dev, data->sg, data->sg_len,
+-			   get_dma_dir(data));
+-	if (!count)
+-		return 0;
+-
+-	dma_cfg.val = 0;
+-	dma_cfg.s.en = 1;
+-	dma_cfg.s.rw = (data->flags & MMC_DATA_WRITE) ? 1 : 0;
+-#ifdef __LITTLE_ENDIAN
+-	dma_cfg.s.endian = 1;
+-#endif
+-	dma_cfg.s.size = (sg_dma_len(&data->sg[0]) / 8) - 1;
+-
+-	addr = sg_dma_address(&data->sg[0]);
+-	if (!host->big_dma_addr)
+-		dma_cfg.s.adr = addr;
+-	writeq(dma_cfg.val, host->dma_base + MIO_EMM_DMA_CFG);
+-
+-	pr_debug("[%s] sg_dma_len: %u  total sg_elem: %d\n",
+-		 (dma_cfg.s.rw) ? "W" : "R", sg_dma_len(&data->sg[0]), count);
+-
+-	if (host->big_dma_addr)
+-		writeq(addr, host->dma_base + MIO_EMM_DMA_ADR);
+-	return addr;
+-}
+-
+-/*
+- * Queue complete sg list into the FIFO.
+- * Returns 0 on error, 1 otherwise.
+- */
+-static u64 prepare_dma_sg(struct cvm_mmc_host *host, struct mmc_data *data)
+-{
+-	union mio_emm_dma_fifo_cmd fifo_cmd;
+-	struct scatterlist *sg;
+-	int count, i;
+-	u64 addr;
+-
+-	count = dma_map_sg(host->dev, data->sg, data->sg_len,
+-			   get_dma_dir(data));
+-	if (!count)
+-		return 0;
+-	if (count > 16)
+-		goto error;
+-
+-	/* Enable FIFO by removing CLR bit */
+-	writeq(0, host->dma_base + MIO_EMM_DMA_FIFO_CFG);
+-
+-	for_each_sg(data->sg, sg, count, i) {
+-		/* Program DMA address */
+-		addr = sg_dma_address(sg);
+-		if (addr & 7)
+-			goto error;
+-		writeq(addr, host->dma_base + MIO_EMM_DMA_FIFO_ADR);
+-
+-		/*
+-		 * If we have scatter-gather support we also have an extra
+-		 * register for the DMA addr, so no need to check
+-		 * host->big_dma_addr here.
+-		 */
+-		fifo_cmd.val = 0;
+-		fifo_cmd.s.rw = (data->flags & MMC_DATA_WRITE) ? 1 : 0;
+-
+-		/* enable interrupts on the last element */
+-		if (i + 1 == count)
+-			fifo_cmd.s.intdis = 0;
+-		else
+-			fifo_cmd.s.intdis = 1;
+-
+-#ifdef __LITTLE_ENDIAN
+-		fifo_cmd.s.endian = 1;
+-#endif
+-		fifo_cmd.s.size = sg_dma_len(sg) / 8 - 1;
+-		/*
+-		 * The write copies the address and the command to the FIFO
+-		 * and increments the FIFO's COUNT field.
+-		 */
+-		writeq(fifo_cmd.val, host->dma_base + MIO_EMM_DMA_FIFO_CMD);
+-		pr_debug("[%s] sg_dma_len: %u  sg_elem: %d/%d\n",
+-			 (fifo_cmd.s.rw) ? "W" : "R", sg_dma_len(sg), i, count);
+-	}
+-
+-	/*
+-	 * In difference to prepare_dma_single we don't return the
+-	 * address here, as it would not make sense for scatter-gather.
+-	 * The dma fixup is only required on models that don't support
+-	 * scatter-gather, so that is not a problem.
+-	 */
+-	return 1;
+-
+-error:
+-	WARN_ON_ONCE(1);
+-	dma_unmap_sg(host->dev, data->sg, data->sg_len, get_dma_dir(data));
+-	/* Disable FIFO */
+-	writeq(BIT_ULL(16), host->dma_base + MIO_EMM_DMA_FIFO_CFG);
+-	return 0;
+-}
+-
+-static u64 prepare_dma(struct cvm_mmc_host *host, struct mmc_data *data)
+-{
+-	if (host->use_sg && data->sg_len > 1)
+-		return prepare_dma_sg(host, data);
+-	else
+-		return prepare_dma_single(host, data);
+-}
+-
+-static void prepare_ext_dma(struct mmc_host *mmc, struct mmc_request *mrq,
+-			    union mio_emm_dma *emm_dma)
+-{
+-	struct cvm_mmc_slot *slot = mmc_priv(mmc);
+-
+-	/*
+-	 * Our MMC host hardware does not issue single commands,
+-	 * because that would require the driver and the MMC core
+-	 * to do work to determine the proper sequence of commands.
+-	 * Instead, our hardware is superior to most other MMC bus
+-	 * hosts. The sequence of MMC commands required to execute
+-	 * a transfer are issued automatically by the bus hardware.
+-	 *
+-	 * - David Daney <ddaney@cavium.com>
+-	 */
+-	emm_dma->val = 0;
+-	emm_dma->s.bus_id = slot->bus_id;
+-	emm_dma->s.dma_val = 1;
+-	emm_dma->s.sector = mmc_card_blockaddr(mmc->card) ? 1 : 0;
+-	emm_dma->s.rw = (mrq->data->flags & MMC_DATA_WRITE) ? 1 : 0;
+-	emm_dma->s.block_cnt = mrq->data->blocks;
+-	emm_dma->s.card_addr = mrq->cmd->arg;
+-	if (mmc_card_mmc(mmc->card) || (mmc_card_sd(mmc->card) &&
+-	    (mmc->card->scr.cmds & SD_SCR_CMD23_SUPPORT)))
+-		emm_dma->s.multi = 1;
+-
+-	pr_debug("[%s] blocks: %u  multi: %d\n", (emm_dma->s.rw) ? "W" : "R",
+-		 mrq->data->blocks, emm_dma->s.multi);
+-}
+-
+-static void prepare_emm_int(union mio_emm_int *emm_int)
+-{
+-	emm_int->val = 0;
+-	emm_int->s.cmd_err = 1;
+-	emm_int->s.dma_done = 1;
+-	emm_int->s.dma_err = 1;
+-}
+-
+-static void cvm_mmc_dma_request(struct mmc_host *mmc,
+-				struct mmc_request *mrq)
+-{
+-	struct cvm_mmc_slot *slot = mmc_priv(mmc);
+-	struct cvm_mmc_host *host = slot->host;
+-	union mio_emm_dma emm_dma;
+-	union mio_emm_int emm_int;
+-	struct mmc_data *data;
+-	u64 addr;
+-
+-	if (!mrq->data || !mrq->data->sg || !mrq->data->sg_len ||
+-	    !mrq->stop || mrq->stop->opcode != MMC_STOP_TRANSMISSION) {
+-		dev_err(&mmc->card->dev,
+-			"Error: cmv_mmc_dma_request no data\n");
+-		goto error;
+-	}
+-
+-	cvm_mmc_switch_to(slot);
+-
+-	data = mrq->data;
+-	pr_debug("DMA request  blocks: %d  block_size: %d  total_size: %d\n",
+-		 data->blocks, data->blksz, data->blocks * data->blksz);
+-	if (data->timeout_ns)
+-		set_wdog(slot, data->timeout_ns);
+-
+-	WARN_ON(host->current_req);
+-	host->current_req = mrq;
+-
+-	prepare_ext_dma(mmc, mrq, &emm_dma);
+-	addr = prepare_dma(host, data);
+-	if (!addr) {
+-		dev_err(host->dev, "prepare_dma failed\n");
+-		goto error;
+-	}
+-	prepare_emm_int(&emm_int);
+-
+-	host->dma_active = true;
+-	host->int_enable(host, emm_int.val);
+-
+-	if (host->dmar_fixup)
+-		host->dmar_fixup(host, mrq->cmd, data, addr);
+-
+-	/*
+-	 * If we have a valid SD card in the slot, we set the response
+-	 * bit mask to check for CRC errors and timeouts only.
+-	 * Otherwise, use the default power reset value.
+-	 */
+-	if (mmc->card && mmc_card_sd(mmc->card))
+-		writeq(0x00b00000ull, host->base + MIO_EMM_STS_MASK);
+-	else
+-		writeq(0xe4390080ull, host->base + MIO_EMM_STS_MASK);
+-	writeq(emm_dma.val, host->base + MIO_EMM_DMA);
+-	return;
+-
+-error:
+-	mrq->cmd->error = -EINVAL;
+-	if (mrq->done)
+-		mrq->done(mrq);
+-	host->release_bus(host);
+-}
+-
+-static void do_read_request(struct cvm_mmc_host *host, struct mmc_request *mrq)
+-{
+-	sg_miter_start(&host->smi, mrq->data->sg, mrq->data->sg_len,
+-		       SG_MITER_ATOMIC | SG_MITER_TO_SG);
+-}
+-
+-static void do_write_request(struct cvm_mmc_host *host, struct mmc_request *mrq)
+-{
+-	unsigned int data_len = mrq->data->blocks * mrq->data->blksz;
+-	struct sg_mapping_iter *smi = &host->smi;
+-	unsigned int bytes_xfered;
+-	int shift = 56;
+-	u64 dat = 0;
+-
+-	/* Copy data to the xmit buffer before issuing the command. */
+-	sg_miter_start(smi, mrq->data->sg, mrq->data->sg_len, SG_MITER_FROM_SG);
+-
+-	/* Auto inc from offset zero, dbuf zero */
+-	writeq(0x10000ull, host->base + MIO_EMM_BUF_IDX);
+-
+-	for (bytes_xfered = 0; bytes_xfered < data_len;) {
+-		if (smi->consumed >= smi->length) {
+-			if (!sg_miter_next(smi))
+-				break;
+-			smi->consumed = 0;
+-		}
+-
+-		while (smi->consumed < smi->length && shift >= 0) {
+-			dat |= ((u8 *)smi->addr)[smi->consumed] << shift;
+-			bytes_xfered++;
+-			smi->consumed++;
+-			shift -= 8;
+-		}
+-
+-		if (shift < 0) {
+-			writeq(dat, host->base + MIO_EMM_BUF_DAT);
+-			shift = 56;
+-			dat = 0;
+-		}
+-	}
+-	sg_miter_stop(smi);
+-}
+-
+-static void cvm_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
+-{
+-	struct cvm_mmc_slot *slot = mmc_priv(mmc);
+-	struct cvm_mmc_host *host = slot->host;
+-	struct mmc_command *cmd = mrq->cmd;
+-	union mio_emm_int emm_int;
+-	union mio_emm_cmd emm_cmd;
+-	struct cvm_mmc_cr_mods mods;
+-	union mio_emm_rsp_sts rsp_sts;
+-	int retries = 100;
+-
+-	/*
+-	 * Note about locking:
+-	 * All MMC devices share the same bus and controller. Allow only a
+-	 * single user of the bootbus/MMC bus at a time. The lock is acquired
+-	 * on all entry points from the MMC layer.
+-	 *
+-	 * For requests the lock is only released after the completion
+-	 * interrupt!
+-	 */
+-	host->acquire_bus(host);
+-
+-	if (cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
+-	    cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK)
+-		return cvm_mmc_dma_request(mmc, mrq);
+-
+-	cvm_mmc_switch_to(slot);
+-
+-	mods = cvm_mmc_get_cr_mods(cmd);
+-
+-	WARN_ON(host->current_req);
+-	host->current_req = mrq;
+-
+-	emm_int.val = 0;
+-	emm_int.s.cmd_done = 1;
+-	emm_int.s.cmd_err = 1;
+-
+-	if (cmd->data) {
+-		if (cmd->data->flags & MMC_DATA_READ)
+-			do_read_request(host, mrq);
+-		else
+-			do_write_request(host, mrq);
+-
+-		if (cmd->data->timeout_ns)
+-			set_wdog(slot, cmd->data->timeout_ns);
+-	} else
+-		set_wdog(slot, 0);
+-
+-	host->dma_active = false;
+-	host->int_enable(host, emm_int.val);
+-
+-	emm_cmd.val = 0;
+-	emm_cmd.s.cmd_val = 1;
+-	emm_cmd.s.ctype_xor = mods.ctype_xor;
+-	emm_cmd.s.rtype_xor = mods.rtype_xor;
+-	if (mmc_cmd_type(cmd) == MMC_CMD_ADTC)
+-		emm_cmd.s.offset = 64 - ((cmd->data->blocks * cmd->data->blksz) / 8);
+-	emm_cmd.s.bus_id = slot->bus_id;
+-	emm_cmd.s.cmd_idx = cmd->opcode;
+-	emm_cmd.s.arg = cmd->arg;
+-
+-	writeq(0, host->base + MIO_EMM_STS_MASK);
+-
+-retry:
+-	rsp_sts.val = readq(host->base + MIO_EMM_RSP_STS);
+-	if (rsp_sts.s.dma_val || rsp_sts.s.cmd_val ||
+-	    rsp_sts.s.switch_val || rsp_sts.s.dma_pend) {
+-		udelay(10);
+-		if (--retries)
+-			goto retry;
+-	}
+-	if (!retries)
+-		dev_err(host->dev, "Bad status: %Lx before command write\n", rsp_sts.val);
+-	writeq(emm_cmd.val, host->base + MIO_EMM_CMD);
+-}
+-
+-static void cvm_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+-{
+-	struct cvm_mmc_slot *slot = mmc_priv(mmc);
+-	struct cvm_mmc_host *host = slot->host;
+-	int clk_period, power_class = 10, bus_width = 0;
+-	union mio_emm_switch emm_switch;
+-	u64 clock;
+-
+-	host->acquire_bus(host);
+-	cvm_mmc_switch_to(slot);
+-
+-	/* Reset the chip on each POWER_OFF. */
+-	if (ios->power_mode == MMC_POWER_OFF) {
+-		cvm_mmc_reset_bus(slot);
+-		gpiod_set_value_cansleep(host->global_pwr_gpiod, 0);
+-	} else
+-		gpiod_set_value_cansleep(host->global_pwr_gpiod, 1);
+-
+-	switch (ios->bus_width) {
+-	case MMC_BUS_WIDTH_8:
+-		bus_width = 2;
+-		break;
+-	case MMC_BUS_WIDTH_4:
+-		bus_width = 1;
+-		break;
+-	case MMC_BUS_WIDTH_1:
+-		bus_width = 0;
+-		break;
+-	}
+-
+-	/* DDR is available for 4/8 bit bus width */
+-	if (ios->bus_width && ios->timing == MMC_TIMING_MMC_DDR52)
+-		bus_width |= 4;
+-
+-	slot->bus_width = bus_width;
+-
+-	if (!ios->clock)
+-		goto out;
+-
+-	/* Change the clock frequency. */
+-	clock = ios->clock;
+-	if (clock > 52000000)
+-		clock = 52000000;
+-	slot->clock = clock;
+-	clk_period = (host->sys_freq + clock - 1) / (2 * clock);
+-
+-	emm_switch.val = 0;
+-	emm_switch.s.hs_timing = (ios->timing == MMC_TIMING_MMC_HS);
+-	emm_switch.s.bus_width = bus_width;
+-	emm_switch.s.power_class = power_class;
+-	emm_switch.s.clk_hi = clk_period;
+-	emm_switch.s.clk_lo = clk_period;
+-	emm_switch.s.bus_id = slot->bus_id;
+-
+-	if (!switch_val_changed(slot, emm_switch.val))
+-		goto out;
+-
+-	set_wdog(slot, 0);
+-	do_switch(host, emm_switch.val);
+-	slot->cached_switch = emm_switch.val;
+-out:
+-	host->release_bus(host);
+-}
+-
+-const struct mmc_host_ops cvm_mmc_ops = {
+-	.request        = cvm_mmc_request,
+-	.set_ios        = cvm_mmc_set_ios,
+-	.get_ro		= mmc_gpio_get_ro,
+-	.get_cd		= mmc_gpio_get_cd,
+-};
+-
+-static void cvm_mmc_set_clock(struct cvm_mmc_slot *slot, unsigned int clock)
+-{
+-	struct mmc_host *mmc = slot->mmc;
+-
+-	clock = min(clock, mmc->f_max);
+-	clock = max(clock, mmc->f_min);
+-	slot->clock = clock;
+-}
+-
+-static int cvm_mmc_init_lowlevel(struct cvm_mmc_slot *slot)
+-{
+-	struct cvm_mmc_host *host = slot->host;
+-	union mio_emm_switch emm_switch;
+-
+-	/* Enable this bus slot. */
+-	host->emm_cfg |= (1ull << slot->bus_id);
+-	writeq(host->emm_cfg, slot->host->base + MIO_EMM_CFG);
+-	udelay(10);
+-
+-	/* Program initial clock speed and power. */
+-	cvm_mmc_set_clock(slot, slot->mmc->f_min);
+-	emm_switch.val = 0;
+-	emm_switch.s.power_class = 10;
+-	emm_switch.s.clk_hi = (slot->sclock / slot->clock) / 2;
+-	emm_switch.s.clk_lo = (slot->sclock / slot->clock) / 2;
+-
+-	/* Make the changes take effect on this bus slot. */
+-	emm_switch.s.bus_id = slot->bus_id;
+-	do_switch(host, emm_switch.val);
+-
+-	slot->cached_switch = emm_switch.val;
+-
+-	/*
+-	 * Set watchdog timeout value and default reset value
+-	 * for the mask register. Finally, set the CARD_RCA
+-	 * bit so that we can get the card address relative
+-	 * to the CMD register for CMD7 transactions.
+-	 */
+-	set_wdog(slot, 0);
+-	writeq(0xe4390080ull, host->base + MIO_EMM_STS_MASK);
+-	writeq(1, host->base + MIO_EMM_RCA);
+-	return 0;
+-}
+-
+-static int set_bus_width(struct device *dev, struct cvm_mmc_slot *slot, u32 id)
+-{
+-	u32 bus_width;
+-	int ret;
+-
+-	/*
+-	 * The "cavium,bus-max-width" property is DEPRECATED and should
+-	 * not be used. We handle it here to support older firmware.
+-	 * Going forward, the standard "bus-width" property is used
+-	 * instead of the Cavium-specific property.
+-	 */
+-	if (!(slot->mmc->caps & (MMC_CAP_8_BIT_DATA | MMC_CAP_4_BIT_DATA))) {
+-		/* Try legacy "cavium,bus-max-width" property. */
+-		ret = of_property_read_u32(dev->of_node, "cavium,bus-max-width",
+-					   &bus_width);
+-		if (ret) {
+-			/* No bus width specified, use default. */
+-			bus_width = 8;
+-			dev_info(dev, "Default width 8 used for slot %u\n", id);
+-		}
+-	} else {
+-		/* Hosts capable of 8-bit transfers can also do 4 bits */
+-		bus_width = (slot->mmc->caps & MMC_CAP_8_BIT_DATA) ? 8 : 4;
+-	}
+-
+-	switch (bus_width) {
+-	case 8:
+-		slot->bus_width = (MMC_BUS_WIDTH_8 - 1);
+-		slot->mmc->caps = MMC_CAP_8_BIT_DATA | MMC_CAP_4_BIT_DATA;
+-		break;
+-	case 4:
+-		slot->bus_width = (MMC_BUS_WIDTH_4 - 1);
+-		slot->mmc->caps = MMC_CAP_4_BIT_DATA;
+-		break;
+-	case 1:
+-		slot->bus_width = MMC_BUS_WIDTH_1;
+-		break;
+-	default:
+-		dev_err(dev, "Invalid bus width for slot %u\n", id);
+-		return -EINVAL;
+-	}
+-	return 0;
+-}
+-
+-static void set_frequency(struct device *dev, struct mmc_host *mmc, u32 id)
+-{
+-	int ret;
+-
+-	/*
+-	 * The "spi-max-frequency" property is DEPRECATED and should
+-	 * not be used. We handle it here to support older firmware.
+-	 * Going forward, the standard "max-frequency" property is
+-	 * used instead of the Cavium-specific property.
+-	 */
+-	if (mmc->f_max == 0) {
+-		/* Try legacy "spi-max-frequency" property. */
+-		ret = of_property_read_u32(dev->of_node, "spi-max-frequency",
+-					   &mmc->f_max);
+-		if (ret) {
+-			/* No frequency properties found, use default. */
+-			mmc->f_max = 52000000;
+-			dev_info(dev, "Default %u frequency used for slot %u\n",
+-				 mmc->f_max, id);
+-		}
+-	} else if (mmc->f_max > 52000000)
+-		mmc->f_max = 52000000;
+-
+-	/* Set minimum frequency */
+-	mmc->f_min = 400000;
+-}
+-
+-int cvm_mmc_slot_probe(struct device *dev, struct cvm_mmc_host *host)
+-{
+-	struct device_node *node = dev->of_node;
+-	u32 id, cmd_skew, dat_skew;
+-	struct cvm_mmc_slot *slot;
+-	struct mmc_host *mmc;
+-	u64 clock_period;
+-	int ret;
+-
+-	ret = of_property_read_u32(node, "reg", &id);
+-	if (ret) {
+-		dev_err(dev, "Missing or invalid reg property on %s\n",
+-			of_node_full_name(node));
+-		return ret;
+-	}
+-
+-	if (id >= CAVIUM_MAX_MMC || host->slot[id]) {
+-		dev_err(dev, "Invalid reg property on %s\n",
+-			of_node_full_name(node));
+-		return -EINVAL;
+-	}
+-
+-	mmc = mmc_alloc_host(sizeof(struct cvm_mmc_slot), dev);
+-	if (!mmc)
+-		return -ENOMEM;
+-
+-	slot = mmc_priv(mmc);
+-	slot->mmc = mmc;
+-	slot->host = host;
+-
+-	ret = mmc_of_parse(mmc);
+-	if (ret)
+-		goto err;
+-
+-	ret = set_bus_width(dev, slot, id);
+-	if (ret)
+-		goto err;
+-
+-	set_frequency(dev, mmc, id);
+-
+-	/* Octeon-specific DT properties. */
+-	ret = of_property_read_u32(node, "cavium,cmd-clk-skew", &cmd_skew);
+-	if (ret)
+-		cmd_skew = 0;
+-	ret = of_property_read_u32(node, "cavium,dat-clk-skew", &dat_skew);
+-	if (ret)
+-		dat_skew = 0;
+-
+-	/*
+-	 * We only have a 3.3v supply, so we are calling this mostly
+-	 * to get a sane OCR mask for other parts of the MMC subsytem.
+-	 */
+-	ret = mmc_of_parse_voltage(node, &mmc->ocr_avail);
+-	if (ret == -EINVAL)
+-		goto err;
+-
+-	/*
+-	 * We do not have a voltage regulator, just a single
+-	 * GPIO line to control power to all of the slots. It
+-	 * is registered in the platform code. We can, however,
+-	 * still set the POWER_OFF capability as long as the
+-	 * GPIO was registered correctly.
+-	 */
+-	if (!IS_ERR(host->global_pwr_gpiod)) {
+-		mmc->caps |= MMC_CAP_POWER_OFF_CARD;
+-		dev_info(dev, "Got global power GPIO\n");
+-	} else
+-		dev_info(dev, "Did not get global power GPIO\n");
+-
+-	/* Set up host parameters */
+-	mmc->ops = &cvm_mmc_ops;
+-
+-	/*
+-	 * We only have a 3.3v supply, we cannot support any
+-	 * of the UHS modes. We do support the high speed DDR
+-	 * modes up to 52MHz. And we need to lie about 1.8v support,
+-	 * otherwise the MMC layer will not switch to DDR.
+-	 */
+-	mmc->caps |= MMC_CAP_MMC_HIGHSPEED | MMC_CAP_SD_HIGHSPEED |
+-		     MMC_CAP_ERASE | MMC_CAP_CMD23 |
+-		     MMC_CAP_1_8V_DDR;
+-
+-	if (host->use_sg)
+-		mmc->max_segs = 16;
+-	else
+-		mmc->max_segs = 1;
+-
+-	/* DMA size field can address up to 8 MB */
+-	mmc->max_seg_size = 8 * 1024 * 1024;
+-	mmc->max_req_size = mmc->max_seg_size;
+-	/* External DMA is in 512 byte blocks */
+-	mmc->max_blk_size = 512;
+-	/* DMA block count field is 15 bits */
+-	mmc->max_blk_count = 32767;
+-
+-	slot->clock = mmc->f_min;
+-	slot->sclock = host->sys_freq;
+-
+-	/* Period in picoseconds. */
+-	clock_period = 1000000000000ull / slot->sclock;
+-	slot->cmd_cnt = (cmd_skew + clock_period / 2) / clock_period;
+-	slot->dat_cnt = (dat_skew + clock_period / 2) / clock_period;
+-
+-	slot->bus_id = id;
+-	slot->cached_rca = 1;
+-
+-	host->acquire_bus(host);
+-	host->slot[id] = slot;
+-	cvm_mmc_switch_to(slot);
+-	cvm_mmc_init_lowlevel(slot);
+-	host->release_bus(host);
+-
+-	ret = mmc_add_host(mmc);
+-	if (ret) {
+-		dev_err(dev, "mmc_add_host() returned %d\n", ret);
+-		goto err;
+-	}
+-
+-	return 0;
+-
+-err:
+-	slot->host->slot[id] = NULL;
+-
+-	gpiod_set_value_cansleep(host->global_pwr_gpiod, 0);
+-
+-	mmc_free_host(slot->mmc);
+-	return ret;
+-}
+-
+-int cvm_mmc_slot_remove(struct cvm_mmc_slot *slot)
+-{
+-	mmc_remove_host(slot->mmc);
+-	slot->host->slot[slot->bus_id] = NULL;
+-	gpiod_set_value_cansleep(slot->host->global_pwr_gpiod, 0);
+-	mmc_free_host(slot->mmc);
+-
+-	return 0;
+-}
+diff --git a/drivers/mmc/host/cavium_mmc.h b/drivers/mmc/host/cavium_mmc.h
+deleted file mode 100644
+index 9fab637539c8..000000000000
+--- a/drivers/mmc/host/cavium_mmc.h
++++ /dev/null
+@@ -1,425 +0,0 @@
+-/*
+- * Driver for MMC and SSD cards for Cavium OCTEON and ThunderX SOCs.
+- *
+- * This file is subject to the terms and conditions of the GNU General Public
+- * License.  See the file "COPYING" in the main directory of this archive
+- * for more details.
+- *
+- * Copyright (C) 2012-2016 Cavium Inc.
+- */
+-#include <linux/clk.h>
+-#include <linux/io.h>
+-#include <linux/mmc/host.h>
+-#include <linux/of.h>
+-#include <linux/pci.h>
+-#include <linux/scatterlist.h>
+-#include <linux/semaphore.h>
+-
+-#define CAVIUM_MAX_MMC		4
+-
+-#if IS_ENABLED(CONFIG_OCTEON_MMC)
+-
+-#define MIO_EMM_DMA_CFG		0x00
+-#define MIO_EMM_DMA_ADR		0x08
+-
+-#define MIO_EMM_CFG		0x00
+-#define MIO_EMM_SWITCH		0x48
+-#define MIO_EMM_DMA		0x50
+-#define MIO_EMM_CMD		0x58
+-#define MIO_EMM_RSP_STS		0x60
+-#define MIO_EMM_RSP_LO		0x68
+-#define MIO_EMM_RSP_HI		0x70
+-#define MIO_EMM_INT		0x78
+-#define MIO_EMM_INT_EN		0x80
+-#define MIO_EMM_WDOG		0x88
+-#define MIO_EMM_SAMPLE		0x90
+-#define MIO_EMM_STS_MASK	0x98
+-#define MIO_EMM_RCA		0xa0
+-#define MIO_EMM_BUF_IDX		0xe0
+-#define MIO_EMM_BUF_DAT		0xe8
+-
+-#else /* CONFIG_THUNDERX_MMC */
+-
+-#define MIO_EMM_DMA_FIFO_CFG	0x160
+-#define MIO_EMM_DMA_FIFO_ADR	0x170
+-#define MIO_EMM_DMA_FIFO_CMD	0x178
+-#define MIO_EMM_DMA_CFG		0x180
+-#define MIO_EMM_DMA_ADR		0x188
+-#define MIO_EMM_DMA_INT		0x190
+-#define MIO_EMM_DMA_INT_W1S	0x198
+-#define MIO_EMM_DMA_INT_ENA_W1S	0x1a0
+-#define MIO_EMM_DMA_INT_ENA_W1C	0x1a8
+-
+-#define MIO_EMM_CFG		0x2000
+-#define MIO_EMM_SWITCH		0x2048
+-#define MIO_EMM_DMA		0x2050
+-#define MIO_EMM_CMD		0x2058
+-#define MIO_EMM_RSP_STS		0x2060
+-#define MIO_EMM_RSP_LO		0x2068
+-#define MIO_EMM_RSP_HI		0x2070
+-#define MIO_EMM_INT		0x2078
+-#define MIO_EMM_INT_EN		0x2080
+-#define MIO_EMM_WDOG		0x2088
+-#define MIO_EMM_SAMPLE		0x2090
+-#define MIO_EMM_STS_MASK	0x2098
+-#define MIO_EMM_RCA		0x20a0
+-#define MIO_EMM_BUF_IDX		0x20e0
+-#define MIO_EMM_BUF_DAT		0x20e8
+-
+-#define MIO_EMM_INT_EN_SET	0x20b0
+-#define MIO_EMM_INT_EN_CLR	0x20b8
+-
+-#endif
+-
+-struct cvm_mmc_host {
+-	struct device *dev;
+-	void __iomem *base;
+-	void __iomem *dma_base;
+-	u64 emm_cfg;
+-	u64 n_minus_one;	/* OCTEON II workaround location */
+-	int last_slot;
+-	struct clk *clk;
+-	int sys_freq;
+-
+-	struct mmc_request *current_req;
+-	struct sg_mapping_iter smi;
+-	bool dma_active;
+-	bool use_sg;
+-
+-	bool has_ciu3;
+-	bool big_dma_addr;
+-	bool need_irq_handler_lock;
+-	spinlock_t irq_handler_lock;
+-	struct semaphore mmc_serializer;
+-
+-	struct gpio_desc *global_pwr_gpiod;
+-
+-	struct cvm_mmc_slot *slot[CAVIUM_MAX_MMC];
+-
+-	void (*acquire_bus)(struct cvm_mmc_host *);
+-	void (*release_bus)(struct cvm_mmc_host *);
+-	void (*int_enable)(struct cvm_mmc_host *, u64);
+-	/* required on some MIPS models */
+-	void (*dmar_fixup)(struct cvm_mmc_host *, struct mmc_command *,
+-			   struct mmc_data *, u64);
+-	void (*dmar_fixup_done)(struct cvm_mmc_host *);
+-
+-#if IS_ENABLED(CONFIG_MMC_THUNDERX)
+-	struct msix_entry	*mmc_msix;
+-	unsigned int		msix_count;
+-#endif
+-};
+-
+-struct cvm_mmc_slot {
+-	struct mmc_host *mmc;		/* slot-level mmc_core object */
+-	struct cvm_mmc_host *host;	/* common hw for all slots */
+-
+-	u64 clock;
+-	unsigned int sclock;
+-
+-	u64 cached_switch;
+-	u64 cached_rca;
+-
+-	unsigned int cmd_cnt;		/* sample delay */
+-	unsigned int dat_cnt;		/* sample delay */
+-
+-	int bus_width;
+-	int bus_id;
+-};
+-
+-struct cvm_mmc_cr_type {
+-	u8 ctype;
+-	u8 rtype;
+-};
+-
+-struct cvm_mmc_cr_mods {
+-	u8 ctype_xor;
+-	u8 rtype_xor;
+-};
+-
+-/* Bitfield definitions */
+-
+-union mio_emm_dma_fifo_cfg {
+-	u64 val;
+-	struct mio_emm_dma_fifo_cfg_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :48;
+-		u64 clr:1;
+-		u64 :3;
+-		u64 int_lvl:4;
+-		u64 :3;
+-		u64 count:5;
+-#else
+-		u64 count:5;
+-		u64 :3;
+-		u64 int_lvl:4;
+-		u64 :3;
+-		u64 clr:1;
+-		u64 :48;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_dma_fifo_cmd {
+-	u64 val;
+-	struct mio_emm_dma_fifo_cmd_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :1;
+-		u64 rw:1;
+-		u64 :1;
+-		u64 intdis:1;
+-		u64 swap32:1;
+-		u64 swap16:1;
+-		u64 swap8:1;
+-		u64 endian:1;
+-		u64 size:20;
+-		u64 :36;
+-#else
+-		u64 :36;
+-		u64 size:20;
+-		u64 endian:1;
+-		u64 swap8:1;
+-		u64 swap16:1;
+-		u64 swap32:1;
+-		u64 intdis:1;
+-		u64 :1;
+-		u64 rw:1;
+-		u64 :1;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_cmd {
+-	u64 val;
+-	struct mio_emm_cmd_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :2;
+-		u64 bus_id:2;
+-		u64 cmd_val:1;
+-		u64 :3;
+-		u64 dbuf:1;
+-		u64 offset:6;
+-		u64 :6;
+-		u64 ctype_xor:2;
+-		u64 rtype_xor:3;
+-		u64 cmd_idx:6;
+-		u64 arg:32;
+-#else
+-		u64 arg:32;
+-		u64 cmd_idx:6;
+-		u64 rtype_xor:3;
+-		u64 ctype_xor:2;
+-		u64 :6;
+-		u64 offset:6;
+-		u64 dbuf:1;
+-		u64 :3;
+-		u64 cmd_val:1;
+-		u64 bus_id:2;
+-		u64 :2;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_dma {
+-	u64 val;
+-	struct mio_emm_dma_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :2;
+-		u64 bus_id:2;
+-		u64 dma_val:1;
+-		u64 sector:1;
+-		u64 dat_null:1;
+-		u64 thres:6;
+-		u64 rel_wr:1;
+-		u64 rw:1;
+-		u64 multi:1;
+-		u64 block_cnt:16;
+-		u64 card_addr:32;
+-#else
+-		u64 card_addr:32;
+-		u64 block_cnt:16;
+-		u64 multi:1;
+-		u64 rw:1;
+-		u64 rel_wr:1;
+-		u64 thres:6;
+-		u64 dat_null:1;
+-		u64 sector:1;
+-		u64 dma_val:1;
+-		u64 bus_id:2;
+-		u64 :2;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_dma_cfg {
+-	u64 val;
+-	struct mio_emm_dma_cfg_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 en:1;
+-		u64 rw:1;
+-		u64 clr:1;
+-		u64 :1;
+-		u64 swap32:1;
+-		u64 swap16:1;
+-		u64 swap8:1;
+-		u64 endian:1;
+-		u64 size:20;
+-		u64 adr:36;
+-#else
+-		u64 adr:36;
+-		u64 size:20;
+-		u64 endian:1;
+-		u64 swap8:1;
+-		u64 swap16:1;
+-		u64 swap32:1;
+-		u64 :1;
+-		u64 clr:1;
+-		u64 rw:1;
+-		u64 en:1;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_int {
+-	u64 val;
+-	struct mio_emm_int_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :57;
+-		u64 switch_err:1;
+-		u64 switch_done:1;
+-		u64 dma_err:1;
+-		u64 cmd_err:1;
+-		u64 dma_done:1;
+-		u64 cmd_done:1;
+-		u64 buf_done:1;
+-#else
+-		u64 buf_done:1;
+-		u64 cmd_done:1;
+-		u64 dma_done:1;
+-		u64 cmd_err:1;
+-		u64 dma_err:1;
+-		u64 switch_done:1;
+-		u64 switch_err:1;
+-		u64 :57;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_rsp_sts {
+-	u64 val;
+-	struct mio_emm_rsp_sts_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :2;
+-		u64 bus_id:2;
+-		u64 cmd_val:1;
+-		u64 switch_val:1;
+-		u64 dma_val:1;
+-		u64 dma_pend:1;
+-		u64 :27;
+-		u64 dbuf_err:1;
+-		u64 :4;
+-		u64 dbuf:1;
+-		u64 blk_timeout:1;
+-		u64 blk_crc_err:1;
+-		u64 rsp_busybit:1;
+-		u64 stp_timeout:1;
+-		u64 stp_crc_err:1;
+-		u64 stp_bad_sts:1;
+-		u64 stp_val:1;
+-		u64 rsp_timeout:1;
+-		u64 rsp_crc_err:1;
+-		u64 rsp_bad_sts:1;
+-		u64 rsp_val:1;
+-		u64 rsp_type:3;
+-		u64 cmd_type:2;
+-		u64 cmd_idx:6;
+-		u64 cmd_done:1;
+-#else
+-		u64 cmd_done:1;
+-		u64 cmd_idx:6;
+-		u64 cmd_type:2;
+-		u64 rsp_type:3;
+-		u64 rsp_val:1;
+-		u64 rsp_bad_sts:1;
+-		u64 rsp_crc_err:1;
+-		u64 rsp_timeout:1;
+-		u64 stp_val:1;
+-		u64 stp_bad_sts:1;
+-		u64 stp_crc_err:1;
+-		u64 stp_timeout:1;
+-		u64 rsp_busybit:1;
+-		u64 blk_crc_err:1;
+-		u64 blk_timeout:1;
+-		u64 dbuf:1;
+-		u64 :4;
+-		u64 dbuf_err:1;
+-		u64 :27;
+-		u64 dma_pend:1;
+-		u64 dma_val:1;
+-		u64 switch_val:1;
+-		u64 cmd_val:1;
+-		u64 bus_id:2;
+-		u64 :2;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_sample {
+-	u64 val;
+-	struct mio_emm_sample_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :38;
+-		u64 cmd_cnt:10;
+-		u64 :6;
+-		u64 dat_cnt:10;
+-#else
+-		u64 dat_cnt:10;
+-		u64 :6;
+-		u64 cmd_cnt:10;
+-		u64 :38;
+-#endif
+-	} s;
+-};
+-
+-union mio_emm_switch {
+-	u64 val;
+-	struct mio_emm_switch_s {
+-#ifdef __BIG_ENDIAN_BITFIELD
+-		u64 :2;
+-		u64 bus_id:2;
+-		u64 switch_exe:1;
+-		u64 switch_err0:1;
+-		u64 switch_err1:1;
+-		u64 switch_err2:1;
+-		u64 :7;
+-		u64 hs_timing:1;
+-		u64 :5;
+-		u64 bus_width:3;
+-		u64 :4;
+-		u64 power_class:4;
+-		u64 clk_hi:16;
+-		u64 clk_lo:16;
+-#else
+-		u64 clk_lo:16;
+-		u64 clk_hi:16;
+-		u64 power_class:4;
+-		u64 :4;
+-		u64 bus_width:3;
+-		u64 :5;
+-		u64 hs_timing:1;
+-		u64 :7;
+-		u64 switch_err2:1;
+-		u64 switch_err1:1;
+-		u64 switch_err0:1;
+-		u64 switch_exe:1;
+-		u64 bus_id:2;
+-		u64 :2;
+-#endif
+-	} s;
+-};
+-
+-/* Protoypes */
+-irqreturn_t cvm_mmc_interrupt(int irq, void *dev_id);
+-int cvm_mmc_slot_probe(struct device *dev, struct cvm_mmc_host *host);
+-int cvm_mmc_slot_remove(struct cvm_mmc_slot *slot);
+-extern const struct mmc_host_ops cvm_mmc_ops;
+diff --git a/drivers/mmc/host/octeon_platdrv_mmc.c b/drivers/mmc/host/octeon_platdrv_mmc.c
+deleted file mode 100644
+index c5dba8168418..000000000000
+--- a/drivers/mmc/host/octeon_platdrv_mmc.c
++++ /dev/null
+@@ -1,260 +0,0 @@
+-/*
+- * Driver for MMC and SSD cards for Cavium OCTEON SOCs.
+- *
+- * This file is subject to the terms and conditions of the GNU General Public
+- * License.  See the file "COPYING" in the main directory of this archive
+- * for more details.
+- *
+- * Copyright (C) 2012-2016 Cavium Inc.
+- */
+-#include <linux/gpio/consumer.h>
+-#include <linux/interrupt.h>
+-#include <linux/mmc/mmc.h>
+-#include <linux/mmc/slot-gpio.h>
+-#include <linux/module.h>
+-#include <linux/of_platform.h>
+-#include <asm/octeon/octeon.h>
+-#include "cavium_mmc.h"
+-
+-#define DRV_NAME "octeon_mmc"
+-
+-#define CVMX_MIO_BOOT_CTL CVMX_ADD_IO_SEG(0x00011800000000D0ull)
+-
+-extern void l2c_lock_mem_region(u64 start, u64 len);
+-extern void l2c_unlock_mem_region(u64 start, u64 len);
+-
+-static void octeon_mmc_acquire_bus(struct cvm_mmc_host *host)
+-{
+-	if (!host->has_ciu3) {
+-		/* Switch the MMC controller onto the bus. */
+-		down(&octeon_bootbus_sem);
+-		writeq(0, (void __iomem *)CVMX_MIO_BOOT_CTL);
+-	} else {
+-		down(&host->mmc_serializer);
+-	}
+-}
+-
+-static void octeon_mmc_release_bus(struct cvm_mmc_host *host)
+-{
+-	if (!host->has_ciu3)
+-		up(&octeon_bootbus_sem);
+-	else
+-		up(&host->mmc_serializer);
+-}
+-
+-static void octeon_mmc_int_enable(struct cvm_mmc_host *host, u64 val)
+-{
+-	writeq(val, host->base + MIO_EMM_INT);
+-	if (!host->dma_active || (host->dma_active && !host->has_ciu3))
+-		writeq(val, host->base + MIO_EMM_INT_EN);
+-}
+-
+-static void octeon_mmc_dmar_fixup(struct cvm_mmc_host *host,
+-				  struct mmc_command *cmd,
+-				  struct mmc_data *data,
+-				  u64 addr)
+-{
+-	if (cmd->opcode != MMC_WRITE_MULTIPLE_BLOCK)
+-		return;
+-	if (data->blksz * data->blocks <= 1024)
+-		return;
+-
+-	host->n_minus_one = addr + (data->blksz * data->blocks) - 1024;
+-	l2c_lock_mem_region(host->n_minus_one, 512);
+-}
+-
+-static void octeon_mmc_dmar_fixup_done(struct cvm_mmc_host *host)
+-{
+-	if (!host->n_minus_one)
+-		return;
+-	l2c_unlock_mem_region(host->n_minus_one, 512);
+-	host->n_minus_one = 0;
+-}
+-
+-static int octeon_mmc_probe(struct platform_device *pdev)
+-{
+-	struct device_node *cn, *node = pdev->dev.of_node;
+-	struct cvm_mmc_host *host;
+-	struct resource	*res;
+-	void __iomem *base;
+-	int mmc_irq[9];
+-	int i, ret = 0;
+-	u64 val;
+-
+-	host = devm_kzalloc(&pdev->dev, sizeof(*host), GFP_KERNEL);
+-	if (!host)
+-		return -ENOMEM;
+-
+-	spin_lock_init(&host->irq_handler_lock);
+-	sema_init(&host->mmc_serializer, 1);
+-
+-	host->dev = &pdev->dev;
+-	host->acquire_bus = octeon_mmc_acquire_bus;
+-	host->release_bus = octeon_mmc_release_bus;
+-	host->int_enable = octeon_mmc_int_enable;
+-	if (OCTEON_IS_MODEL(OCTEON_CN6XXX) ||
+-	    OCTEON_IS_MODEL(OCTEON_CNF7XXX)) {
+-		host->dmar_fixup = octeon_mmc_dmar_fixup;
+-		host->dmar_fixup_done = octeon_mmc_dmar_fixup_done;
+-	}
+-
+-	host->sys_freq = octeon_get_io_clock_rate();
+-
+-	if (of_device_is_compatible(node, "cavium,octeon-7890-mmc")) {
+-		host->big_dma_addr = true;
+-		host->need_irq_handler_lock = true;
+-		host->has_ciu3 = true;
+-		/*
+-		 * First seven are the EMM_INT bits 0..6, then two for
+-		 * the EMM_DMA_INT bits
+-		 */
+-		for (i = 0; i < 9; i++) {
+-			mmc_irq[i] = platform_get_irq(pdev, i);
+-			if (mmc_irq[i] < 0)
+-				return mmc_irq[i];
+-
+-			/* work around legacy u-boot device trees */
+-			irq_set_irq_type(mmc_irq[i], IRQ_TYPE_EDGE_RISING);
+-		}
+-	} else {
+-		host->big_dma_addr = false;
+-		host->need_irq_handler_lock = false;
+-		host->has_ciu3 = false;
+-		/* First one is EMM second DMA */
+-		for (i = 0; i < 2; i++) {
+-			mmc_irq[i] = platform_get_irq(pdev, i);
+-			if (mmc_irq[i] < 0)
+-				return mmc_irq[i];
+-		}
+-	}
+-
+-	host->last_slot = -1;
+-
+-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-	if (!res) {
+-		dev_err(&pdev->dev, "Platform resource[0] is missing\n");
+-		return -ENXIO;
+-	}
+-	base = devm_ioremap_resource(&pdev->dev, res);
+-	if (IS_ERR(base))
+-		return PTR_ERR(base);
+-	host->base = (void __iomem *)base;
+-
+-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+-	if (!res) {
+-		dev_err(&pdev->dev, "Platform resource[1] is missing\n");
+-		return -EINVAL;
+-	}
+-	base = devm_ioremap_resource(&pdev->dev, res);
+-	if (IS_ERR(base))
+-		return PTR_ERR(base);
+-	host->dma_base = (void __iomem *)base;
+-
+-	/*
+-	 * Clear out any pending interrupts that may be left over from
+-	 * bootloader.
+-	 */
+-	val = readq(host->base + MIO_EMM_INT);
+-	writeq(val, host->base + MIO_EMM_INT);
+-
+-	if (host->has_ciu3) {
+-		/* Only CMD_DONE, DMA_DONE, CMD_ERR, DMA_ERR */
+-		for (i = 1; i <= 4; i++) {
+-			ret = devm_request_irq(&pdev->dev, mmc_irq[i],
+-					       cvm_mmc_interrupt,
+-					       0, DRV_NAME, host);
+-			if (ret < 0) {
+-				dev_err(&pdev->dev, "Error: devm_request_irq %d\n",
+-					mmc_irq[i]);
+-				return ret;
+-			}
+-		}
+-	} else {
+-		ret = devm_request_irq(&pdev->dev, mmc_irq[0],
+-				       cvm_mmc_interrupt, 0, DRV_NAME, host);
+-		if (ret < 0) {
+-			dev_err(&pdev->dev, "Error: devm_request_irq %d\n",
+-				mmc_irq[0]);
+-			return ret;
+-		}
+-	}
+-
+-	host->global_pwr_gpiod = devm_gpiod_get_optional(&pdev->dev, "power",
+-							 GPIOD_OUT_HIGH);
+-	if (IS_ERR(host->global_pwr_gpiod)) {
+-		dev_err(&pdev->dev, "Invalid power GPIO\n");
+-		return PTR_ERR(host->global_pwr_gpiod);
+-	}
+-
+-	platform_set_drvdata(pdev, host);
+-
+-	for_each_child_of_node(node, cn) {
+-		struct platform_device *slot_pdev;
+-
+-		slot_pdev = of_platform_device_create(cn, NULL, &pdev->dev);
+-		ret = cvm_mmc_slot_probe(&slot_pdev->dev, host);
+-		if (ret) {
+-			dev_err(&pdev->dev, "Error populating slots\n");
+-			gpiod_set_value_cansleep(host->global_pwr_gpiod, 0);
+-			return ret;
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-static int octeon_mmc_remove(struct platform_device *pdev)
+-{
+-	union mio_emm_dma_cfg dma_cfg;
+-	struct cvm_mmc_host *host = platform_get_drvdata(pdev);
+-	int i;
+-
+-	for (i = 0; i < CAVIUM_MAX_MMC; i++)
+-		if (host->slot[i])
+-			cvm_mmc_slot_remove(host->slot[i]);
+-
+-	dma_cfg.val = readq(host->dma_base + MIO_EMM_DMA_CFG);
+-	dma_cfg.s.en = 0;
+-	writeq(dma_cfg.val, host->dma_base + MIO_EMM_DMA_CFG);
+-
+-	gpiod_set_value_cansleep(host->global_pwr_gpiod, 0);
+-
+-	return 0;
+-}
+-
+-static const struct of_device_id octeon_mmc_match[] = {
+-	{
+-		.compatible = "cavium,octeon-6130-mmc",
+-	},
+-	{
+-		.compatible = "cavium,octeon-7890-mmc",
+-	},
+-	{},
+-};
+-MODULE_DEVICE_TABLE(of, octeon_mmc_match);
+-
+-static struct platform_driver octeon_mmc_driver = {
+-	.probe		= octeon_mmc_probe,
+-	.remove		= octeon_mmc_remove,
+-	.driver		= {
+-		.name	= DRV_NAME,
+-		.of_match_table = octeon_mmc_match,
+-	},
+-};
+-
+-static int __init octeon_mmc_init(void)
+-{
+-	return platform_driver_register(&octeon_mmc_driver);
+-}
+-
+-static void __exit octeon_mmc_cleanup(void)
+-{
+-	platform_driver_unregister(&octeon_mmc_driver);
+-}
+-
+-module_init(octeon_mmc_init);
+-module_exit(octeon_mmc_cleanup);
+-
+-MODULE_AUTHOR("Cavium Inc. <support@cavium.com>");
+-MODULE_DESCRIPTION("Low-level driver for Cavium OCTEON MMC/SSD card");
+-MODULE_LICENSE("GPL");
+diff --git a/drivers/mmc/host/thunderx_pcidrv_mmc.c b/drivers/mmc/host/thunderx_pcidrv_mmc.c
+deleted file mode 100644
+index 67f4de638b4f..000000000000
+--- a/drivers/mmc/host/thunderx_pcidrv_mmc.c
++++ /dev/null
+@@ -1,216 +0,0 @@
+-/*
+- * Driver for MMC and SSD cards for Cavium ThunderX SOCs.
+- *
+- * This file is subject to the terms and conditions of the GNU General Public
+- * License.  See the file "COPYING" in the main directory of this archive
+- * for more details.
+- *
+- * Copyright (C) 2016 Cavium Inc.
+- */
+-#include <linux/dma-mapping.h>
+-#include <linux/gpio/consumer.h>
+-#include <linux/interrupt.h>
+-#include <linux/mmc/mmc.h>
+-#include <linux/mmc/slot-gpio.h>
+-#include <linux/module.h>
+-#include <linux/of_platform.h>
+-#include "cavium_mmc.h"
+-
+-#define DRV_NAME "thunderx_mmc"
+-
+-static void thunder_mmc_acquire_bus(struct cvm_mmc_host *host)
+-{
+-	down(&host->mmc_serializer);
+-}
+-
+-static void thunder_mmc_release_bus(struct cvm_mmc_host *host)
+-{
+-	up(&host->mmc_serializer);
+-}
+-
+-static void thunder_mmc_int_enable(struct cvm_mmc_host *host, u64 val)
+-{
+-	writeq(val, host->base + MIO_EMM_INT);
+-	writeq(val, host->base + MIO_EMM_INT_EN_SET);
+-}
+-
+-static int thunder_mmc_register_interrupts(struct cvm_mmc_host *host,
+-					   struct pci_dev *pdev)
+-{
+-	int ret, i;
+-
+-	host->msix_count = pci_msix_vec_count(pdev);
+-	host->mmc_msix = devm_kzalloc(&pdev->dev,
+-		(sizeof(struct msix_entry)) * host->msix_count, GFP_KERNEL);
+-	if (!host->mmc_msix)
+-		return -ENOMEM;
+-
+-	for (i = 0; i < host->msix_count; i++)
+-		host->mmc_msix[i].entry = i;
+-
+-	ret = pci_enable_msix(pdev, host->mmc_msix, host->msix_count);
+-	if (ret)
+-		return ret;
+-
+-	/* register interrupts */
+-	for (i = 0; i < host->msix_count; i++) {
+-		ret = devm_request_irq(&pdev->dev, host->mmc_msix[i].vector,
+-				       cvm_mmc_interrupt,
+-				       0, DRV_NAME, host);
+-		if (ret)
+-			return ret;
+-	}
+-	return 0;
+-}
+-
+-static int thunder_mmc_probe(struct pci_dev *pdev,
+-			     const struct pci_device_id *id)
+-{
+-	struct device_node *node = pdev->dev.of_node;
+-	struct device *dev = &pdev->dev;
+-	struct device_node *child_node;
+-	struct cvm_mmc_host *host;
+-	int ret;
+-
+-	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
+-	if (!host)
+-		return -ENOMEM;
+-
+-	pci_set_drvdata(pdev, host);
+-	ret = pcim_enable_device(pdev);
+-	if (ret)
+-		return ret;
+-
+-	ret = pci_request_regions(pdev, DRV_NAME);
+-	if (ret)
+-		return ret;
+-
+-	host->base = pcim_iomap(pdev, 0, pci_resource_len(pdev, 0));
+-	if (!host->base)
+-		return -EINVAL;
+-
+-	/* On ThunderX these are identical */
+-	host->dma_base = host->base;
+-
+-	host->clk = devm_clk_get(dev, NULL);
+-	if (IS_ERR(host->clk))
+-		return PTR_ERR(host->clk);
+-
+-	ret = clk_prepare_enable(host->clk);
+-	if (ret)
+-		return ret;
+-	host->sys_freq = clk_get_rate(host->clk);
+-
+-	spin_lock_init(&host->irq_handler_lock);
+-	sema_init(&host->mmc_serializer, 1);
+-
+-	host->dev = dev;
+-	host->acquire_bus = thunder_mmc_acquire_bus;
+-	host->release_bus = thunder_mmc_release_bus;
+-	host->int_enable = thunder_mmc_int_enable;
+-
+-	host->use_sg = true;
+-	host->big_dma_addr = true;
+-	host->need_irq_handler_lock = true;
+-	host->last_slot = -1;
+-
+-	ret = dma_set_mask(dev, DMA_BIT_MASK(48));
+-	if (ret)
+-		goto error;
+-
+-	/*
+-	 * Clear out any pending interrupts that may be left over from
+-	 * bootloader. Writing 1 to the bits clears them.
+-	 */
+-	writeq(127, host->base + MIO_EMM_INT_EN);
+-	writeq(3, host->base + MIO_EMM_DMA_INT_ENA_W1C);
+-	/* Clear DMA FIFO */
+-	writeq(BIT_ULL(16), host->base + MIO_EMM_DMA_FIFO_CFG);
+-
+-	ret = thunder_mmc_register_interrupts(host, pdev);
+-	if (ret)
+-		goto error;
+-
+-	host->global_pwr_gpiod = devm_gpiod_get_optional(&pdev->dev, "power",
+-							 GPIOD_OUT_LOW);
+-	if (IS_ERR(host->global_pwr_gpiod)) {
+-		ret = PTR_ERR(host->global_pwr_gpiod);
+-		goto error;
+-	}
+-
+-	for_each_child_of_node(node, child_node) {
+-		/*
+-		 * XXX hack: mmc_of_parse looks only at the current device's
+-		 * DT node. That means we require one device per slot with
+-		 * it's node pointing to the slot. The easiest way to get this
+-		 * is using of_platform_device_create. Not sure what a proper
+-		 * solution is, maybe extend mmc_of_parse to handle multiple
+-		 * slots? --jang
+-		 */
+-		struct platform_device *slot_pdev;
+-
+-		slot_pdev = of_platform_device_create(child_node, NULL,
+-						      &pdev->dev);
+-		if (!slot_pdev)
+-			continue;
+-		ret = cvm_mmc_slot_probe(&slot_pdev->dev, host);
+-		if (ret) {
+-			gpiod_set_value_cansleep(host->global_pwr_gpiod, 0);
+-			goto error;
+-		}
+-	}
+-	dev_info(dev, "probed\n");
+-	return 0;
+-
+-error:
+-	clk_disable_unprepare(host->clk);
+-	return ret;
+-}
+-
+-static void thunder_mmc_remove(struct pci_dev *pdev)
+-{
+-	struct cvm_mmc_host *host = pci_get_drvdata(pdev);
+-	union mio_emm_dma_cfg dma_cfg;
+-	int i;
+-
+-	for (i = 0; i < CAVIUM_MAX_MMC; i++)
+-		if (host->slot[i])
+-			cvm_mmc_slot_remove(host->slot[i]);
+-
+-	dma_cfg.val = readq(host->dma_base + MIO_EMM_DMA_CFG);
+-	dma_cfg.s.en = 0;
+-	writeq(dma_cfg.val, host->dma_base + MIO_EMM_DMA_CFG);
+-
+-	gpiod_set_value_cansleep(host->global_pwr_gpiod, 0);
+-	clk_disable_unprepare(host->clk);
+-}
+-
+-static const struct pci_device_id thunder_mmc_id_table[] = {
+-	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, 0xa010) },
+-	{ 0, }  /* end of table */
+-};
+-
+-static struct pci_driver thunder_mmc_driver = {
+-	.name = DRV_NAME,
+-	.id_table = thunder_mmc_id_table,
+-	.probe = thunder_mmc_probe,
+-	.remove = thunder_mmc_remove,
+-};
+-
+-static int __init thunder_mmc_init_module(void)
+-{
+-	return pci_register_driver(&thunder_mmc_driver);
+-}
+-
+-static void __exit thunder_mmc_exit_module(void)
+-{
+-	pci_unregister_driver(&thunder_mmc_driver);
+-}
+-
+-module_init(thunder_mmc_init_module);
+-module_exit(thunder_mmc_exit_module);
+-
+-MODULE_AUTHOR("Cavium Inc.");
+-MODULE_DESCRIPTION("Cavium ThunderX eMMC Driver");
+-MODULE_LICENSE("GPL");
+-MODULE_DEVICE_TABLE(pci, thunder_mmc_id_table);
+-- 
+2.14.1
+

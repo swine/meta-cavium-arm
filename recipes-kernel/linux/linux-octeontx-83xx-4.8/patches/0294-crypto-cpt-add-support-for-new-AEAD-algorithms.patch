@@ -1,0 +1,993 @@
+From 2d42c1ffbf698fb2f8dcbbf8f7141cf0cdbe2cb0 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Fri, 16 Feb 2018 13:29:00 +0100
+Subject: [PATCH 294/375] crypto: cpt - add support for new AEAD algorithms
+
+Add support for the following AEAD algorithms:
+- authenc(hmac(sha256), cbc(aes)),
+- authenc(hmac(sha384), cbc(aes)),
+- authenc(hmac(sha512), cbc(aes)),
+- authenc(hmac(sha1), ecb(cipher_null)),
+- authenc(hmac(sha256), ecb(cipher_null)),
+- authenc(hmac(sha384), ecb(cipher_null)),
+- authenc(hmac(sha512), ecb(cipher_null)).
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cptvf.h            |   3 +-
+ drivers/crypto/cavium/cpt/cptvf_algs.c       | 593 ++++++++++++++++++++++++---
+ drivers/crypto/cavium/cpt/cptvf_algs.h       |  52 ++-
+ drivers/crypto/cavium/cpt/cptvf_reqmanager.c |  11 +-
+ drivers/crypto/cavium/cpt/request_manager.h  |  12 +-
+ 5 files changed, 581 insertions(+), 90 deletions(-)
+
+diff --git a/drivers/crypto/cavium/cpt/cptvf.h b/drivers/crypto/cavium/cpt/cptvf.h
+index ae93eb1f767e..ae221af683ea 100644
+--- a/drivers/crypto/cavium/cpt/cptvf.h
++++ b/drivers/crypto/cavium/cpt/cptvf.h
+@@ -90,7 +90,8 @@ struct command_qinfo {
+ struct pending_entry {
+ 	u64 *completion_addr; /* Completion address */
+ 	void *post_arg;
+-	void (*callback)(int, void *); /* Kernel ASYNC request callback */
++	/* Kernel ASYNC request callback */
++	void (*callback)(int, void *, void *);
+ 	void *callback_arg; /* Kernel ASYNC request callback arg */
+ 	u8 resume_sender; /* Notify sender to resume sending requests */
+ 	u8 busy; /* Entry status (free/busy) */
+diff --git a/drivers/crypto/cavium/cpt/cptvf_algs.c b/drivers/crypto/cavium/cpt/cptvf_algs.c
+index 40a577f3789e..258530940244 100644
+--- a/drivers/crypto/cavium/cpt/cptvf_algs.c
++++ b/drivers/crypto/cavium/cpt/cptvf_algs.c
+@@ -41,35 +41,40 @@ static struct cpt_device_handle ae_dev_handle = {
+ 
+ static int is_crypto_registered;
+ 
+-static void cvm_callback(int status, void *arg)
++static inline int validate_hmac_cipher_null(struct cpt_request_info *cpt_req)
+ {
+-	struct crypto_async_request *req = (struct crypto_async_request *)arg;
++	struct aead_request *req;
++	struct cvm_req_ctx *rctx;
++	struct crypto_aead *tfm;
++
++	req = container_of(cpt_req->callback_arg,
++			   struct aead_request, base);
++	tfm = crypto_aead_reqtfm(req);
++	rctx = aead_request_ctx(req);
++	if (memcmp(rctx->fctx.hmac.s.hmac_calc,
++		   rctx->fctx.hmac.s.hmac_recv,
++		   crypto_aead_authsize(tfm)) != 0)
++		return -EBADMSG;
+ 
+-	req->complete(req, status);
+-}
+-
+-static inline void update_input_iv(struct cpt_request_info *req_info,
+-				   u8 *iv, u32 enc_iv_len,
+-				   u32 *argcnt)
+-{
+-	/* Setting the iv information */
+-	req_info->in[*argcnt].vptr = (void *)iv;
+-	req_info->in[*argcnt].size = enc_iv_len;
+-	req_info->req.dlen += enc_iv_len;
+-
+-	++(*argcnt);
++	return 0;
+ }
+ 
+-static inline void update_output_iv(struct cpt_request_info *req_info,
+-				    u8 *iv, u32 enc_iv_len,
+-				    u32 *argcnt)
++static void cvm_callback(int status, void *arg, void *req)
+ {
+-	/* Setting the iv information */
+-	req_info->out[*argcnt].vptr = (void *)iv;
+-	req_info->out[*argcnt].size = enc_iv_len;
+-	req_info->rlen += enc_iv_len;
++	struct crypto_async_request *areq = (struct crypto_async_request *)arg;
++	struct cpt_request_info *cpt_req = (struct cpt_request_info *)req;
++
++	if (!status) {
++		/* When selected cipher is NULL we need to manually
++		 * verify whether calculated hmac value matches
++		 * received hmac value
++		 */
++		if (cpt_req->req_type == AEAD_ENC_DEC_NULL_REQ &&
++		    !cpt_req->is_enc)
++			status = validate_hmac_cipher_null(cpt_req);
++	}
+ 
+-	++(*argcnt);
++	areq->complete(areq, status);
+ }
+ 
+ static inline void update_input_data(struct cpt_request_info *req_info,
+@@ -92,18 +97,19 @@ static inline void update_input_data(struct cpt_request_info *req_info,
+ 
+ static inline void update_output_data(struct cpt_request_info *req_info,
+ 				      struct scatterlist *outp_sg,
+-				      u32 nbytes, u32 *argcnt)
++				      u32 offset, u32 nbytes, u32 *argcnt)
+ {
+ 	req_info->rlen += nbytes;
+ 
+ 	while (nbytes) {
+-		u32 len = min(nbytes, outp_sg->length);
++		u32 len = min(nbytes, outp_sg->length - offset);
+ 		u8 *ptr = sg_virt(outp_sg);
+ 
+-		req_info->out[*argcnt].vptr = (void *)ptr;
++		req_info->out[*argcnt].vptr = (void *) (ptr + offset);
+ 		req_info->out[*argcnt].size = len;
+ 		nbytes -= len;
+ 		++(*argcnt);
++		offset = 0;
+ 		outp_sg = sg_next(outp_sg);
+ 	}
+ }
+@@ -199,7 +205,7 @@ static inline void create_output_list(struct ablkcipher_request *req,
+ 	 * [ 16 Bytes/     [   Request Enc/Dec/ DATA Len AES CBC ]
+ 	 */
+ 	/* Reading IV information */
+-	update_output_data(req_info, req->dst, req->nbytes, &argcnt);
++	update_output_data(req_info, req->dst, 0, req->nbytes, &argcnt);
+ 	req_info->outcnt = argcnt;
+ }
+ 
+@@ -216,6 +222,7 @@ static inline int cvm_enc_dec(struct ablkcipher_request *req, u32 enc)
+ 	create_input_list(req, enc, enc_iv_len);
+ 	create_output_list(req, enc_iv_len);
+ 	store_cb_info(req, req_info);
++	req_info->req_type = ENC_DEC_REQ;
+ 	cpu = get_cpu();
+ 	if (cpu >= atomic_read(&se_dev_handle.count)) {
+ 		put_cpu();
+@@ -366,15 +373,43 @@ static int cvm_aead_init(struct crypto_aead *tfm, u8 cipher_type, u8 mac_type)
+ 	ctx->cipher_type = cipher_type;
+ 	ctx->mac_type = mac_type;
+ 
+-	switch (ctx->mac_type) {
+-	case SHA1:
+-		ctx->hashalg = crypto_alloc_shash("sha1", 0, CRYPTO_ALG_ASYNC);
+-		if (IS_ERR(ctx->hashalg))
+-			return PTR_ERR(ctx->hashalg);
+-		break;
++	/* When selected cipher is NULL we use HMAC opcode instead of
++	 * FLEXICRYPTO opcode therefore we don't need to use HASH algorithms
++	 * for calculating ipad and opad
++	 */
++	if (ctx->cipher_type != CIPHER_NULL) {
++		switch (ctx->mac_type) {
++		case SHA1:
++			ctx->hashalg = crypto_alloc_shash("sha1", 0,
++							  CRYPTO_ALG_ASYNC);
++			if (IS_ERR(ctx->hashalg))
++				return PTR_ERR(ctx->hashalg);
++			break;
++
++		case SHA256:
++			ctx->hashalg = crypto_alloc_shash("sha256", 0,
++							  CRYPTO_ALG_ASYNC);
++			if (IS_ERR(ctx->hashalg))
++				return PTR_ERR(ctx->hashalg);
++			break;
++
++		case SHA384:
++			ctx->hashalg = crypto_alloc_shash("sha384", 0,
++							  CRYPTO_ALG_ASYNC);
++			if (IS_ERR(ctx->hashalg))
++				return PTR_ERR(ctx->hashalg);
++			break;
++
++		case SHA512:
++			ctx->hashalg = crypto_alloc_shash("sha512", 0,
++							  CRYPTO_ALG_ASYNC);
++			if (IS_ERR(ctx->hashalg))
++				return PTR_ERR(ctx->hashalg);
++			break;
++		}
+ 	}
+ 
+-	tfm->reqsize = sizeof(struct cvm_req_ctx) + sizeof(struct aead_request);
++	crypto_aead_set_reqsize(tfm, sizeof(struct cvm_req_ctx));
+ 
+ 	return 0;
+ }
+@@ -384,6 +419,41 @@ static int cvm_aead_cbc_aes_sha1_init(struct crypto_aead *tfm)
+ 	return cvm_aead_init(tfm, AES_CBC, SHA1);
+ }
+ 
++static int cvm_aead_cbc_aes_sha256_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, AES_CBC, SHA256);
++}
++
++static int cvm_aead_cbc_aes_sha384_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, AES_CBC, SHA384);
++}
++
++static int cvm_aead_cbc_aes_sha512_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, AES_CBC, SHA512);
++}
++
++static int cvm_aead_ecb_null_sha1_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, CIPHER_NULL, SHA1);
++}
++
++static int cvm_aead_ecb_null_sha256_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, CIPHER_NULL, SHA256);
++}
++
++static int cvm_aead_ecb_null_sha384_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, CIPHER_NULL, SHA384);
++}
++
++static int cvm_aead_ecb_null_sha512_init(struct crypto_aead *tfm)
++{
++	return cvm_aead_init(tfm, CIPHER_NULL, SHA512);
++}
++
+ static int cvm_aead_gcm_aes_init(struct crypto_aead *tfm)
+ {
+ 	return cvm_aead_init(tfm, AES_GCM, MAC_NULL);
+@@ -415,6 +485,24 @@ static int cvm_aead_set_authsize(struct crypto_aead *tfm,
+ 			return -EINVAL;
+ 		break;
+ 
++	case SHA256:
++		if (authsize != SHA256_DIGEST_SIZE &&
++		    authsize != SHA256_TRUNC_DIGEST_SIZE)
++			return -EINVAL;
++		break;
++
++	case SHA384:
++		if (authsize != SHA384_DIGEST_SIZE &&
++		    authsize != SHA384_TRUNC_DIGEST_SIZE)
++			return -EINVAL;
++		break;
++
++	case SHA512:
++		if (authsize != SHA512_DIGEST_SIZE &&
++		    authsize != SHA512_TRUNC_DIGEST_SIZE)
++			return -EINVAL;
++		break;
++
+ 	case MAC_NULL:
+ 		if (ctx->cipher_type == AES_GCM) {
+ 			if (authsize != AES_GCM_ICV_SIZE)
+@@ -448,20 +536,61 @@ static struct sdesc *alloc_sdesc(struct crypto_shash *alg)
+ 	return sdesc;
+ }
+ 
+-inline void swap_data(u32 *buf, u32 len, u32 unit)
++static inline void swap_data32(void *buf, u32 len)
+ {
+-	u32 *store = (u32 *)buf;
++	u32 *store = (u32 *) buf;
+ 	int i = 0;
+ 
+-	for (i = 0 ; i < len/unit; i++, store++)
++	for (i = 0 ; i < len/sizeof(u32); i++, store++)
+ 		*store = cpu_to_be32(*store);
+ }
+ 
++static inline void swap_data64(void *buf, u32 len)
++{
++	u64 *store = (u64 *) buf;
++	int i = 0;
++
++	for (i = 0 ; i < len/sizeof(u64); i++, store++)
++		*store = cpu_to_be64(*store);
++}
++
++static int copy_pad(u8 mac_type, u8 *out_pad, u8 *in_pad)
++{
++	struct sha512_state *sha512;
++	struct sha256_state *sha256;
++	struct sha1_state *sha1;
++
++	switch (mac_type) {
++	case SHA1:
++		sha1 = (struct sha1_state *) in_pad;
++		swap_data32(sha1->state, SHA1_DIGEST_SIZE);
++		memcpy(out_pad, &sha1->state, SHA1_DIGEST_SIZE);
++		break;
++
++	case SHA256:
++		sha256 = (struct sha256_state *) in_pad;
++		swap_data32(sha256->state, SHA256_DIGEST_SIZE);
++		memcpy(out_pad, &sha256->state, SHA256_DIGEST_SIZE);
++		break;
++
++	case SHA384:
++	case SHA512:
++		sha512 = (struct sha512_state *) in_pad;
++		swap_data64(sha512->state, SHA512_DIGEST_SIZE);
++		memcpy(out_pad, &sha512->state, SHA512_DIGEST_SIZE);
++		break;
++
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
+ static int calculateipadopad(struct crypto_aead *cipher)
+ {
+ 	struct cvm_aead_ctx *ctx = crypto_aead_ctx(cipher);
+ 	u8 *ipad = NULL, *opad = NULL;
+-	struct sha1_state *sha1;
+ 	int bs = crypto_shash_blocksize(ctx->hashalg);
+ 	int ds = crypto_shash_digestsize(ctx->hashalg);
+ 	int state_size = crypto_shash_statesize(ctx->hashalg);
+@@ -472,11 +601,11 @@ static int calculateipadopad(struct crypto_aead *cipher)
+ 	if (IS_ERR(ctx->sdesc))
+ 		return -ENOMEM;
+ 
+-	ctx->ipad = kzalloc(SHA1_BLOCK_SIZE, GFP_KERNEL);
++	ctx->ipad = kzalloc(bs, GFP_KERNEL);
+ 	if (!ctx->ipad)
+ 		goto calc_fail;
+ 
+-	ctx->opad = kzalloc(SHA1_BLOCK_SIZE, GFP_KERNEL);
++	ctx->opad = kzalloc(bs, GFP_KERNEL);
+ 	if (!ctx->opad)
+ 		goto calc_fail;
+ 
+@@ -507,24 +636,23 @@ static int calculateipadopad(struct crypto_aead *cipher)
+ 		opad[icount] ^= 0x5c;
+ 	}
+ 
++	/* Partial Hash calculated from the software
++	 * algorithm is retrieved for IPAD & OPAD
++	 */
++
+ 	/* IPAD Calculation */
+ 	crypto_shash_init(&ctx->sdesc->shash);
+ 	crypto_shash_update(&ctx->sdesc->shash, ipad, bs);
+ 	crypto_shash_export(&ctx->sdesc->shash, ipad);
+-	sha1 = (struct sha1_state *)ipad;
+-	/* Partial Hash calculated from the software
+-	 * algorithm is retrieved for IPAD & OPAD
+-	 */
+-	swap_data(sha1->state, ctx->auth_key_len, sizeof(int));
+-	memcpy(ctx->ipad, &sha1->state, ctx->auth_key_len);
++	if (copy_pad(ctx->mac_type, ctx->ipad, ipad) != 0)
++		goto calc_fail;
+ 
+ 	/* OPAD Calculation */
+ 	crypto_shash_init(&ctx->sdesc->shash);
+ 	crypto_shash_update(&ctx->sdesc->shash, opad, bs);
+ 	crypto_shash_export(&ctx->sdesc->shash, opad);
+-	sha1 = (struct sha1_state *)opad;
+-	swap_data(sha1->state, ctx->auth_key_len, sizeof(int));
+-	memcpy(ctx->opad, &sha1->state, ctx->auth_key_len);
++	if (copy_pad(ctx->mac_type, ctx->opad, opad) != 0)
++		goto calc_fail;
+ 
+ 	kfree(ipad);
+ 	kfree(opad);
+@@ -540,9 +668,9 @@ calc_fail:
+ 	return -ENOMEM;
+ }
+ 
+-int cvm_aead_cbc_aes_sha1_setkey(struct crypto_aead *cipher,
+-				 const unsigned char *key,
+-				 unsigned int keylen)
++int cvm_aead_cbc_aes_sha_setkey(struct crypto_aead *cipher,
++				const unsigned char *key,
++				unsigned int keylen)
+ {
+ 	struct cvm_aead_ctx *ctx = crypto_aead_ctx(cipher);
+ 	struct crypto_authenc_key_param *param;
+@@ -601,6 +729,44 @@ badkey:
+ 	return status;
+ }
+ 
++int cvm_aead_ecb_null_sha_setkey(struct crypto_aead *cipher,
++				 const unsigned char *key,
++				 unsigned int keylen)
++{
++	struct cvm_aead_ctx *ctx = crypto_aead_ctx(cipher);
++	struct crypto_authenc_key_param *param;
++	struct rtattr *rta = (void *)key;
++	int enckeylen = 0, authkeylen = 0;
++
++	if (!RTA_OK(rta, keylen))
++		goto badkey;
++
++	if (rta->rta_type != CRYPTO_AUTHENC_KEYA_PARAM)
++		goto badkey;
++
++	if (RTA_PAYLOAD(rta) < sizeof(*param))
++		goto badkey;
++
++	param = RTA_DATA(rta);
++	enckeylen = be32_to_cpu(param->enckeylen);
++	key += RTA_ALIGN(rta->rta_len);
++	keylen -= RTA_ALIGN(rta->rta_len);
++	if (enckeylen != 0)
++		goto badkey;
++
++	if (keylen > MAX_KEY_SIZE)
++		goto badkey;
++
++	authkeylen = keylen - enckeylen;
++	memcpy(ctx->key, key, keylen);
++	ctx->enc_key_len = enckeylen;
++	ctx->auth_key_len = authkeylen;
++	return 0;
++badkey:
++	crypto_aead_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
++	return -EINVAL;
++}
++
+ int cvm_aead_gcm_aes_setkey(struct crypto_aead *cipher,
+ 			    const unsigned char *key,
+ 			    unsigned int keylen)
+@@ -644,6 +810,7 @@ static inline u32 create_aead_ctx_hdr(struct aead_request *req, u32 enc,
+ 	struct cpt_request_info *req_info = &rctx->cpt_req;
+ 	struct fc_context *fctx = &rctx->fctx;
+ 	int mac_len = crypto_aead_authsize(tfm);
++	int ds;
+ 
+ 	rctx->ctrl_word.e.enc_data_offset = req->assoclen;
+ 
+@@ -655,10 +822,14 @@ static inline u32 create_aead_ctx_hdr(struct aead_request *req, u32 enc,
+ 		       ctx->enc_key_len);
+ 		/* Copy IV to context */
+ 		memcpy(fctx->enc.encr_iv, req->iv, crypto_aead_ivsize(tfm));
++
++		ds = crypto_shash_digestsize(ctx->hashalg);
++		if (ctx->mac_type == SHA384)
++			ds = SHA512_DIGEST_SIZE;
+ 		if (ctx->ipad)
+-			memcpy(fctx->hmac.ipad, ctx->ipad, 64);
++			memcpy(fctx->hmac.e.ipad, ctx->ipad, ds);
+ 		if (ctx->opad)
+-			memcpy(fctx->hmac.opad, ctx->opad, 64);
++			memcpy(fctx->hmac.e.opad, ctx->opad, ds);
+ 		break;
+ 
+ 	case AES_GCM:
+@@ -715,6 +886,32 @@ static inline u32 create_aead_ctx_hdr(struct aead_request *req, u32 enc,
+ 	return 0;
+ }
+ 
++static inline u32 create_hmac_ctx_hdr(struct aead_request *req, u32 *argcnt,
++				      u32 enc)
++{
++	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
++	struct cvm_aead_ctx *ctx = crypto_aead_ctx(tfm);
++	struct cvm_req_ctx *rctx = aead_request_ctx(req);
++	struct cpt_request_info *req_info = &rctx->cpt_req;
++
++	req_info->ctrl.s.grp = 0;
++	req_info->ctrl.s.dma_mode = DMA_GATHER_SCATTER;
++	req_info->ctrl.s.se_req = SE_CORE_REQ;
++	req_info->req.opcode.s.major = MAJOR_OP_HMAC |
++				 DMA_MODE_FLAG(DMA_GATHER_SCATTER);
++	req_info->req.opcode.s.minor = 0;
++	req_info->req.param1 = ctx->auth_key_len;
++	req_info->req.param2 = ctx->mac_type << 8;
++
++	/* Add authentication key */
++	req_info->in[*argcnt].vptr = ctx->key;
++	req_info->in[*argcnt].size = ROUNDUP8(ctx->auth_key_len);
++	req_info->req.dlen += ROUNDUP8(ctx->auth_key_len);
++	++(*argcnt);
++
++	return 0;
++}
++
+ static inline u32 create_aead_input_list(struct aead_request *req, u32 enc)
+ {
+ 	struct cvm_req_ctx *rctx = aead_request_ctx(req);
+@@ -729,8 +926,8 @@ static inline u32 create_aead_input_list(struct aead_request *req, u32 enc)
+ 	return 0;
+ }
+ 
+-static inline void create_aead_output_list(struct aead_request *req, u32 enc,
+-					   u32 mac_len)
++static inline u32 create_aead_output_list(struct aead_request *req, u32 enc,
++					  u32 mac_len)
+ {
+ 	struct cvm_req_ctx *rctx = aead_request_ctx(req);
+ 	struct cpt_request_info *req_info =  &rctx->cpt_req;
+@@ -741,11 +938,116 @@ static inline void create_aead_output_list(struct aead_request *req, u32 enc,
+ 	else
+ 		outputlen = req->cryptlen + req->assoclen - mac_len;
+ 
+-	update_output_data(req_info, req->dst, outputlen, &argcnt);
++	update_output_data(req_info, req->dst, 0, outputlen, &argcnt);
+ 	req_info->outcnt = argcnt;
++
++	return 0;
+ }
+ 
+-u32 cvm_aead_enc_dec(struct aead_request *req, u32 enc)
++static inline u32 create_aead_null_input_list(struct aead_request *req,
++					      u32 enc, u32 mac_len)
++{
++	struct cvm_req_ctx *rctx = aead_request_ctx(req);
++	struct cpt_request_info *req_info = &rctx->cpt_req;
++	u32 inputlen =  req->cryptlen + req->assoclen;
++	u32 argcnt = 0;
++
++	if (enc)
++		inputlen =  req->cryptlen + req->assoclen;
++	else
++		inputlen =  req->cryptlen + req->assoclen - mac_len;
++
++	create_hmac_ctx_hdr(req, &argcnt, enc);
++	update_input_data(req_info, req->src, inputlen, &argcnt);
++	req_info->incnt = argcnt;
++
++	return 0;
++}
++
++static inline u32 create_aead_null_output_list(struct aead_request *req,
++					       u32 enc, u32 mac_len)
++{
++	struct cvm_req_ctx *rctx = aead_request_ctx(req);
++	struct cpt_request_info *req_info =  &rctx->cpt_req;
++	struct scatterlist *dst;
++	u8 *ptr = NULL;
++	int argcnt = 0, status, offset;
++	u32 inputlen;
++
++	if (enc)
++		inputlen =  req->cryptlen + req->assoclen;
++	else
++		inputlen =  req->cryptlen + req->assoclen - mac_len;
++
++	if (req->src != req->dst) {
++		/*
++		 * If source and destination are different
++		 * then copy payload to destination
++		 */
++		ptr = kmalloc(inputlen, GFP_KERNEL);
++		if (!ptr) {
++			status = -ENOMEM;
++			goto error;
++		}
++
++		status = sg_copy_to_buffer(req->src, sg_nents(req->src), ptr,
++					   inputlen);
++		if (status != inputlen) {
++			status = -EINVAL;
++			goto error;
++		}
++		status = sg_copy_from_buffer(req->dst, sg_nents(req->dst), ptr,
++					     inputlen);
++		if (status != inputlen) {
++			status = -EINVAL;
++			goto error;
++		}
++		kfree(ptr);
++	}
++
++	if (enc) {
++		/*
++		 * In an encryption scenario hmac needs
++		 * to be appended after payload
++		 */
++		dst = req->dst;
++		offset = inputlen;
++		while (offset >= dst->length) {
++			offset -= dst->length;
++			dst = sg_next(dst);
++			if (!dst) {
++				status = -ENOENT;
++				goto error;
++			}
++		}
++
++		update_output_data(req_info, dst, offset, mac_len, &argcnt);
++	} else {
++		/*
++		 * In a decryption scenario calculated hmac for received
++		 * payload needs to be compare with hmac received
++		 */
++		status = sg_copy_buffer(req->src, sg_nents(req->src),
++					rctx->fctx.hmac.s.hmac_recv, mac_len,
++					inputlen, true);
++		if (status != mac_len) {
++			status = -EINVAL;
++			goto error;
++		}
++
++		req_info->out[argcnt].vptr = rctx->fctx.hmac.s.hmac_calc;
++		req_info->out[argcnt].size = mac_len;
++		argcnt++;
++	}
++
++	req_info->outcnt = argcnt;
++	return 0;
++error:
++	kfree(ptr);
++	return status;
++}
++
++u32 cvm_aead_enc_dec(struct aead_request *req, u8 reg_type, u8 enc)
+ {
+ 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
+ 	struct cvm_req_ctx *rctx = aead_request_ctx(req);
+@@ -754,11 +1056,37 @@ u32 cvm_aead_enc_dec(struct aead_request *req, u32 enc)
+ 	u32 status, cpu;
+ 
+ 	memset(rctx, 0, sizeof(struct cvm_req_ctx));
+-	create_aead_input_list(req, enc);
+-	create_aead_output_list(req, enc, crypto_aead_authsize(tfm));
++
++	switch (reg_type) {
++	case AEAD_ENC_DEC_REQ:
++		status = create_aead_input_list(req, enc);
++		if (status)
++			return status;
++		status = create_aead_output_list(req, enc,
++						 crypto_aead_authsize(tfm));
++		if (status)
++			return status;
++		break;
++
++	case AEAD_ENC_DEC_NULL_REQ:
++		status = create_aead_null_input_list(req, enc,
++						     crypto_aead_authsize(tfm));
++		if (status)
++			return status;
++		status = create_aead_null_output_list(req, enc,
++						crypto_aead_authsize(tfm));
++		if (status)
++			return status;
++		break;
++
++	default:
++		return -EINVAL;
++	}
+ 
+ 	req_info->callback = cvm_callback;
+ 	req_info->callback_arg = &req->base;
++	req_info->req_type = reg_type;
++	req_info->is_enc = enc;
+ 	cpu = get_cpu();
+ 	if (cpu >= atomic_read(&se_dev_handle.count)) {
+ 		put_cpu();
+@@ -776,12 +1104,22 @@ u32 cvm_aead_enc_dec(struct aead_request *req, u32 enc)
+ 
+ static int cvm_aead_encrypt(struct aead_request *req)
+ {
+-	return cvm_aead_enc_dec(req, true);
++	return cvm_aead_enc_dec(req, AEAD_ENC_DEC_REQ, true);
+ }
+ 
+ static int cvm_aead_decrypt(struct aead_request *req)
+ {
+-	return cvm_aead_enc_dec(req, false);
++	return cvm_aead_enc_dec(req, AEAD_ENC_DEC_REQ, false);
++}
++
++static int cvm_aead_null_encrypt(struct aead_request *req)
++{
++	return cvm_aead_enc_dec(req, AEAD_ENC_DEC_NULL_REQ, true);
++}
++
++static int cvm_aead_null_decrypt(struct aead_request *req)
++{
++	return cvm_aead_enc_dec(req, AEAD_ENC_DEC_NULL_REQ, false);
+ }
+ 
+ struct crypto_alg algs[] = { {
+@@ -924,14 +1262,139 @@ struct aead_alg cvm_aeads[] = { {
+ 	},
+ 	.init = cvm_aead_cbc_aes_sha1_init,
+ 	.exit = cvm_aead_exit,
+-	.setkey = cvm_aead_cbc_aes_sha1_setkey,
++	.setkey = cvm_aead_cbc_aes_sha_setkey,
+ 	.setauthsize = cvm_aead_set_authsize,
+ 	.encrypt = cvm_aead_encrypt,
+ 	.decrypt = cvm_aead_decrypt,
+ 	.ivsize = AES_BLOCK_SIZE,
+ 	.maxauthsize = SHA1_DIGEST_SIZE,
+-},
+-{
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha256),cbc(aes))",
++		.cra_driver_name = "authenc-hmac-sha256-cbc-aes-cavm",
++		.cra_blocksize = AES_BLOCK_SIZE,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_cbc_aes_sha256_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_cbc_aes_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_encrypt,
++	.decrypt = cvm_aead_decrypt,
++	.ivsize = AES_BLOCK_SIZE,
++	.maxauthsize = SHA256_DIGEST_SIZE,
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha384),cbc(aes))",
++		.cra_driver_name = "authenc-hmac-sha384-cbc-aes-cavm",
++		.cra_blocksize = AES_BLOCK_SIZE,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_cbc_aes_sha384_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_cbc_aes_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_encrypt,
++	.decrypt = cvm_aead_decrypt,
++	.ivsize = AES_BLOCK_SIZE,
++	.maxauthsize = SHA384_DIGEST_SIZE,
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha512),cbc(aes))",
++		.cra_driver_name = "authenc-hmac-sha512-cbc-aes-cavm",
++		.cra_blocksize = AES_BLOCK_SIZE,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_cbc_aes_sha512_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_cbc_aes_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_encrypt,
++	.decrypt = cvm_aead_decrypt,
++	.ivsize = AES_BLOCK_SIZE,
++	.maxauthsize = SHA512_DIGEST_SIZE,
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha1),ecb(cipher_null))",
++		.cra_driver_name = "authenc-hmac-sha1-ecb-null-cavm",
++		.cra_blocksize = 1,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_ecb_null_sha1_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_ecb_null_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_null_encrypt,
++	.decrypt = cvm_aead_null_decrypt,
++	.ivsize = 0,
++	.maxauthsize = SHA1_DIGEST_SIZE,
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha256),ecb(cipher_null))",
++		.cra_driver_name = "authenc-hmac-sha256-ecb-null-cavm",
++		.cra_blocksize = 1,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_ecb_null_sha256_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_ecb_null_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_null_encrypt,
++	.decrypt = cvm_aead_null_decrypt,
++	.ivsize = 0,
++	.maxauthsize = SHA256_DIGEST_SIZE,
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha384),ecb(cipher_null))",
++		.cra_driver_name = "authenc-hmac-sha384-ecb-null-cavm",
++		.cra_blocksize = 1,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_ecb_null_sha384_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_ecb_null_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_null_encrypt,
++	.decrypt = cvm_aead_null_decrypt,
++	.ivsize = 0,
++	.maxauthsize = SHA384_DIGEST_SIZE,
++}, {
++	.base = {
++		.cra_name = "authenc(hmac(sha512),ecb(cipher_null))",
++		.cra_driver_name = "authenc-hmac-sha512-ecb-null-cavm",
++		.cra_blocksize = 1,
++		.cra_ctxsize = sizeof(struct cvm_aead_ctx),
++		.cra_priority = 4001,
++		.cra_alignmask = 0,
++		.cra_module = THIS_MODULE,
++	},
++	.init = cvm_aead_ecb_null_sha512_init,
++	.exit = cvm_aead_exit,
++	.setkey = cvm_aead_ecb_null_sha_setkey,
++	.setauthsize = cvm_aead_set_authsize,
++	.encrypt = cvm_aead_null_encrypt,
++	.decrypt = cvm_aead_null_decrypt,
++	.ivsize = 0,
++	.maxauthsize = SHA512_DIGEST_SIZE,
++}, {
+ 	.base = {
+ 		.cra_name = "rfc4106(gcm(aes))",
+ 		.cra_driver_name = "rfc4106-gcm-aes-cavm",
+diff --git a/drivers/crypto/cavium/cpt/cptvf_algs.h b/drivers/crypto/cavium/cpt/cptvf_algs.h
+index 8de289c879ee..59a89ed9e302 100644
+--- a/drivers/crypto/cavium/cpt/cptvf_algs.h
++++ b/drivers/crypto/cavium/cpt/cptvf_algs.h
+@@ -12,7 +12,6 @@
+ #include "request_manager.h"
+ 
+ #define MAX_DEVICES 64
+-#define MAJOR_OP_FC 0x33
+ #define MAX_ENC_KEY_SIZE 32
+ #define MAX_HASH_KEY_SIZE 64
+ #define MAX_KEY_SIZE (MAX_ENC_KEY_SIZE + MAX_HASH_KEY_SIZE)
+@@ -31,8 +30,24 @@
+ /* Offset of IV in AES GCM mode */
+ #define AES_GCM_IV_OFFSET	8
+ 
+-/* Truncated SHA1 digest size */
+-#define SHA1_TRUNC_DIGEST_SIZE	12
++/* Truncated SHA digest size */
++#define SHA1_TRUNC_DIGEST_SIZE		12
++#define SHA256_TRUNC_DIGEST_SIZE	16
++#define SHA384_TRUNC_DIGEST_SIZE	24
++#define SHA512_TRUNC_DIGEST_SIZE	32
++
++#define ROUNDUP8(val) (((val) + 7)&0xfffffff8)
++
++enum request_type {
++	ENC_DEC_REQ = 0x1,
++	AEAD_ENC_DEC_REQ = 0x2,
++	AEAD_ENC_DEC_NULL_REQ = 0x3
++};
++
++enum major_opcodes {
++	MAJOR_OP_FC	= 0x33,
++	MAJOR_OP_HMAC	= 0x35,
++};
+ 
+ enum req_type {
+ 	AE_CORE_REQ,
+@@ -40,14 +55,15 @@ enum req_type {
+ };
+ 
+ enum cipher_type {
+-	DES3_CBC = 0x1,
+-	DES3_ECB = 0x2,
+-	AES_CBC = 0x3,
+-	AES_ECB = 0x4,
+-	AES_CFB = 0x5,
+-	AES_CTR = 0x6,
+-	AES_GCM = 0x7,
+-	AES_XTS = 0x8
++	CIPHER_NULL	= 0x0,
++	DES3_CBC	= 0x1,
++	DES3_ECB	= 0x2,
++	AES_CBC		= 0x3,
++	AES_ECB		= 0x4,
++	AES_CFB		= 0x5,
++	AES_CTR		= 0x6,
++	AES_GCM		= 0x7,
++	AES_XTS		= 0x8
+ };
+ 
+ enum mac_type {
+@@ -111,14 +127,20 @@ struct enc_context {
+ 	u8 encr_iv[16];
+ };
+ 
+-struct fchmac_context {
+-	u8 ipad[64];
+-	u8 opad[64]; /* or OPAD */
++union fchmac_context {
++	struct {
++		u8 ipad[64];
++		u8 opad[64]; /* or OPAD */
++	} e;
++	struct {
++		u8 hmac_calc[64]; /* HMAC received */
++		u8 hmac_recv[64]; /* HMAC calculated */
++	} s;
+ };
+ 
+ struct fc_context {
+ 	struct enc_context enc;
+-	struct fchmac_context hmac;
++	union fchmac_context hmac;
+ };
+ 
+ struct cvm_enc_ctx {
+diff --git a/drivers/crypto/cavium/cpt/cptvf_reqmanager.c b/drivers/crypto/cavium/cpt/cptvf_reqmanager.c
+index e438171be672..d86b04c483b1 100644
+--- a/drivers/crypto/cavium/cpt/cptvf_reqmanager.c
++++ b/drivers/crypto/cavium/cpt/cptvf_reqmanager.c
+@@ -379,7 +379,7 @@ static inline void process_pending_queue(struct cpt_vf *cptvf,
+ 	struct pending_entry *pentry = NULL;
+ 	struct cpt_request_info *req = NULL;
+ 	union cpt_res_s *cpt_status = NULL;
+-	void (*callback)(int, void *);
++	void (*callback)(int, void *, void *);
+ 	void *callback_arg;
+ 	u32 res_code, resume_index;
+ 	u8 ccode;
+@@ -489,7 +489,7 @@ process_pentry:
+ 				 * EINPROGRESS is an indication for sending
+ 				 * side that it can resume sending requests
+ 				 */
+-				callback(-EINPROGRESS, callback_arg);
++				callback(-EINPROGRESS, callback_arg, req);
+ 				spin_lock_bh(&pqueue->lock);
+ 			}
+ 		}
+@@ -502,15 +502,16 @@ process_pentry:
+ 		pqueue->front = modulo_inc(pqueue->front, pqinfo->qlen, 1);
+ 		spin_unlock_bh(&pqueue->lock);
+ 
+-		if (cpt_info)
+-			do_request_cleanup(cptvf, cpt_info);
+ 		/*
+ 		 * Call callback after current pending entry has been been
+ 		 * processed we don't do it if the callback pointer or
+ 		 * argument pointer is invalid
+ 		 */
+ 		if (callback && callback_arg)
+-			callback(res_code, callback_arg);
++			callback(res_code, callback_arg, req);
++
++		if (cpt_info)
++			do_request_cleanup(cptvf, cpt_info);
+ 	}
+ }
+ 
+diff --git a/drivers/crypto/cavium/cpt/request_manager.h b/drivers/crypto/cavium/cpt/request_manager.h
+index 50f4bd6685e9..7a037fdf850d 100644
+--- a/drivers/crypto/cavium/cpt/request_manager.h
++++ b/drivers/crypto/cavium/cpt/request_manager.h
+@@ -59,17 +59,21 @@ struct buf_ptr {
+ };
+ 
+ struct cpt_request_info {
+-	u8 incnt; /* Number of input buffers */
+-	u8 outcnt; /* Number of output buffers */
+-	u16 rlen; /* Output length */
+ 	union ctrl_info ctrl; /* User control information */
+ 	struct cptvf_request req; /* Request Information (Core specific) */
+ 
+ 	struct buf_ptr in[MAX_BUF_CNT];
+ 	struct buf_ptr out[MAX_BUF_CNT];
+ 
+-	void (*callback)(int, void *); /* Kernel ASYNC request callabck */
++	/* Kernel ASYNC request callabck */
++	void (*callback)(int, void *, void *);
+ 	void *callback_arg; /* Kernel ASYNC request callabck arg */
++
++	u16 rlen; /* Output length */
++	u8 incnt; /* Number of input buffers */
++	u8 outcnt; /* Number of output buffers */
++	u8 req_type; /* Type of request */
++	u8 is_enc; /* Is a request an encryption request */
+ };
+ 
+ struct sglist_component {
+-- 
+2.14.1
+

@@ -1,0 +1,113 @@
+From 855518bdafc8763968db2a9a9c4b2686bbb7f071 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:49 +0100
+Subject: [PATCH 281/375] crypto: cpt - add domain reset function in CPT
+
+Port domain reset code to CPT driver from file
+cpt_domain.c located in cpt-sdk repo, 'commit 4475d8fa5aa8
+("Updated to rel6: destroy and reset domain added")'.
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cptpf_main.c             | 45 ++++++++++++++++++++++
+ drivers/net/ethernet/cavium/octeontx-83xx/cpt.h    |  4 +-
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  |  9 +++++
+ 3 files changed, 56 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/crypto/cavium/cpt/cptpf_main.c b/drivers/crypto/cavium/cpt/cptpf_main.c
+index d7efbe3eacd3..8a63adcef862 100644
+--- a/drivers/crypto/cavium/cpt/cptpf_main.c
++++ b/drivers/crypto/cavium/cpt/cptpf_main.c
+@@ -709,9 +709,54 @@ err_unlock:
+ 	return ret;
+ }
+ 
++static int cpt_reset_domain(u32 id, u16 domain_id)
++{
++	struct cpt_device *cpt = NULL;
++	struct cpt_device *curr;
++	struct cptpf_vf *vf;
++	u64 inflight = 0;
++	int i, ret;
++
++	mutex_lock(&octeontx_cpt_devices_lock);
++	list_for_each_entry(curr, &octeontx_cpt_devices, list) {
++		if (curr->node == id && curr->pf_type == CPT_SE_83XX) {
++			cpt = curr;
++			break;
++		}
++	}
++
++	if (!cpt) {
++		ret = -ENODEV;
++		goto err_unlock;
++	}
++
++	for (i = 0; i < cpt->max_vfs; i++) {
++		vf = &cpt->vf[i];
++		if (vf->domain.in_use &&
++		    vf->domain.domain_id == domain_id) {
++
++			/* Wait till the VQ is empty */
++			inflight = readq(vf->domain.reg_base +
++					 CPTX_VQX_INPROG(0, 0));
++			while (inflight != 0) {
++				inflight = readq(vf->domain.reg_base +
++						 CPTX_VQX_INPROG(0, 0));
++			}
++		}
++	}
++
++	mutex_unlock(&octeontx_cpt_devices_lock);
++	return 0;
++
++err_unlock:
++	mutex_unlock(&octeontx_cpt_devices_lock);
++	return ret;
++}
++
+ struct cptpf_com_s cptpf_com = {
+ 	.create_domain = cpt_pf_create_domain,
+ 	.destroy_domain = cpt_pf_remove_domain,
++	.reset_domain = cpt_reset_domain,
+ };
+ EXPORT_SYMBOL(cptpf_com);
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/cpt.h b/drivers/net/ethernet/cavium/octeontx-83xx/cpt.h
+index 7b892daf5116..0e9d73083e66 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/cpt.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/cpt.h
+@@ -15,8 +15,8 @@
+ 
+ struct cptpf_com_s {
+ 	int (*create_domain)(u32, u16, u32, struct kobject *kobj);
+-	int (*destroy_domain)(u32 id, u16 domain_id,
+-			      struct kobject *kobj);
++	int (*destroy_domain)(u32 id, u16 domain_id, struct kobject *kobj);
++	int (*reset_domain)(u32, u16);
+ };
+ 
+ extern struct cptpf_com_s cptpf_com;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 512880361bbc..4ae302b5b9eb 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -1092,6 +1092,15 @@ static int octeontx_reset_domain(void *master_data)
+ 		}
+ 	}
+ 
++	if (domain->cpt_domain_created) {
++		ret = cptpf->reset_domain(node, domain->domain_id);
++		if (ret) {
++			dev_err(octtx_device,
++				"Failed to reset CPT of domain %d on node %d.\n",
++				domain->domain_id, node);
++		}
++	}
++
+ 	if (domain->dpi_domain_created) {
+ 		ret = dpipf->reset_domain(node, domain->domain_id);
+ 		if (ret) {
+-- 
+2.14.1
+

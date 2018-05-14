@@ -1,0 +1,64 @@
+From 8a273088db8fc5eea7ad59a0cbacd33707701e29 Mon Sep 17 00:00:00 2001
+From: Eric Auger <eric.auger@redhat.com>
+Date: Fri, 27 Jan 2017 02:39:07 -0800
+Subject: [PATCH 091/375] vfio/type1: Check MSI remapping at irq domain level
+
+In case the IOMMU translates MSI transactions (typical case
+on ARM), we check MSI remapping capability at IRQ domain
+level. Otherwise it is checked at IOMMU level.
+
+At this stage the arm-smmu-(v3) still advertise the
+IOMMU_CAP_INTR_REMAP capability at IOMMU level. This will be
+removed in subsequent patches.
+
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Acked-by: Alex Williamson <alex.williamson@redhat.com>
+Reviewed-by: Tomasz Nowicki <tomasz.nowicki@caviumnetworks.com>
+Tested-by: Tomasz Nowicki <tomasz.nowicki@caviumnetworks.com>
+Tested-by: Bharat Bhushan <bharat.bhushan@nxp.com>
+
+---
+
+v6: rewrite test
+---
+---
+ drivers/vfio/vfio_iommu_type1.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 1e17d8702b34..a78b787a2d57 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -37,6 +37,7 @@
+ #include <linux/vfio.h>
+ #include <linux/workqueue.h>
+ #include <linux/dma-iommu.h>
++#include <linux/irqdomain.h>
+ 
+ 
+ #define DRIVER_VERSION  "0.2"
+@@ -766,7 +767,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	struct vfio_domain *domain, *d;
+ 	struct bus_type *bus = NULL;
+ 	int ret;
+-	bool resv_msi;
++	bool resv_msi, msi_remap;
+ 	phys_addr_t resv_msi_base;
+ 
+ 	mutex_lock(&iommu->lock);
+@@ -819,8 +820,10 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	INIT_LIST_HEAD(&domain->group_list);
+ 	list_add(&group->next, &domain->group_list);
+ 
+-	if (!allow_unsafe_interrupts &&
+-	    !iommu_capable(bus, IOMMU_CAP_INTR_REMAP)) {
++	msi_remap = resv_msi ? irq_domain_check_msi_remap() :
++				iommu_capable(bus, IOMMU_CAP_INTR_REMAP);
++
++	if (!allow_unsafe_interrupts && !msi_remap) {
+ 		pr_warn("%s: No interrupt remapping support.  Use the module param \"allow_unsafe_interrupts\" to enable VFIO IOMMU support on this platform\n",
+ 		       __func__);
+ 		ret = -EPERM;
+-- 
+2.14.1
+

@@ -1,0 +1,29 @@
+From aa9281dbd193d10805c909d9c17404623499f6bf Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Fri, 28 Apr 2017 10:06:39 -0700
+Subject: [PATCH 195/375] octeontx-sso: fix get_vf
+
+get_vf should return proper VF not the subdomain_id 0.
+
+Signed-off-by: Santosh Shukla <santosh.shukla@caviumnetworks.com>
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+index 0101d95292ce..3de340f9fd42 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+@@ -76,7 +76,7 @@ static struct ssopf_vf *get_vf(struct ssopf *sso, u16 domain_id,
+ 	for (i = 0; i < sso->total_vfs; i++) {
+ 		if (sso->vf[i].domain.in_use &&
+ 		    sso->vf[i].domain.domain_id == domain_id &&
+-		    sso->vf[i].domain.subdomain_id == 0) {
++		    sso->vf[i].domain.subdomain_id == subdomain_id) {
+ 			if (vf_idx)
+ 				*vf_idx = i;
+ 			return &sso->vf[i];
+-- 
+2.14.1
+

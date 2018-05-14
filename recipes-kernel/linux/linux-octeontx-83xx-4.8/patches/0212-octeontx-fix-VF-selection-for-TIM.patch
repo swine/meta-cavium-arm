@@ -1,0 +1,30 @@
+From 7345c24fa0f5e1a0e00eb8db2a2c7233fceb408b Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lb@semihalf.com>
+Date: Thu, 3 Aug 2017 14:00:19 +0200
+Subject: [PATCH 212/375] octeontx: fix VF selection for TIM
+
+In case of multiple domains when application was using TIM coprocessor
+and running on subsequent domains then VF for TIM was not correctly
+selected.
+
+Signed-off-by: Lukasz Bartosik <lb@semihalf.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+index 5b413e6dbebe..facec731ed29 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+@@ -169,7 +169,7 @@ static struct timpf *tim_dev_from_ringid(int id, int domain_id,
+ 			if (vf->domain.domain_id == domain_id &&
+ 			    vf->domain.subdomain_id == ringid) {
+ 				spin_unlock(&octeontx_tim_dev_lock);
+-				*ring = ring_from_ringid(ringid);
++				*ring = i;
+ 				return tim;
+ 			}
+ 		}
+-- 
+2.14.1
+

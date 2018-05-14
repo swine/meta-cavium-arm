@@ -1,0 +1,46 @@
+From ac790ae16006ddae742dfa219bd910a9800b4571 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Thu, 12 Oct 2017 15:20:35 -0700
+Subject: [PATCH 247/375] octeontx-bgx: Increase TX FIFO thresholds for 10/40GE
+ interfaces.
+
+The current BGX TX FIFO threashold settings for 40GE and 10GE
+interfaces lead to occational underrun conditions for packets bigger
+than 4 KB, when interfaces carrying packets with line rate.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+index 173e21ab4e15..0710febac411 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -210,12 +210,21 @@ static int bgx_port_initial_config(struct octtx_bgx_port *port)
+ 		return -ENODEV;
+ 
+ 	/* Adjust TX FIFO and BP thresholds to LMAC type */
+-	if (port->lmac_type == OCTTX_BGX_LMAC_TYPE_40GR) {
++	switch (port->lmac_type) {
++	case OCTTX_BGX_LMAC_TYPE_40GR:
+ 		reg = 0x400;
++		thr = 0x300;
++		break;
++	case OCTTX_BGX_LMAC_TYPE_XAUI:
++	case OCTTX_BGX_LMAC_TYPE_RXAUI:
++	case OCTTX_BGX_LMAC_TYPE_10GR:
++		reg = 0x100;
+ 		thr = 0x100;
+-	} else {
++		break;
++	default:
+ 		reg = 0x100;
+ 		thr = 0x20;
++		break;
+ 	}
+ 	bgx_reg_write(bgx, port->lmac, BGX_CMR_RX_BP_ON, reg);
+ 	bgx_reg_write(bgx, port->lmac, BGX_SMUX_TX_THRESH, thr);
+-- 
+2.14.1
+

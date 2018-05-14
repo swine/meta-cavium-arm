@@ -1,0 +1,28 @@
+From 744fb31330f092dd40f8d10aa8f5eb576d725b24 Mon Sep 17 00:00:00 2001
+From: Peter Swain <peter.swain@cavium.com>
+Date: Wed, 25 Apr 2018 12:43:13 -0700
+Subject: [PATCH 035/375] net: thunderx: multiqset tweak for linux-4.8 backport
+
+mbx.sqs_alloc.spec was either missed in backport from 4.9,
+or is no longer redundant in a linux-4.8 context
+
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 41d5562c3613..162856428846 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -919,6 +919,7 @@ static void nic_alloc_sqs(struct nicpf *nic, u8 pvf, struct sqs_alloc *sqs)
+ 
+ send_mbox:
+ 	mbx.sqs_alloc.msg = NIC_MBOX_MSG_ALLOC_SQS;
++	mbx.sqs_alloc.spec = sqs->spec;
+ 	mbx.sqs_alloc.qs_count = alloc_qs;
+ 	nic_send_msg_to_vf(nic, pvf, &mbx);
+ }
+-- 
+2.14.1
+

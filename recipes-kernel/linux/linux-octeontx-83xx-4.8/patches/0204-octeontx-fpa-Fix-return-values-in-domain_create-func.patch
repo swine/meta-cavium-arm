@@ -1,0 +1,40 @@
+From 2418fd6cd2346188d0f4e7aff1b5b3d4eb08343a Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Sun, 25 Jun 2017 14:16:25 -0700
+Subject: [PATCH 204/375] octeontx-fpa: Fix return values in domain_create
+ function.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+index 628777d3b612..a52ab3bf090e 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -323,10 +323,10 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 	spin_unlock(&octeontx_fpa_devices_lock);
+ 
+ 	if (!fpa)
+-		return -ENODEV;
++		return ret;
+ 
+ 	if ((fpa->total_vfs - fpa->vfs_in_use) < num_vfs)
+-		return -ENODEV;
++		return ret;
+ 
+ 	for (i = 0; i < fpa->total_vfs; i++) {
+ 		if (fpa->vf[i].domain.in_use) {
+@@ -383,7 +383,7 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 						, pci_iov_virtfn_devfn(fpa->pdev
+ 						, i));
+ 				if (!virtfn) {
+-					ret = -ENODEV;
++					ret = 0;
+ 					break;
+ 				}
+ 
+-- 
+2.14.1
+

@@ -1,0 +1,35 @@
+From 474407295bc270ff8940b968317e4217f051ec97 Mon Sep 17 00:00:00 2001
+From: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+Date: Fri, 4 Aug 2017 10:36:58 -0700
+Subject: [PATCH 214/375] arm64: Introduce prepare_frametrace API function
+
+This patch adds the prepare_frametrace() API.
+
+Signed-off-by: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+---
+ arch/arm64/include/asm/stacktrace.h | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arch/arm64/include/asm/stacktrace.h b/arch/arm64/include/asm/stacktrace.h
+index 801a16dbbdf6..74911c6b3fc7 100644
+--- a/arch/arm64/include/asm/stacktrace.h
++++ b/arch/arm64/include/asm/stacktrace.h
+@@ -31,4 +31,15 @@ extern int unwind_frame(struct task_struct *tsk, struct stackframe *frame);
+ extern void walk_stackframe(struct task_struct *tsk, struct stackframe *frame,
+ 			    int (*fn)(struct stackframe *, void *), void *data);
+ 
++static __always_inline void prepare_frametrace(struct pt_regs *regs)
++{
++	__asm__ __volatile__(
++			"1: adr x0, 1b\n\t"
++			"str x0, %0\n\t"
++			"str x30, %1\n\t"
++			"str x29, %2\n\t"
++			: "=m" ((regs)->pc),
++			"=m" ((regs)->regs[30]), "=m" ((regs)->regs[29])
++			: : "memory", "x0");
++}
+ #endif	/* __ASM_STACKTRACE_H */
+-- 
+2.14.1
+

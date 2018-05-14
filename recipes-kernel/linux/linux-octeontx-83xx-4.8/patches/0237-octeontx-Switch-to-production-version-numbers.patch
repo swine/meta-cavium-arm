@@ -1,0 +1,169 @@
+From 6ec2ef7f18eb30fcb021b00103a88afdebbd1331 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Fri, 15 Sep 2017 11:47:38 -0700
+Subject: [PATCH 237/375] octeontx: Switch to production version numbers
+
+In octeontx drivers use production version numbers (1.x) instead of
+development ones (0.x).
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/dpipf_main.c    | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c    | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c    | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c      | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c      | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c    | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/rst_main.c      | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c    | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c   | 2 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c    | 2 +-
+ 11 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/dpipf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/dpipf_main.c
+index cc92240e1825..ac7822ae4711 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/dpipf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/dpipf_main.c
+@@ -6,7 +6,7 @@
+ #include "dpi.h"
+ 
+ #define DRV_NAME	"octeontx-dpi"
+-#define DRV_VERSION	"0.1"
++#define DRV_VERSION	"1.0"
+ 
+ static atomic_t dpi_count = ATOMIC_INIT(0);
+ static DEFINE_SPINLOCK(octeontx_dpi_devices_lock);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+index da0cd3a85005..94652b39d0d4 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -13,7 +13,7 @@
+ #include "fpa.h"
+ 
+ #define DRV_NAME "octeontx-fpa"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ static atomic_t fpa_count = ATOMIC_INIT(0);
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+index 6bc96e53b6fc..98a794ae3038 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+@@ -16,7 +16,7 @@
+ #include "fpa.h"
+ 
+ #define DRV_NAME "octeontx-fpavf"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ static int setup_test;
+ module_param(setup_test, int, 0644);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+index d91855b5428a..e88456e59832 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+@@ -15,7 +15,7 @@
+ #include "lbk.h"
+ 
+ #define DRV_NAME "octeontx-lbk"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ /* LBK PCI Device ID (See PCC_DEV_IDL_E in HRM) */
+ #define PCI_DEVICE_ID_OCTEONTX_LBK 0xA042
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 59c34f32ff49..1a00ea5c2060 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -30,7 +30,7 @@
+ #include "dpi.h"
+ 
+ #define DRV_NAME "octeontx"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ #define DEVICE_NAME "octtx-ctr"
+ #define CLASS_NAME "octeontx-rm"
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+index ad5b67627e62..a03285c6a202 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -14,7 +14,7 @@
+ #include "pki.h"
+ 
+ #define DRV_NAME "octeontx-pki"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ static atomic_t pki_count = ATOMIC_INIT(0);
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+index 6d2cf7954ad5..21de19041073 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+@@ -15,7 +15,7 @@
+ #include "fpa.h"
+ 
+ #define DRV_NAME "octeontx-pko"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ /* PKO MAC type (enumerated by PKO_LMAC_E) */
+ #define PKO_MAC_LBK	0
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/rst_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/rst_main.c
+index 95717c83f510..6ec958f40c4d 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/rst_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/rst_main.c
+@@ -16,7 +16,7 @@
+ #include "rst.h"
+ 
+ #define DRV_NAME "octeontx-rst"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ static atomic_t rst_count = ATOMIC_INIT(0);
+ static DEFINE_SPINLOCK(octeontx_rst_devices_lock);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+index 47e121405d3b..eb4b94de6bd1 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+@@ -18,7 +18,7 @@
+ #include "rst.h"
+ 
+ #define DRV_NAME "octeontx-sso"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ static atomic_t sso_count = ATOMIC_INIT(0);
+ static DEFINE_SPINLOCK(octeontx_sso_devices_lock);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+index 440f36c20cbb..e2a4045f93d9 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+@@ -12,7 +12,7 @@
+ #include "sso.h"
+ 
+ #define DRV_NAME "octeontx-ssow"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ static atomic_t ssow_count = ATOMIC_INIT(0);
+ static DEFINE_SPINLOCK(octeontx_ssow_devices_lock);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+index 181aef15da86..78bc3c6c2022 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+@@ -15,7 +15,7 @@
+ #include "tim.h"
+ 
+ #define DRV_NAME "octeontx-tim"
+-#define DRV_VERSION "0.1"
++#define DRV_VERSION "1.0"
+ 
+ /* TIM PCI Device ID (See PCC_DEV_IDL_E in HRM) */
+ #define PCI_DEVICE_ID_OCTEONTX_TIM_PF 0xA050
+-- 
+2.14.1
+

@@ -1,0 +1,40 @@
+From 7644e14583645dda32e02b261deb9245525b469d Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:56 +0100
+Subject: [PATCH 288/375] crypto: cpt - change author name to Cavium
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cptpf_main.c | 2 +-
+ drivers/crypto/cavium/cpt/cptvf_main.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/crypto/cavium/cpt/cptpf_main.c b/drivers/crypto/cavium/cpt/cptpf_main.c
+index b88518a60d4d..58fdd39060a8 100644
+--- a/drivers/crypto/cavium/cpt/cptpf_main.c
++++ b/drivers/crypto/cavium/cpt/cptpf_main.c
+@@ -713,7 +713,7 @@ static struct pci_driver cpt_pci_driver = {
+ 
+ module_pci_driver(cpt_pci_driver);
+ 
+-MODULE_AUTHOR("George Cherian <george.cherian@cavium.com>");
++MODULE_AUTHOR("Cavium Inc");
+ MODULE_DESCRIPTION("Cavium Thunder CPT Physical Function Driver");
+ MODULE_LICENSE("GPL v2");
+ MODULE_VERSION(DRV_VERSION);
+diff --git a/drivers/crypto/cavium/cpt/cptvf_main.c b/drivers/crypto/cavium/cpt/cptvf_main.c
+index d06a4539f456..842ffdba064c 100644
+--- a/drivers/crypto/cavium/cpt/cptvf_main.c
++++ b/drivers/crypto/cavium/cpt/cptvf_main.c
+@@ -977,7 +977,7 @@ static struct pci_driver cptvf_pci_driver = {
+ 
+ module_pci_driver(cptvf_pci_driver);
+ 
+-MODULE_AUTHOR("George Cherian <george.cherian@cavium.com>");
++MODULE_AUTHOR("Cavium Inc");
+ MODULE_DESCRIPTION("Cavium Thunder CPT Virtual Function Driver");
+ MODULE_LICENSE("GPL v2");
+ MODULE_VERSION(DRV_VERSION);
+-- 
+2.14.1
+

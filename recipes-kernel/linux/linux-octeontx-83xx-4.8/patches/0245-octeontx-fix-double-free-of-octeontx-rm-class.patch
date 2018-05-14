@@ -1,0 +1,42 @@
+From d04916b4accd54ec2ed9d7716ca1625bcfe4c6dd Mon Sep 17 00:00:00 2001
+From: Stanislaw Kardach <stanislaw.kardach@cavium.com>
+Date: Mon, 9 Oct 2017 12:48:56 +0200
+Subject: [PATCH 245/375] octeontx: fix double free of octeontx-rm class
+
+There is an invalid destruction (double-free) of struct class
+(for octeontx-rm) during octeontx module cleanup. Class created with
+class_alloc() has to be destroyed with class_destroy() only.
+class_unregister() is only for static class objects.
+Underneath class_destroy() calls class_unregister(), hence we have
+double-free. After several tries, it results in /sys/class kobject to
+be removed and kobject_add_internal fails when trying to find a parent
+object for a newly created octeontx-rm class in octeontx module init.
+
+Signed-off-by: Stanislaw Kardach <stanislaw.kardach@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index cc9315d8fef5..bb7f53f8a7fb 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -1360,7 +1360,6 @@ sysfs_init_err:
+ 	device_destroy(octtx_class, octtx_dev);
+ 
+ device_create_err:
+-	class_unregister(octtx_class);
+ 	class_destroy(octtx_class);
+ 
+ class_create_err:
+@@ -1409,7 +1408,6 @@ static void __exit octeontx_cleanup_module(void)
+ 
+ 	octtx_sysfs_remove(octtx_device);
+ 	device_destroy(octtx_class, octtx_dev);
+-	class_unregister(octtx_class);
+ 	class_destroy(octtx_class);
+ 
+ 	cdev_del(octtx_cdev);
+-- 
+2.14.1
+

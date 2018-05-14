@@ -1,0 +1,204 @@
+From cbbe966cfb90a466ca87dffb8950901c599e5aca Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Fri, 10 Mar 2017 12:12:43 -0800
+Subject: [PATCH 130/375] octeontx-bgx: add support for MTU setting
+
+Add mbox message so that User can set MTU
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c    | 55 ++++++++++++++++++++++
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  |  3 ++
+ .../net/ethernet/cavium/octeontx-83xx/pki_config.c | 10 ++--
+ drivers/pci/quirks.c                               |  4 +-
+ 4 files changed, 65 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+index 94fcb34be841..3a430333f727 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -33,6 +33,14 @@
+ #define BGX_CMR_RX_BP_STATUS		0xF0
+ #define BGX_CMR_RX_DMAC_CAM(__dmac)	(0x200 + ((__dmac) * 0x8))
+ 
++/* LMAC types as in BGX(x)_CMR(x)_CONFIG[lmac_type] */
++#define BGX_LMAC_TYPE_SGMII	0x0
++#define BGX_LMAC_TYPE_XAUI	0x1
++#define BGX_LMAC_TYPE_RXAUI	0x2
++#define BGX_LMAC_TYPE_10GR	0x3
++#define BGX_LMAC_TYPE_40GR	0x4
++#define BGX_LMAC_TYPE_QSGMII	0x6
++
+ /* BGX device Configuration and Control Block */
+ struct bgxpf {
+ 	struct list_head list; /* List of BGX devices */
+@@ -152,6 +160,7 @@ static int bgx_port_macaddr_set(struct octtx_bgx_port *port, u8 macaddr[]);
+ static int bgx_port_bp_set(struct octtx_bgx_port *port, u8 on);
+ static int bgx_port_bcast_set(struct octtx_bgx_port *port, u8 on);
+ static int bgx_port_mcast_set(struct octtx_bgx_port *port, u8 on);
++static int bgx_port_mtu_set(struct octtx_bgx_port *port, u16 mtu);
+ 
+ static int bgx_receive_message(u32 id, u16 domain_id, struct mbox_hdr *hdr,
+ 			       union mbox_data *req,
+@@ -224,6 +233,10 @@ static int bgx_receive_message(u32 id, u16 domain_id, struct mbox_hdr *hdr,
+ 		bgx_port_mcast_set(port, *(u8 *)mdata);
+ 		resp->data = 0;
+ 		break;
++	case MBOX_BGX_PORT_SET_MTU:
++		bgx_port_mtu_set(port, *(u16 *)mdata);
++		resp->data = 0;
++		break;
+ 	default:
+ 		hdr->res_code = MBOX_RET_INVALID;
+ 		return -EINVAL;
+@@ -312,6 +325,21 @@ int bgx_port_config(struct octtx_bgx_port *port, mbox_bgx_port_conf_t *conf)
+ 
+ 	macaddr = thbgx->get_mac_addr(port->node, port->bgx, port->lmac);
+ 	memcpy(conf->macaddr, macaddr, 6);
++
++	switch (conf->mode) {
++	case BGX_LMAC_TYPE_SGMII:
++	case BGX_LMAC_TYPE_QSGMII:
++		reg = bgx_reg_read(bgx, port->lmac, BGX_GMP_GMI_RXX_JABBER);
++		conf->mtu = reg & 0xFFFF;
++		break;
++	case BGX_LMAC_TYPE_XAUI:
++	case BGX_LMAC_TYPE_RXAUI:
++	case BGX_LMAC_TYPE_10GR:
++	case BGX_LMAC_TYPE_40GR:
++		reg = bgx_reg_read(bgx, port->lmac, BGX_SMUX_RX_JABBER);
++		conf->mtu = reg & 0xFFFF;
++		break;
++	}
+ 	return 0;
+ }
+ 
+@@ -521,6 +549,33 @@ int bgx_port_mcast_set(struct octtx_bgx_port *port, u8 on)
+ 	return 0;
+ }
+ 
++int bgx_port_mtu_set(struct octtx_bgx_port *port, u16 mtu)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMR_CONFIG);
++	reg = (reg >> 8) & 0x7; /* LMAC_TYPE */
++
++	switch (reg) {
++	case BGX_LMAC_TYPE_SGMII:
++	case BGX_LMAC_TYPE_QSGMII:
++		bgx_reg_write(bgx, port->lmac, BGX_GMP_GMI_RXX_JABBER, mtu);
++		break;
++	case BGX_LMAC_TYPE_XAUI:
++	case BGX_LMAC_TYPE_RXAUI:
++	case BGX_LMAC_TYPE_10GR:
++	case BGX_LMAC_TYPE_40GR:
++		bgx_reg_write(bgx, port->lmac, BGX_SMUX_RX_JABBER, mtu);
++		break;
++	}
++	return 0;
++}
++
+ /* Domain create function.
+  */
+ static int bgx_create_domain(u32 id, u16 domain_id,
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index ab3c536a237a..138946b6eed1 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -261,6 +261,7 @@ union mbox_data {
+ #define MBOX_BGX_PORT_SET_BP 11
+ #define MBOX_BGX_PORT_SET_BCAST 12
+ #define MBOX_BGX_PORT_SET_MCAST 13
++#define MBOX_BGX_PORT_SET_MTU 14
+ 
+ /* BGX port configuration parameters: */
+ typedef struct mbox_bgx_port_conf {
+@@ -284,6 +285,8 @@ typedef struct mbox_bgx_port_conf {
+ 	u16 base_chan;
+ 	/* Number of channels */
+ 	u16 num_chans;
++	/* MTU size*/
++	u16 mtu;
+ 	/* Diagnostics support: */
+ 	/* BGX number */
+ 	u8 bgx;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index d62dc5e60ca4..8a2bb2c30cf3 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -172,7 +172,6 @@ int pki_port_open(struct pkipf_vf *vf, u16 vf_id,
+ 		cfg |= (0x1ULL << PKI_STYLE_CFG_FCS_CHK_SHIFT);
+ 		cfg |= (0x1ULL << PKI_STYLE_CFG_FCS_STRIP_SHIFT);
+ 	}
+-	cfg |= (0x1ULL << PKI_STYLE_CFG_MAXERR_EN_SHIFT);
+ 	cfg |= (0x1ULL << PKI_STYLE_CFG_LENERR_EN_SHIFT);
+ 	for (i = 0; i < pki->max_cls; i++)
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, port->init_style),
+@@ -212,7 +211,8 @@ int pki_port_create_qos(struct pkipf_vf *vf, u16 vf_id,
+ 
+ 	/* TO_DO add support for loopback ports later*/
+ 	port = &vf->bgx_port[vf_id];
+-	if (port->state != PKI_PORT_OPEN || port->qpg_base != QPG_NOT_INIT)
++	if ((port->state != PKI_PORT_OPEN && port->state != PKI_PORT_STOP) ||
++	    port->qpg_base != QPG_NOT_INIT)
+ 		return MBOX_RET_INVALID;
+ 	style = port->init_style;
+ 	/* TO_DO add support for alloc qpg, for now use pkind*64 */
+@@ -332,7 +332,7 @@ int pki_port_pktbuf_cfg(struct pkipf_vf *vf, u16 vf_id,
+ 
+ 	/* TO_DO add support for loopback ports later*/
+ 	port = &vf->bgx_port[vf_id];
+-	if (port->state != PKI_PORT_OPEN)
++	if (port->state != PKI_PORT_OPEN && port->state != PKI_PORT_STOP)
+ 		return MBOX_RET_INVALID;
+ 
+ 	reg = pki_reg_read(pki, PKI_STYLEX_BUF(port->init_style));
+@@ -425,7 +425,7 @@ int pki_port_errchk(struct pkipf_vf *vf, u16 vf_id,
+ 
+ 	/* TO_DO add support for loopback ports later*/
+ 	port = &vf->bgx_port[vf_id];
+-	if (port->state != PKI_PORT_OPEN)
++	if (port->state == PKI_PORT_CLOSE)
+ 		return MBOX_RET_INVALID;
+ 
+ 	style = port->init_style;
+@@ -511,7 +511,7 @@ int pki_port_hashcfg(struct pkipf_vf *vf, u16 vf_id,
+ 
+ 	/* TO_DO add support for loopback ports later*/
+ 	port = &vf->bgx_port[vf_id];
+-	if (port->state != PKI_PORT_OPEN)
++	if (port->state == PKI_PORT_CLOSE)
+ 		return MBOX_RET_INVALID;
+ 
+ 	style = port->init_style;
+diff --git a/drivers/pci/quirks.c b/drivers/pci/quirks.c
+index 17f7d20e9c03..a42e9ed5e842 100644
+--- a/drivers/pci/quirks.c
++++ b/drivers/pci/quirks.c
+@@ -3877,7 +3877,7 @@ static int reset_cavium_octeon_vf(struct pci_dev *pdev, int probe)
+ 	u64 val;
+ 	u64 addr;
+ 	int vf_id;
+-	int count = 20;
++	int count = 200;
+ 
+ 	dev_dbg(&pdev->dev, "reset_cavium_octeon_vf() called probe=%d\n",
+ 			probe);
+@@ -3892,7 +3892,7 @@ static int reset_cavium_octeon_vf(struct pci_dev *pdev, int probe)
+ 	mb();
+ 
+ 	while (count) {
+-		usleep_range(100, 2000);
++		usleep_range(1000, 2000);
+ 		val = atomic_read(&octtx_sso_reset[vf_id]);
+ 		if (!val)
+ 			goto exit;
+-- 
+2.14.1
+

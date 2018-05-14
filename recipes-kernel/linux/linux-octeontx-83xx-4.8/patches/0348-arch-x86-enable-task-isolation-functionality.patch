@@ -1,0 +1,197 @@
+From 80ac326b11346ed10dfacf322f738b659b789e5d Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:29 -0400
+Subject: [PATCH 348/375] arch/x86: enable task isolation functionality
+
+In exit_to_usermode_loop(), call task_isolation_ready() for
+TIF_TASK_ISOLATION tasks when we are checking the thread-info flags,
+and after we've handled the other work, call task_isolation_enter()
+for such tasks.
+
+In syscall_trace_enter_phase1(), we add the necessary support for
+reporting syscalls for task-isolation processes.
+
+We add strict reporting for the kernel exception types that do
+not result in signals, namely non-signalling page faults and
+non-signalling MPX fixups.
+
+This patch is ported to kernel 4.9.x by Alex Belits.
+
+Tested-by: Christoph Lameter <cl@linux.com>
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+Signed-off-by: Alex Belits <alex.belits@cavium.com>
+---
+ arch/x86/Kconfig                   |  1 +
+ arch/x86/entry/common.c            | 21 ++++++++++++++++++++-
+ arch/x86/include/asm/thread_info.h |  4 +++-
+ arch/x86/kernel/smp.c              |  2 ++
+ arch/x86/kernel/traps.c            |  3 +++
+ arch/x86/mm/fault.c                |  5 +++++
+ 6 files changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 2c786cf1a9f6..b75e3b2645d8 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -90,6 +90,7 @@ config X86
+ 	select HAVE_ARCH_MMAP_RND_COMPAT_BITS	if MMU && COMPAT
+ 	select HAVE_ARCH_SECCOMP_FILTER
+ 	select HAVE_ARCH_SOFT_DIRTY		if X86_64
++	select HAVE_ARCH_TASK_ISOLATION
+ 	select HAVE_ARCH_TRACEHOOK
+ 	select HAVE_ARCH_TRANSPARENT_HUGEPAGE
+ 	select HAVE_ARCH_WITHIN_STACK_FRAMES
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index b0cd306dc527..61a167e3bd29 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -22,6 +22,7 @@
+ #include <linux/user-return-notifier.h>
+ #include <linux/nospec.h>
+ #include <linux/uprobes.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/desc.h>
+ #include <asm/traps.h>
+@@ -85,6 +86,16 @@ static long syscall_trace_enter(struct pt_regs *regs)
+ 	if (emulated)
+ 		return -1L;
+ 
++	/*
++	 * In task isolation mode, we may prevent the syscall from
++	 * running, and if so we also deliver a signal to the process.
++	 */
++	if (work & _TIF_TASK_ISOLATION) {
++		if (task_isolation_syscall(regs->orig_ax) == -1)
++			return -1L;
++		work &= ~_TIF_TASK_ISOLATION;
++	}
++
+ #ifdef CONFIG_SECCOMP
+ 	/*
+ 	 * Do seccomp after ptrace, to catch any tracer changes.
+@@ -130,7 +141,7 @@ static long syscall_trace_enter(struct pt_regs *regs)
+ 
+ #define EXIT_TO_USERMODE_LOOP_FLAGS				\
+ 	(_TIF_SIGPENDING | _TIF_NOTIFY_RESUME | _TIF_UPROBE |	\
+-	 _TIF_NEED_RESCHED | _TIF_USER_RETURN_NOTIFY)
++	 _TIF_NEED_RESCHED | _TIF_USER_RETURN_NOTIFY | _TIF_TASK_ISOLATION)
+ 
+ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
+ {
+@@ -164,11 +175,19 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
+ 		if (cached_flags & _TIF_USER_RETURN_NOTIFY)
+ 			fire_user_return_notifiers();
+ 
++		if (cached_flags & _TIF_TASK_ISOLATION)
++			task_isolation_enter();
++
+ 		/* Disable IRQs and retry */
+ 		local_irq_disable();
+ 
+ 		cached_flags = READ_ONCE(current_thread_info()->flags);
+ 
++		/* Clear task isolation from cached_flags manually. */
++		if ((cached_flags & _TIF_TASK_ISOLATION) &&
++		    task_isolation_ready())
++			cached_flags &= ~_TIF_TASK_ISOLATION;
++
+ 		if (!(cached_flags & EXIT_TO_USERMODE_LOOP_FLAGS))
+ 			break;
+ 	}
+diff --git a/arch/x86/include/asm/thread_info.h b/arch/x86/include/asm/thread_info.h
+index 89978b9c667a..e67e2d3fcee1 100644
+--- a/arch/x86/include/asm/thread_info.h
++++ b/arch/x86/include/asm/thread_info.h
+@@ -88,6 +88,7 @@ struct thread_info {
+ #define TIF_SECCOMP		8	/* secure computing */
+ #define TIF_USER_RETURN_NOTIFY	11	/* notify kernel of userspace return */
+ #define TIF_UPROBE		12	/* breakpointed or singlestepping */
++#define TIF_TASK_ISOLATION	13	/* task isolation enabled for task */
+ #define TIF_NOTSC		16	/* TSC is not accessible in userland */
+ #define TIF_IA32		17	/* IA32 compatibility process */
+ #define TIF_NOHZ		19	/* in adaptive nohz mode */
+@@ -111,6 +112,7 @@ struct thread_info {
+ #define _TIF_SECCOMP		(1 << TIF_SECCOMP)
+ #define _TIF_USER_RETURN_NOTIFY	(1 << TIF_USER_RETURN_NOTIFY)
+ #define _TIF_UPROBE		(1 << TIF_UPROBE)
++#define _TIF_TASK_ISOLATION	(1 << TIF_TASK_ISOLATION)
+ #define _TIF_NOTSC		(1 << TIF_NOTSC)
+ #define _TIF_IA32		(1 << TIF_IA32)
+ #define _TIF_NOHZ		(1 << TIF_NOHZ)
+@@ -135,7 +137,7 @@ struct thread_info {
+ /* work to do on any return to user space */
+ #define _TIF_ALLWORK_MASK						\
+ 	((0x0000FFFF & ~_TIF_SECCOMP) | _TIF_SYSCALL_TRACEPOINT |	\
+-	_TIF_NOHZ)
++	 _TIF_NOHZ | _TIF_TASK_ISOLATION)
+ 
+ /* flags to check in __switch_to() */
+ #define _TIF_WORK_CTXSW							\
+diff --git a/arch/x86/kernel/smp.c b/arch/x86/kernel/smp.c
+index 658777cf3851..e4ffd9581cdb 100644
+--- a/arch/x86/kernel/smp.c
++++ b/arch/x86/kernel/smp.c
+@@ -23,6 +23,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/cpu.h>
+ #include <linux/gfp.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/mtrr.h>
+ #include <asm/tlbflush.h>
+@@ -125,6 +126,7 @@ static void native_smp_send_reschedule(int cpu)
+ 		WARN_ON(1);
+ 		return;
+ 	}
++	task_isolation_debug(cpu, "reschedule IPI");
+ 	apic->send_IPI(cpu, RESCHEDULE_VECTOR);
+ }
+ 
+diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
+index 48974fa476d6..7bd1ea815540 100644
+--- a/arch/x86/kernel/traps.c
++++ b/arch/x86/kernel/traps.c
+@@ -36,6 +36,7 @@
+ #include <linux/mm.h>
+ #include <linux/smp.h>
+ #include <linux/io.h>
++#include <linux/isolation.h>
+ 
+ #ifdef CONFIG_EISA
+ #include <linux/ioport.h>
+@@ -444,6 +445,8 @@ dotraplinkage void do_bounds(struct pt_regs *regs, long error_code)
+ 	case 2:	/* Bound directory has invalid entry. */
+ 		if (mpx_handle_bd_fault())
+ 			goto exit_trap;
++		/* No signal was generated, but notify task-isolation tasks. */
++		task_isolation_quiet_exception("bounds check");
+ 		break; /* Success, it was handled */
+ 	case 1: /* Bound violation. */
+ 		info = mpx_generate_siginfo(regs);
+diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
+index dc8023060456..b1509876794c 100644
+--- a/arch/x86/mm/fault.c
++++ b/arch/x86/mm/fault.c
+@@ -14,6 +14,7 @@
+ #include <linux/prefetch.h>		/* prefetchw			*/
+ #include <linux/context_tracking.h>	/* exception_enter(), ...	*/
+ #include <linux/uaccess.h>		/* faulthandler_disabled()	*/
++#include <linux/isolation.h>		/* task_isolation_quiet_exception */
+ 
+ #include <asm/cpufeature.h>		/* boot_cpu_has, ...		*/
+ #include <asm/traps.h>			/* dotraplinkage, ...		*/
+@@ -1397,6 +1398,10 @@ good_area:
+ 		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, regs, address);
+ 	}
+ 
++	/* No signal was generated, but notify task-isolation tasks. */
++	if (flags & PF_USER)
++		task_isolation_quiet_exception("page fault at %#lx", address);
++
+ 	check_v8086_mode(regs, address, tsk);
+ }
+ NOKPROBE_SYMBOL(__do_page_fault);
+-- 
+2.14.1
+

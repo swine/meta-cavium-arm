@@ -1,0 +1,64 @@
+From 698992e5499ca802a3673af4d7005bd785c06c84 Mon Sep 17 00:00:00 2001
+From: Bjorn Helgaas <bhelgaas@google.com>
+Date: Fri, 2 Dec 2016 17:25:54 -0600
+Subject: [PATCH 145/375] arm64: PCI: Exclude ACPI "consumer" resources from
+ host bridge windows
+
+On x86 and ia64, we have treated all ACPI _CRS resources of PNP0A03 host
+bridge devices as "producers", i.e., as host bridge windows.  That's partly
+because some x86 BIOSes improperly used "consumer" descriptors to describe
+windows and partly because Linux didn't have good support for handling
+consumer and producer descriptors differently.
+
+One result is that x86 BIOSes describe host bridge "consumer" resources in
+the _CRS of a PNP0C02 device, not the PNP0A03 device itself.  On arm64 we
+don't have a legacy of firmware that has this consumer/producer confusion,
+so we can handle PNP0A03 "consumer" descriptors as host bridge registers
+instead of windows.
+
+Exclude non-window ("consumer") resources from the list of host bridge
+windows.  This allows the use of "consumer" PNP0A03 descriptors for bridge
+register space.
+
+Signed-off-by: Bjorn Helgaas <bhelgaas@google.com>
+(cherry picked from commit 8fd4391ee717569d60fa283da778f7497630c9b7)
+Signed-off-by: Tomasz Nowicki <tn@semihalf.com>
+---
+ arch/arm64/kernel/pci.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/arch/arm64/kernel/pci.c b/arch/arm64/kernel/pci.c
+index 6e10a320228f..b8c973e3e629 100644
+--- a/arch/arm64/kernel/pci.c
++++ b/arch/arm64/kernel/pci.c
+@@ -114,6 +114,19 @@ int pcibios_root_bridge_prepare(struct pci_host_bridge *bridge)
+ 	return 0;
+ }
+ 
++static int pci_acpi_root_prepare_resources(struct acpi_pci_root_info *ci)
++{
++	struct resource_entry *entry, *tmp;
++	int status;
++
++	status = acpi_pci_probe_root_resources(ci);
++	resource_list_for_each_entry_safe(entry, tmp, &ci->resources) {
++		if (!(entry->res->flags & IORESOURCE_WINDOW))
++			resource_list_destroy_entry(entry);
++	}
++	return status;
++}
++
+ /*
+  * Lookup the bus range for the domain in MCFG, and set up config space
+  * mapping.
+@@ -196,6 +209,7 @@ struct pci_bus *pci_acpi_scan_root(struct acpi_pci_root *root)
+ 	}
+ 
+ 	root_ops->release_info = pci_acpi_generic_release_info;
++	root_ops->prepare_resources = pci_acpi_root_prepare_resources;
+ 	root_ops->pci_ops = &ri->cfg->ops->pci_ops;
+ 	bus = acpi_pci_root_create(root, root_ops, &ri->common, ri->cfg);
+ 	if (!bus)
+-- 
+2.14.1
+

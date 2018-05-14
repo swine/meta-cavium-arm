@@ -1,0 +1,63 @@
+From 94abf02dca9951d63fe77fda2476b4af01672831 Mon Sep 17 00:00:00 2001
+From: Peter Swain <pswain@cavium.com>
+Date: Thu, 21 Sep 2017 12:53:23 -0700
+Subject: [PATCH 302/375] mtd: mtdblock: fix nested sleeps in erase_write
+
+When mtdblock is used with a device that can sleep,
+this wait-for-callback in erase_write can lose a wakeup,
+and/or provoke a warning
+	"do not call blocking ops when !TASK_RUNNING"
+See https://lwn.net/Articles/628628/ for background.
+
+This was discovered with the staging mt29f_spinand driver,
+which blocks on SPI bus mutex.
+But the problem is here, where the old code assumed
+underlying device would not sleep.
+This is a generic layer that should work across all MTD,
+so lose that assumption.
+
+Signed-off-by: Peter Swain <pswain@cavium.com>
+---
+ drivers/mtd/mtdblock.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mtd/mtdblock.c b/drivers/mtd/mtdblock.c
+index bb4c14f83c75..e37048bc5188 100644
+--- a/drivers/mtd/mtdblock.c
++++ b/drivers/mtd/mtdblock.c
+@@ -65,7 +65,7 @@ static int erase_write (struct mtd_info *mtd, unsigned long pos,
+ 			int len, const char *buf)
+ {
+ 	struct erase_info erase;
+-	DECLARE_WAITQUEUE(wait, current);
++	DEFINE_WAIT_FUNC(wait, woken_wake_function);
+ 	wait_queue_head_t wait_q;
+ 	size_t retlen;
+ 	int ret;
+@@ -81,12 +81,12 @@ static int erase_write (struct mtd_info *mtd, unsigned long pos,
+ 	erase.len = len;
+ 	erase.priv = (u_long)&wait_q;
+ 
+-	set_current_state(TASK_INTERRUPTIBLE);
++	smp_mb__before_atomic(); /* sync erase */
+ 	add_wait_queue(&wait_q, &wait);
+ 
+ 	ret = mtd_erase(mtd, &erase);
+ 	if (ret) {
+-		set_current_state(TASK_RUNNING);
++		smp_mb__before_atomic(); /* sync erase */
+ 		remove_wait_queue(&wait_q, &wait);
+ 		printk (KERN_WARNING "mtdblock: erase of region [0x%lx, 0x%x] "
+ 				     "on \"%s\" failed\n",
+@@ -94,7 +94,7 @@ static int erase_write (struct mtd_info *mtd, unsigned long pos,
+ 		return ret;
+ 	}
+ 
+-	schedule();  /* Wait for erase to finish. */
++	wait_woken(&wait, TASK_INTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
+ 	remove_wait_queue(&wait_q, &wait);
+ 
+ 	/*
+-- 
+2.14.1
+

@@ -1,0 +1,30 @@
+From 2f2f7ad738a195ae62fc0be474b8db08b4e97419 Mon Sep 17 00:00:00 2001
+From: Andrew Pinski <apinski@cavium.com>
+Date: Wed, 7 Jun 2017 21:16:48 -0700
+Subject: [PATCH 375/375] ARM64:Fix arch_mmap_rnd for ILP32.
+
+For ILP32, TIF_32BIT_AARCH64 is set but currently
+arch_mmap_rnd does not check that, it only checks
+if we had an aarch32 task.
+
+Signed-off-by: Andrew Pinski <apinski@cavium.com>
+---
+ arch/arm64/mm/mmap.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/mm/mmap.c b/arch/arm64/mm/mmap.c
+index 01c171723bb3..5e546eb64183 100644
+--- a/arch/arm64/mm/mmap.c
++++ b/arch/arm64/mm/mmap.c
+@@ -52,7 +52,7 @@ unsigned long arch_mmap_rnd(void)
+ 	unsigned long rnd;
+ 
+ #ifdef CONFIG_COMPAT
+-	if (test_thread_flag(TIF_32BIT))
++	if (test_thread_flag(TIF_32BIT) || test_thread_flag(TIF_32BIT_AARCH64))
+ 		rnd = get_random_long() & ((1UL << mmap_rnd_compat_bits) - 1);
+ 	else
+ #endif
+-- 
+2.14.1
+

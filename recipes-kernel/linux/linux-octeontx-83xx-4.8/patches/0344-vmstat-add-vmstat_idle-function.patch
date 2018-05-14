@@ -1,0 +1,61 @@
+From d14997290531310c4fde9b6b6fbfe59d5b5d3eff Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:25 -0400
+Subject: [PATCH 344/375] vmstat: add vmstat_idle function
+
+This function checks to see if a vmstat worker is not running,
+and the vmstat diffs don't require an update.  The function is
+called from the task-isolation code to see if we need to
+actually do some work to quiet vmstat.
+
+Acked-by: Christoph Lameter <cl@linux.com>
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+---
+ include/linux/vmstat.h |  2 ++
+ mm/vmstat.c            | 10 ++++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/include/linux/vmstat.h b/include/linux/vmstat.h
+index 613771909b6e..e355f5adce74 100644
+--- a/include/linux/vmstat.h
++++ b/include/linux/vmstat.h
+@@ -234,6 +234,7 @@ extern void __dec_zone_state(struct zone *, enum zone_stat_item);
+ extern void __dec_node_state(struct pglist_data *, enum node_stat_item);
+ 
+ void quiet_vmstat(void);
++bool vmstat_idle(void);
+ void cpu_vm_stats_fold(int cpu);
+ void refresh_zone_stat_thresholds(void);
+ 
+@@ -336,6 +337,7 @@ static inline void __dec_node_page_state(struct page *page,
+ static inline void refresh_zone_stat_thresholds(void) { }
+ static inline void cpu_vm_stats_fold(int cpu) { }
+ static inline void quiet_vmstat(void) { }
++static inline bool vmstat_idle(void) { return true; }
+ 
+ static inline void drain_zonestat(struct zone *zone,
+ 			struct per_cpu_pageset *pset) { }
+diff --git a/mm/vmstat.c b/mm/vmstat.c
+index b679fd4bfe2d..28c47a3b079c 100644
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -1754,6 +1754,16 @@ void quiet_vmstat(void)
+ 	refresh_cpu_vm_stats(false);
+ }
+ 
++/*
++ * Report on whether vmstat processing is quiesced on the core currently:
++ * no vmstat worker running and no vmstat updates to perform.
++ */
++bool vmstat_idle(void)
++{
++	return !delayed_work_pending(this_cpu_ptr(&vmstat_work)) &&
++		!need_update(smp_processor_id());
++}
++
+ /*
+  * Shepherd worker thread that checks the
+  * differentials of processors that have their worker
+-- 
+2.14.1
+

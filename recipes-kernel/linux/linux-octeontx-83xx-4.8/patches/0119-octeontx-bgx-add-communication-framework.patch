@@ -1,0 +1,106 @@
+From 878e3972839f7fa4470983db2b926a98292e5207 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Wed, 1 Mar 2017 13:03:12 -0800
+Subject: [PATCH 119/375] octeontx-bgx: add communication framework
+
+Add com_s to bgx so that it will follow same convention as others
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@caviumnetworks.com>
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 36 +++++++++++++++++++++++
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.h | 17 +++++++++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index 17e2ecfbe6cd..84bdb8e06660 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -167,6 +167,20 @@ unsigned bgx_get_map(int node)
+ }
+ EXPORT_SYMBOL(bgx_get_map);
+ 
++/* Return the BGX CSR block base address and size.*/
++u64 bgx_get_reg_base(int node, int bgx_idx, u64 *iosize)
++{
++	struct bgx *bgx;
++
++	bgx = get_bgx(node, bgx_idx);
++	if (bgx) {
++		*iosize = pci_resource_len(bgx->pdev, 0);
++		return pci_resource_start(bgx->pdev, 0);
++	}
++	return 0;
++}
++EXPORT_SYMBOL(bgx_get_reg_base);
++
+ /* Return number of LMAC configured for this BGX */
+ int bgx_get_lmac_count(int node, int bgx_idx)
+ {
+@@ -420,6 +434,28 @@ u64 bgx_get_tx_stats(int node, int bgx_idx, int lmac, int idx)
+ }
+ EXPORT_SYMBOL(bgx_get_tx_stats);
+ 
++static void bgx_enable_rx_tx(int node, int bgx_idx, int lmacid)
++{
++	bgx_lmac_rx_tx_enable(node, bgx_idx, lmacid, 1);
++}
++
++static void bgx_disable_rx_tx(int node, int bgx_idx, int lmacid)
++{
++	bgx_lmac_rx_tx_enable(node, bgx_idx, lmacid, 0);
++}
++
++struct thunder_bgx_com_s thunder_bgx_com = {
++	.get_bgx_count = bgx_get_map,
++	.get_reg_base = bgx_get_reg_base,
++	.get_lmac_count = bgx_get_lmac_count,
++	.get_link_status = bgx_get_lmac_link_state,
++	.get_mac_addr = bgx_get_lmac_mac,
++	.set_mac_addr = bgx_set_lmac_mac,
++	.enable = bgx_enable_rx_tx,
++	.disable = bgx_disable_rx_tx,
++};
++EXPORT_SYMBOL(thunder_bgx_com);
++
+ static void bgx_flush_dmac_addrs(struct bgx *bgx, int lmac)
+ {
+ 	u64 offset;
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+index c5080f2cead5..1d83196d4c3e 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.h
+@@ -37,6 +37,8 @@
+ #define  CMR_PKT_TX_EN				BIT_ULL(13)
+ #define  CMR_PKT_RX_EN				BIT_ULL(14)
+ #define  CMR_EN					BIT_ULL(15)
++#define CMR_X2P_SELECT_PKI			BIT_ULL(16)
++#define CMR_P2X_SELECT_PKO			BIT_ULL(17)
+ #define BGX_CMR_GLOBAL_CFG		0x08
+ #define  CMR_GLOBAL_CFG_FCS_STRIP		BIT_ULL(6)
+ #define BGX_CMRX_RX_ID_MAP		0x60
+@@ -231,6 +233,21 @@ u64 bgx_get_tx_stats(int node, int bgx_idx, int lmac, int idx);
+ #define BGX_RX_STATS_COUNT 11
+ #define BGX_TX_STATS_COUNT 18
+ 
++struct thunder_bgx_com_s {
++	u32 (*get_bgx_count)(int node);
++	int (*get_lmac_count)(int node, int bgx_idx);
++	u64 (*get_reg_base)(int node, int bgx_idx, u64 *iosize);
++	void (*get_link_status)(int node, int bgx_idx,
++				int lmac_idx, void *status);
++	const u8* (*get_mac_addr)(int node, int bgx_idx, int lmac_idx);
++	void (*set_mac_addr)(int node, int bgx_idx,
++			     int lmac_idx, const u8 *mac);
++	void (*enable)(int node, int bgx_idx, int lmac_idx);
++	void (*disable)(int node, int bgx_idx, int lmac_idx);
++};
++
++extern struct thunder_bgx_com_s thunder_bgx_com;
++
+ struct bgx_stats {
+ 	u64 rx_stats[BGX_RX_STATS_COUNT];
+ 	u64 tx_stats[BGX_TX_STATS_COUNT];
+-- 
+2.14.1
+

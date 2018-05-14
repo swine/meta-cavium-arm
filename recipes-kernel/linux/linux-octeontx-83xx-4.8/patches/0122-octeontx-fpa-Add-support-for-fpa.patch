@@ -1,0 +1,2559 @@
+From 5573197313d0c66bc49df8896d88eea8eeeb73b2 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Thu, 9 Mar 2017 11:52:18 -0800
+Subject: [PATCH 122/375] octeontx-fpa: Add support for fpa
+
+Add drivers for FPA PF and VF.
+Drivers expose communication functions, so that
+other octeontx drivers can use it to communicate with FPA.
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/Kconfig                |  19 +
+ drivers/net/ethernet/cavium/Makefile               |   1 +
+ drivers/net/ethernet/cavium/octeontx-83xx/Makefile |   9 +
+ drivers/net/ethernet/cavium/octeontx-83xx/fpa.h    | 238 ++++++
+ .../net/ethernet/cavium/octeontx-83xx/fpapf_main.c | 877 +++++++++++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/fpavf_main.c | 498 ++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/octeontx.h   |  98 +++
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  | 736 +++++++++++++++++
+ 8 files changed, 2476 insertions(+)
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index e1b78b500309..ae930f37bd3a 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -74,4 +74,23 @@ config OCTEON_MGMT_ETHERNET
+ 	  port on Cavium Networks' Octeon CN57XX, CN56XX, CN55XX,
+ 	  CN54XX, CN52XX, and CN6XXX chips.
+ 
++config OCTEONTX_FPA_PF
++	tristate "OcteonTX free pool allocator physical function driver(FPA_PF)"
++	depends on 64BIT
++	default y
++	help
++	  Select this option to enable FPA Physical function.
++          FPA provides hardware assisted memory management for
++	  OcteonTX coprocessors.
++
++config OCTEONTX_FPA_VF
++	tristate "OcteonTX free pool allocator virtual function driver(FPA_VF)"
++	depends on 64BIT
++	default y
++	help
++	  Select this option to enable FPA Virtual function.
++          FPA provides hardware assisted memory management for
++	  OcteonTX coprocessors. Each VF owns single FPA pool.
++
++
+ endif # NET_VENDOR_CAVIUM
+diff --git a/drivers/net/ethernet/cavium/Makefile b/drivers/net/ethernet/cavium/Makefile
+index 872da9f7c31a..c3b7f61d74b6 100644
+--- a/drivers/net/ethernet/cavium/Makefile
++++ b/drivers/net/ethernet/cavium/Makefile
+@@ -4,3 +4,4 @@
+ obj-$(CONFIG_NET_VENDOR_CAVIUM) += thunder/
+ obj-$(CONFIG_NET_VENDOR_CAVIUM) += liquidio/
+ obj-$(CONFIG_NET_VENDOR_CAVIUM) += octeon/
++obj-$(CONFIG_NET_VENDOR_CAVIUM) += octeontx-83xx/
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+new file mode 100644
+index 000000000000..28744c31246f
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+@@ -0,0 +1,9 @@
++#
++# Makefile for Cavium's Octeontx ethernet device
++#
++
++obj-$(CONFIG_OCTEONTX_FPA_PF) += fpapf.o
++obj-$(CONFIG_OCTEONTX_FPA_VF) += fpavf.o
++
++fpapf-objs := fpapf_main.o
++fpavf-objs := fpavf_main.o
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h b/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+new file mode 100644
+index 000000000000..7b4fbff9d892
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+@@ -0,0 +1,238 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef FPA_H
++#define FPA_H
++
++#include <linux/pci.h>
++#include <linux/types.h>
++
++#include "octeontx.h"
++
++/* PCI DEV IDs */
++#define PCI_DEVICE_ID_OCTEONTX_FPA_PF	0xA052
++#define PCI_DEVICE_ID_OCTEONTX_FPA_VF	0xA053
++
++#define PCI_FPA_PF_CFG_BAR		0
++#define PCI_FPA_PF_MSIX_BAR		4
++
++#define PCI_FPA_VF_CFG_BAR		0
++#define PCI_FPA_VF_MSIX_BAR		4
++
++#define FPA_PF_MSIX_COUNT		2
++#define FPA_VF_MSIX_COUNT		1
++#define FPA_MAX_VF			32
++
++/* FPA FP register offsets */
++#define FPA_PF_SFT_RST			0x0
++#define FPA_PF_CONST			0x10
++#define FPA_PF_CONST1			0x18
++#define FPA_PF_GEN_CFG			0x50
++#define FPA_PF_ECC_CTL			0x58
++#define FPA_PF_ECC_INT			0x68
++#define FPA_PF_ECC_INT_W1S		0x70
++#define FPA_PF_ECC_INT_ENA_W1S		0x78
++#define FPA_PF_ECC_INT_ENA_W1C		0x80
++#define FPA_PF_STATUS			0xC0
++#define FPA_PF_INP_CTL			0xD0
++#define FPA_PF_CLK_COUNT		0xF0
++#define FPA_PF_RED_DELAY		0x100
++#define FPA_PF_GEN_INT			0x140
++#define FPA_PF_GEN_INT_W1S		0x148
++#define FPA_PF_GEN_INT_ENA_W1S		0x150
++#define FPA_PF_GEN_INT_ENA_W1C		0x158
++#define FPA_PF_ADDR_RANGE_ERROR		0x458
++#define FPA_PF_UNMAP_INFO		0x460
++#define FPA_PF_MAPX(x)			(0x1000 | ((x) << 3))
++#define FPA_PF_VFX_GMCTL(x)		(0x40001000 | ((x) << 20))
++#define FPA_PF_POOLX_CFG(x)		(0x40004100 | ((x) << 20))
++#define FPA_PF_POOLX_FPF_MARKS(x)	(0x40004110 | ((x) << 20))
++#define FPA_PF_POOLX_STACK_BASE(x)	(0x40004220 | ((x) << 20))
++#define FPA_PF_POOLX_STACK_END(x)	(0x40004230 | ((x) << 20))
++#define FPA_PF_POOLX_STACK_ADDR(x)	(0x40004240 | ((x) << 20))
++#define FPA_PF_POOLX_OP_PC(x)		(0x40004280 | ((x) << 20))
++#define FPA_PF_AURAX_POOL(x)		(0x40008100 | ((x) << 16))
++#define FPA_PF_AURAX_CFG(x)		(0x40008110 | ((x) << 16))
++#define FPA_PF_AURAX_POOL_LEVELS(x)	(0x40008300 | ((x) << 16))
++#define FPA_PF_AURAX_CNT_LEVELS(x)	(0x40008310 | ((x) << 16))
++
++#define FPA_VF_OFFSET(x)		(0x400000000 | (0x400000 * (x)))
++#define FPA_VF_CFG_SIZE			0x400000
++
++/* FPA VF register offsets */
++#define FPA_VF_INT(x)			(0x200ULL | ((x) << 22))
++#define FPA_VF_INT_W1S(x)		(0x210ULL | ((x) << 22))
++#define FPA_VF_INT_ENA_W1S(x)		(0x220ULL | ((x) << 22))
++#define FPA_VF_INT_ENA_W1C(x)		(0x230ULL | ((x) << 22))
++#define FPA_VF_VHPOOL_AVAILABLE(x)	(0x4150ULL | ((x) << 22))
++#define FPA_VF_VHPOOL_THRESHOLD(x)	(0x4160ULL | ((x) << 22))
++#define FPA_VF_VHPOOL_START_ADDR(x)	(0x4200ULL | ((x) << 22))
++#define FPA_VF_VHPOOL_END_ADDR(x)	(0x4210ULL | ((x) << 22))
++#define FPA_VF_VHAURA_CNT(x)		(0x20120ULL | ((x) << 18))
++#define FPA_VF_VHAURA_CNT_ADD(x)	(0x20128ULL | ((x) << 18))
++#define FPA_VF_VHAURA_CNT_LIMIT(x)	(0x20130ULL | ((x) << 18))
++#define FPA_VF_VHAURA_CNT_THRESHOLD(x)	(0x20140ULL | ((x) << 18))
++#define FPA_VF_VHAURA_OP_ALLOC(x)	(0x30000ULL | ((x) << 18))
++#define FPA_VF_VHAURA_OP_FREE(x)	(0x38000ULL | ((x) << 18))
++
++#define GEN_CFG_CLK_OVERRIDE_ENABLE	(0x1 << 0)
++#define GEN_CFG_CLK_OVERRIDE_DISABLE	(0x0 << 0)
++#define GEN_CFG_AVG_EN_ENABLE		(0x1 << 1)
++#define GEN_CFG_AVG_EN_DISABLE		(0x0 << 1)
++#define GEN_CFG_FPA_POOL_16		(0x2 << 2)
++#define GEN_CFG_FPA_POOL_32		(0x1 << 2)
++#define GEN_CFG_LVL_DLY(x)		(((x) & 0x3f) << 4)
++#define GEN_CFG_OCLA_BP_ENABLE		(0x1 << 10)
++#define GEN_CFG_OCLA_BP_DISABLE		(0x0 << 10)
++#define GEN_CFG_HALFRATE_ENABLE		(0x1 << 11)
++#define GEN_CFG_HALFRATE_DISABLE	(0x0 << 11)
++#define	GEN_CFG_DWBQ(x)			(((x) & 0x3f) << 12)
++
++/* PF_GEN_CFG falgs default values */
++#define DEF_GEN_CFG_FLAGS	(GEN_CFG_CLK_OVERRIDE_DISABLE |	\
++	GEN_CFG_AVG_EN_DISABLE | GEN_CFG_FPA_POOL_32 |		\
++	GEN_CFG_LVL_DLY(0x3) | GEN_CFG_OCLA_BP_DISABLE |	\
++	GEN_CFG_DWBQ(0x3f))
++
++#define FPA_CONST_POOLS_SHIFT		0
++#define FPA_CONST_POOLS_MASK		0xffff
++#define FPA_CONST_AURAS_SHIFT		16
++#define FPA_CONST_AURAS_MASK		0xffff
++#define FPA_CONST_STACK_LN_PTRS_SHIFT	48
++#define FPA_CONST_STACK_LN_PTRS_MASK	0xff
++#define FPA_CONST1_MAPS_SHIFT		0
++#define FPA_CONST1_MAPS_MASK		0xfff
++
++#define FPA_ECC_RAM_SBE_SHIFT		0
++#define FPA_ECC_RAM_SBE_MASK		0x1fffff
++#define FPA_ECC_RAM_DBE_SHIFT		32
++#define FPA_ECC_RAM_DBE_MASK		0x1fffff
++
++#define FPA_GEN_INT_GMID0_MASK		0x1
++#define FPA_GEN_INT_GMID_UNMAP_MASK	0x2
++#define FPA_GEN_INT_GMID_MULTI_MASK	0x4
++#define FPA_GEN_INT_FREE_DIS_MASK	0x8
++#define FPA_GEN_INT_ALLOC_DIS_MASK	0x10
++
++#define FPA_UNMAP_INFO_GMID_SHIFT	0
++#define FPA_UNMAP_INFO_GMID_MASK	0xffff
++#define FPA_UNMAP_INFO_GAURA_SHIFT	16
++#define FPA_UNMAP_INFO_GAURA_MASK	0xffff
++
++#define POOL_ENA			(0x1 << 0)
++#define POOL_DIS			(0x0 << 0)
++#define POOL_SET_NAT_ALIGN		(0x1 << 1)
++#define POOL_DIS_NAT_ALIGN		(0x0 << 1)
++#define POOL_STYPE(x)			(((x) & 0x1) << 2)
++#define POOL_LTYPE(x)			(((x) & 0x3) << 3)
++#define POOL_BUF_OFFSET(x)		(((x) & 0x7fffULL) << 16)
++#define POOL_BUF_SIZE(x)		(((x) & 0x7ffULL) << 32)
++
++#define FPA_MAP_GMID(x)			(((x) & 0xffffULL) << 0)
++#define FPA_MAP_GAURASET(x)		(((x) & 0xffULL) << 16)
++#define FPA_MAP_VHAURASET(x)		(((x) & 0x1fULL) << 32)
++#define FPA_MAP_VALID(x)		(((x) & 0x1ULL) << 63)
++
++#define FPA_FREE_ADDRS_S(x, y)		((x) | (((y) & 0x1ff) << 3))
++
++#define FPA_LN_SIZE			128
++#define FPA_AURA_SET_SIZE		16
++
++#define get_pool(vf_id) (vf_id)
++#define get_aura_set(vf_id) (vf_id)
++#define FPA_SSO_XAQ_GMID		0x2
++#define FPA_SSO_XAQ_AURA		0x0
++#define FPA_PKO_DPFI_GMID		0x3
++#define FPA_PKO_DPFI_AURA		0x0
++
++struct fpapf_vf {
++	struct octeontx_pf_vf	domain;
++
++	u32			hardware_pool;
++	u32			hardware_aura_set;
++	void			*stack_base_iova;
++	u64			stack_size;
++	u64			buf_size;
++};
++
++struct fpapf {
++	struct pci_dev		*pdev;
++	void __iomem		*reg_base;
++	int			id;
++	struct msix_entry	*msix_entries;
++	struct list_head	list;
++
++	int			stack_ln_ptrs;
++	int			total_vfs;
++	int			vfs_in_use;
++#define FPA_SRIOV_ENABLED	0x1
++	u32			flags;
++
++	struct fpapf_vf		vf[FPA_MAX_VF];
++};
++
++/*fpapf_com_s will be used by users
++ * to communicate with fpapf, user can create/ remove domains.
++ * create_domain: nodeid, domain_id, num_vfs
++ * free_domain: nodeid, domain_id
++ */
++struct fpapf_com_s {
++	u64 (*create_domain)(u32, u16, u32, struct kobject *kobj, char *g_name);
++	int (*free_domain)(u32, u16);
++	int (*reset_domain)(u32, u16);
++	int (*receive_message)(u32, u16 domain_id,
++			       struct mbox_hdr *hdr,
++			       union mbox_data *req,
++			       union mbox_data *resp,
++			       void *add_data);
++	int (*get_vf_count)(u32 node_id);
++};
++
++extern struct fpapf_com_s fpapf_com;
++
++struct fpavf {
++	struct pci_dev		*pdev;
++	void __iomem		*reg_base;
++	struct msix_entry	*msix_entries;
++	struct list_head	list;
++
++	bool			setup_done;
++	u16			domain_id;
++	u16			subdomain_id;
++	u64			num_buffers;
++	u64			alloc_thold;
++
++	void			*vhpool_addr;
++	dma_addr_t		vhpool_iova;
++	u64			vhpool_size;
++	atomic_t		alloc_count;
++	u32			stack_ln_ptrs;
++	void			*pool_addr;
++	dma_addr_t		pool_iova;
++	u64			pool_size;
++	u64			buf_len;
++#define FPA_VF_FLAG_CONT_MEM	0x1
++#define FPA_VF_FLAG_DISC_MEM	0x2
++	u32			flags;
++
++	struct octeontx_master_com_t *master;
++	void			*master_data;
++};
++
++struct fpavf_com_s {
++	struct fpavf* (*get)(u16, u16, struct octeontx_master_com_t *, void *);
++	int (*setup)(struct fpavf *, u64, u32, u32);
++	void (*free)(struct fpavf*, u32, u64, u32);
++	u64 (*alloc)(struct fpavf*, u32);
++	int (*refill)(struct fpavf *fpa);
++	void (*add_alloc)(struct fpavf *fpa, int count);
++};
++
++extern struct fpavf_com_s fpavf_com;
++
++#endif
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+new file mode 100644
+index 000000000000..aecb3fc78611
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -0,0 +1,877 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/delay.h>
++
++#include "fpa.h"
++
++#define DRV_NAME "octeontx-fpa"
++#define DRV_VERSION "0.1"
++
++static atomic_t fpa_count = ATOMIC_INIT(0);
++
++static DEFINE_SPINLOCK(octeontx_fpa_devices_lock);
++static LIST_HEAD(octeontx_fpa_devices);
++
++/* In Cavium OcteonTX SoCs, all accesses to the device registers are
++ * implicitly strongly ordered.
++ * So writeq_relaxed() and readq_relaxed() are safe to use
++ * with out any memory barriers.
++ */
++
++/* Register read/write APIs */
++static void fpa_reg_write(struct fpapf *fpa, u64 offset, u64 val)
++{
++	writeq_relaxed(val, fpa->reg_base + offset);
++}
++
++static u64 fpa_reg_read(struct fpapf *fpa, u64 offset)
++{
++	return readq_relaxed(fpa->reg_base + offset);
++}
++
++static u64 fpa_vf_alloc(void *reg_base, u32 aura)
++{
++	u64 addr = 0;
++
++	addr = readq_relaxed(reg_base + FPA_VF_VHAURA_OP_ALLOC(aura));
++
++	return addr;
++}
++
++/* Caller is responsible for locks */
++static struct fpapf_vf *get_vf(u32 id, u16 domain_id, u16 subdomain_id,
++			       struct fpapf **master)
++{
++	struct fpapf *fpa = NULL;
++	struct fpapf *curr;
++	int i;
++	int vf_idx = -1;
++
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr->id == id) {
++			fpa = curr;
++			break;
++		}
++	}
++
++	if (!fpa)
++		return NULL;
++
++	for (i = 0; i < fpa->total_vfs; i++) {
++		if (fpa->vf[i].domain.domain_id == domain_id &&
++		    fpa->vf[i].domain.subdomain_id == subdomain_id) {
++			vf_idx = i;
++			if (master)
++				*master = fpa;
++			break;
++		}
++	}
++	if (vf_idx >= 0)
++		return &fpa->vf[vf_idx];
++	else
++		return NULL;
++}
++
++static void identify(struct fpapf_vf *vf, u16 domain_id,
++		     u16 subdomain_id, u32 stack_ln_ptrs)
++{
++	u64 reg = (((u64)subdomain_id << 16) | domain_id) << 8;
++
++	writeq_relaxed(0x0, vf->domain.reg_base +
++			FPA_VF_VHPOOL_START_ADDR(0));
++
++	writeq_relaxed(reg, vf->domain.reg_base +
++		       FPA_VF_VHAURA_CNT_THRESHOLD(0));
++
++	reg = stack_ln_ptrs;
++	writeq_relaxed(reg, vf->domain.reg_base +
++			FPA_VF_VHPOOL_THRESHOLD(0));
++}
++
++static int fpa_pf_receive_message(u32 id, u16 domain_id,
++				  struct mbox_hdr *hdr,
++				  union mbox_data *req,
++				  union mbox_data *resp,
++				  void *add_data)
++{
++	struct fpapf_vf *vf;
++	struct fpapf *fpa = NULL;
++	struct mbox_fpa_cfg *cfg;
++	unsigned int aura, pool;
++	u64 reg;
++	int i;
++
++	spin_lock(&octeontx_fpa_devices_lock);
++
++	vf = get_vf(id, domain_id, hdr->vfid, &fpa);
++	if (!vf) {
++		hdr->res_code = MBOX_RET_INVALID;
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return -ENODEV;
++	}
++
++	resp->data = 0;
++	hdr->res_code = MBOX_RET_SUCCESS;
++
++	switch (hdr->msg) {
++	case IDENTIFY:
++		identify(vf, domain_id,	hdr->vfid,
++			 fpa->stack_ln_ptrs);
++		break;
++	case FPA_CONFIGSET:
++		cfg = add_data;
++
++		fpa_reg_write(fpa, FPA_PF_AURAX_CFG((vf->hardware_aura_set *
++				FPA_AURA_SET_SIZE) + cfg->aid),
++				cfg->aura_cfg);
++		fpa_reg_write(fpa, FPA_PF_POOLX_STACK_BASE(vf->hardware_pool),
++			      cfg->pool_stack_base);
++		fpa_reg_write(fpa, FPA_PF_POOLX_STACK_ADDR(vf->hardware_pool),
++			      cfg->pool_stack_base);
++		fpa_reg_write(fpa, FPA_PF_POOLX_STACK_END(vf->hardware_pool),
++			      cfg->pool_stack_end);
++		fpa_reg_write(fpa, FPA_PF_POOLX_CFG(vf->hardware_pool),
++			      cfg->pool_cfg);
++		break;
++	case FPA_CONFIGGET:
++		cfg = add_data;
++		cfg->aura_cfg = fpa_reg_read(fpa,
++				FPA_PF_AURAX_CFG((vf->hardware_aura_set *
++					FPA_AURA_SET_SIZE) + cfg->aid));
++		cfg->pool_stack_base = fpa_reg_read(fpa,
++				FPA_PF_POOLX_STACK_BASE(vf->hardware_pool));
++		cfg->pool_stack_end = fpa_reg_read(fpa,
++				FPA_PF_POOLX_STACK_END(vf->hardware_pool));
++		cfg->pool_cfg = fpa_reg_read(fpa,
++				FPA_PF_POOLX_CFG(vf->hardware_pool));
++
++		/* update data read len */
++		resp->data = sizeof(struct mbox_fpa_cfg);
++
++		break;
++	case FPA_START_COUNT:
++		for (i = 0; i < FPA_AURA_SET_SIZE; i++) {
++			reg = fpa_reg_read(fpa,
++					   FPA_PF_AURAX_CFG(
++						(vf->hardware_aura_set *
++						 FPA_AURA_SET_SIZE) + i));
++			reg = reg & ~(1ULL << 9);
++			fpa_reg_write(fpa,
++				      FPA_PF_AURAX_CFG(
++						(vf->hardware_aura_set *
++						 FPA_AURA_SET_SIZE) + i), reg);
++		}
++		break;
++	case FPA_STOP_COUNT:
++		for (i = 0; i < FPA_AURA_SET_SIZE; i++) {
++			reg = fpa_reg_read(fpa,
++					   FPA_PF_AURAX_CFG(
++						(vf->hardware_aura_set *
++						 FPA_AURA_SET_SIZE) + i));
++			reg = reg | (1 << 9);
++			fpa_reg_write(fpa,
++				      FPA_PF_AURAX_CFG(
++						(vf->hardware_aura_set *
++						 FPA_AURA_SET_SIZE) + i), reg);
++		}
++		break;
++
++	case FPA_ATTACHAURA:
++		cfg = add_data;
++		aura = vf->hardware_aura_set * FPA_AURA_SET_SIZE +
++			(cfg->aid % FPA_AURA_SET_SIZE);
++
++		/* Get pool from aura
++		 * Assuming gpool is vf_id
++		 */
++		pool = aura / FPA_AURA_SET_SIZE;
++		fpa_reg_write(fpa, FPA_PF_AURAX_POOL(aura), pool);
++
++		/* Disable red/bp lvl */
++		fpa_reg_write(fpa, FPA_PF_AURAX_CNT_LEVELS(aura), 1ul << 40);
++		break;
++
++	case FPA_DETACHAURA:
++		cfg = add_data;
++		aura = vf->hardware_aura_set * FPA_AURA_SET_SIZE +
++			(cfg->aid % FPA_AURA_SET_SIZE);
++
++		fpa_reg_write(fpa, FPA_PF_AURAX_POOL(aura), 0);
++
++		/* Clear red/bp lvl */
++		fpa_reg_write(fpa, FPA_PF_AURAX_CNT_LEVELS(aura), 0);
++		break;
++
++	case FPA_SETAURALVL:
++	case FPA_GETAURALVL:
++		/* also take care - error handlig code path::
++		 * overall in fpapf driver.
++		 * break;
++		 */
++	default:
++		hdr->res_code = MBOX_RET_INVALID;
++		break;
++	}
++
++	spin_unlock(&octeontx_fpa_devices_lock);
++	return 0;
++}
++
++static int fpa_pf_remove_domain(u32 id, u16 domain_id)
++{
++	struct fpapf *fpa = NULL;
++	struct fpapf *curr;
++	int i, vf_idx = 0;
++	u64 reg;
++
++	spin_lock(&octeontx_fpa_devices_lock);
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr->id == id) {
++			fpa = curr;
++			break;
++		}
++	}
++
++	if (!fpa) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < fpa->total_vfs; i++) {
++		if (fpa->vf[i].domain.in_use &&
++		    fpa->vf[i].domain.domain_id == domain_id) {
++			iounmap(fpa->vf[i].domain.reg_base);
++
++			dev_info(&fpa->pdev->dev, "Free vf[%d] from domain_id:%d subdomain_id:%d\n",
++				 i, fpa->vf[i].domain.domain_id, vf_idx);
++			memset(&fpa->vf[i], 0, sizeof(struct octeontx_pf_vf));
++			reg = FPA_MAP_VALID(0) | FPA_MAP_VHAURASET(i)
++				| FPA_MAP_GAURASET(0)
++				| FPA_MAP_GMID(fpa->vf[i].domain.gmid);
++			fpa_reg_write(fpa, FPA_PF_MAPX(i), reg);
++
++			vf_idx++;
++			fpa->vf[i].domain.in_use = false;
++		}
++	}
++
++	fpa->vfs_in_use -= vf_idx;
++	spin_unlock(&octeontx_fpa_devices_lock);
++	return 0;
++}
++
++/* This will be the first call before using any VF
++ * each usbale VF should be assigned a domain
++ * Domain_id is the way to bind different VFs and resources together.
++ * id: nodid
++ * domain_id: domain id to bind different resources together
++ * num_vfs: number of FPA vfs requested.
++ * ret: will return bit mask of VFs assigned to this domain
++ * on failuere: returns 0
++ *
++ * Created domain also does the mappings for AURASET to GARUARASET
++ */
++static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
++				u32 num_vfs, struct kobject *kobj, char *g_name)
++{
++	struct fpapf *fpa = NULL;
++	struct fpapf *curr;
++	u64 reg;
++	int i, vf_idx = 0;
++	int j;
++	unsigned long ret = 0;
++	int aura;
++	resource_size_t vf_start;
++	struct pci_dev *virtfn;
++
++	spin_lock(&octeontx_fpa_devices_lock);
++	/* this loop is unnecessary as nodid is always 0 :: ask tirumalesh? */
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr->id == id) {
++			fpa = curr;
++			break;
++		}
++	}
++
++	if (!fpa) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return -ENODEV;
++	}
++
++	if ((fpa->total_vfs - fpa->vfs_in_use) < num_vfs) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < fpa->total_vfs; i++) {
++		if (fpa->vf[i].domain.in_use) {
++			continue;
++		} else {
++			fpa->vf[i].domain.domain_id = domain_id;
++			fpa->vf[i].domain.subdomain_id = vf_idx;
++			fpa->vf[i].domain.gmid = get_gmid(domain_id);
++
++			fpa->vf[i].hardware_pool = get_pool(i);
++			fpa->vf[i].hardware_aura_set = get_aura_set(i);
++
++			vf_start = pci_resource_start(fpa->pdev,
++						      PCI_FPA_PF_CFG_BAR);
++			vf_start += FPA_VF_OFFSET(i);
++
++			fpa->vf[i].domain.reg_base =
++				ioremap(vf_start, FPA_VF_CFG_SIZE);
++
++			if (!fpa->vf[i].domain.reg_base) {
++				ret = 0;
++				break;
++			}
++
++			for (j = 0; j < FPA_AURA_SET_SIZE; j++) {
++				aura = (i * FPA_AURA_SET_SIZE) + j;
++				fpa_reg_write(fpa, FPA_PF_AURAX_POOL(aura), i);
++
++				/* Disable aura red/bp lvl */
++				fpa_reg_write(fpa, FPA_PF_AURAX_CNT_LEVELS(aura)
++						, 1ul << 40);
++			}
++
++			reg = FPA_MAP_VALID(1) | FPA_MAP_VHAURASET(i) |
++				FPA_MAP_GAURASET(fpa->vf[i].domain.subdomain_id)
++				| FPA_MAP_GMID(fpa->vf[i].domain.gmid);
++			fpa_reg_write(fpa, FPA_PF_MAPX(i), reg);
++
++			if (domain_id != FPA_SSO_XAQ_AURA &&
++			    domain_id != FPA_PKO_DPFI_AURA)
++				reg = (0xff & (i + 1)) << 24 |
++				      (0xff & (i + 1)) << 16;
++			else
++				reg = 0;
++			fpa_reg_write(fpa, FPA_PF_VFX_GMCTL(i), reg);
++
++			fpa->vf[i].domain.in_use = true;
++			set_bit(i, &ret);
++
++			if (kobj && g_name) {
++				virtfn = pci_get_domain_bus_and_slot(
++						pci_domain_nr(fpa->pdev->bus),
++						pci_iov_virtfn_bus(fpa->pdev, i)
++						, pci_iov_virtfn_devfn(fpa->pdev
++						, i));
++				if (!virtfn) {
++					ret = -ENODEV;
++					break;
++				}
++
++				sysfs_add_link_to_group(kobj, g_name,
++							&virtfn->dev.kobj,
++							virtfn->dev.kobj.name);
++			}
++
++			identify(&fpa->vf[i], domain_id, vf_idx,
++				 fpa->stack_ln_ptrs);
++			vf_idx++;
++			if (vf_idx == num_vfs) {
++				fpa->vfs_in_use += num_vfs;
++				break;
++			}
++		}
++	}
++
++	spin_unlock(&octeontx_fpa_devices_lock);
++
++	if (vf_idx != num_vfs) {
++		fpa_pf_remove_domain(id, domain_id);
++		return 0;
++	}
++
++	return ret;
++}
++
++static int fpa_pf_get_vf_count(u32 id)
++{
++	struct fpapf *fpa = NULL;
++	struct fpapf *curr;
++
++	spin_lock(&octeontx_fpa_devices_lock);
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr->id == id) {
++			fpa = curr;
++			break;
++		}
++	}
++
++	if (!fpa) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return 0;
++	}
++
++	spin_unlock(&octeontx_fpa_devices_lock);
++	return fpa->total_vfs;
++}
++
++int fpa_reset_domain(u32 id, u16 domain_id)
++{
++	struct fpapf *fpa = NULL;
++	struct fpapf *curr;
++	int i, j, aura;
++	u64 reg = 0;
++	u64 addr;
++	u64 avail;
++
++	spin_lock(&octeontx_fpa_devices_lock);
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr->id == id) {
++			fpa = curr;
++			break;
++		}
++	}
++
++	if (!fpa) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return 0;
++	}
++
++	for (i = 0; i < fpa->total_vfs; i++) {
++		if (fpa->vf[i].domain.in_use &&
++		    fpa->vf[i].domain.domain_id == domain_id) {
++			avail = readq_relaxed(fpa->vf[i].domain.reg_base +
++					FPA_VF_VHPOOL_AVAILABLE(0));
++			if (avail <= 0)
++				goto empty;
++
++			/* wait until input queue is empty,
++			 * this can take upto 100ms.
++			 * this is a very bad way of doing it
++			 * after saying this, there is no other
++			 * way of doing a proper reset.
++			 */
++			while (1) {
++				reg = fpa_reg_read(fpa, FPA_PF_STATUS);
++				if (!(reg & 0x1))
++					break;
++			}
++
++			for (j = 0; j < FPA_AURA_SET_SIZE; j++) {
++				addr = fpa_vf_alloc(
++					fpa->vf[i].domain.reg_base,
++					j);
++				while (addr) {
++					addr = fpa_vf_alloc(
++						fpa->vf[i].domain.reg_base,
++						 j);
++				}
++			}
++
++empty:
++			if (domain_id != FPA_SSO_XAQ_AURA &&
++			    domain_id != FPA_PKO_DPFI_AURA)
++				reg = (0xff & (i + 1)) << 24 |
++				      (0xff & (i + 1)) << 16;
++			fpa_reg_write(fpa, FPA_PF_VFX_GMCTL(i), reg);
++			fpa_reg_write(fpa, FPA_PF_POOLX_CFG(i), 0x0);
++			fpa_reg_write(fpa, FPA_PF_POOLX_STACK_BASE(i), 0x0);
++			fpa_reg_write(fpa, FPA_PF_POOLX_STACK_END(i), 0x0);
++			fpa_reg_write(fpa, FPA_PF_POOLX_STACK_ADDR(i), 0x0);
++			fpa_reg_write(fpa, FPA_PF_POOLX_OP_PC(i), 0x0);
++			fpa_reg_write(fpa, FPA_PF_POOLX_FPF_MARKS(i),
++				      (0x80 << 16));
++
++			for (j = 0; j < FPA_AURA_SET_SIZE; j++) {
++				aura = (i * FPA_AURA_SET_SIZE) + j;
++				fpa_reg_write(fpa,
++					      FPA_PF_AURAX_POOL(aura), i);
++				fpa_reg_write(fpa,
++					      FPA_PF_AURAX_CFG(aura), 0x0);
++				fpa_reg_write(fpa,
++					      FPA_PF_AURAX_POOL_LEVELS(aura),
++					      0x0);
++				/* Disable aura red/bp lvl */
++				fpa_reg_write(fpa,
++					      FPA_PF_AURAX_CNT_LEVELS(aura),
++					      1ul << 40);
++			}
++			writeq_relaxed(0xffffffffffffffffULL,
++				       fpa->vf[i].domain.reg_base +
++				       FPA_VF_VHPOOL_END_ADDR(0));
++			identify(&fpa->vf[i], domain_id,
++				 fpa->vf[i].domain.subdomain_id,
++				 fpa->stack_ln_ptrs);
++		}
++	}
++
++	spin_unlock(&octeontx_fpa_devices_lock);
++	return 0;
++}
++
++struct fpapf_com_s fpapf_com = {
++	.create_domain = fpa_pf_create_domain,
++	.free_domain = fpa_pf_remove_domain,
++	.reset_domain = fpa_reset_domain,
++	.receive_message = fpa_pf_receive_message,
++	.get_vf_count = fpa_pf_get_vf_count,
++};
++EXPORT_SYMBOL(fpapf_com);
++
++static irqreturn_t fpa_pf_ecc_intr_handler (int irq, void *fpa_irq)
++{
++	struct fpapf *fpa = (struct fpapf *)fpa_irq;
++	u64 ecc_int = fpa_reg_read(fpa, FPA_PF_ECC_INT);
++
++	dev_err(&fpa->pdev->dev, "ECC errors recievd: %llx\n", ecc_int);
++	/* clear ECC irq status */
++	fpa_reg_write(fpa, FPA_PF_ECC_INT, ecc_int);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t fpa_pf_gen_intr_handler (int irq, void *fpa_irq)
++{
++	struct fpapf *fpa = (struct fpapf *)fpa_irq;
++	u64 gen_int = fpa_reg_read(fpa, FPA_PF_GEN_INT);
++	u64 inp_ctl;
++	u64 unmap_info;
++	u32 gmid;
++	u32 gaura;
++
++	if (gen_int & FPA_GEN_INT_GMID0_MASK)
++		dev_err(&fpa->pdev->dev,
++			"allocate or free a buffer using GMID0\n");
++
++	if (gen_int & FPA_GEN_INT_GMID_UNMAP_MASK) {
++		unmap_info = fpa_reg_read(fpa, FPA_PF_UNMAP_INFO);
++
++		gmid = (unmap_info & FPA_UNMAP_INFO_GMID_MASK) >>
++			FPA_UNMAP_INFO_GMID_SHIFT;
++		gaura = (unmap_info & FPA_UNMAP_INFO_GAURA_MASK) >>
++			FPA_UNMAP_INFO_GAURA_SHIFT;
++		dev_err(&fpa->pdev->dev,
++			"GMID: 0x%x GAURA: 0x%x failed due to no map exist\n",
++			gmid, gaura);
++	}
++	/* If both UNMAP_MASK and MULTI_MASK present
++	 * at same time, the GMID and GAURA reported might not be accurate.
++	 * The same is true if multiple instances of same error occurred.
++	 * As thumb rule dont belive in GMID and GAURA reported.
++	 */
++	if (gen_int & FPA_GEN_INT_GMID_MULTI_MASK) {
++		unmap_info = fpa_reg_read(fpa, FPA_PF_UNMAP_INFO);
++
++		gmid = (unmap_info & FPA_UNMAP_INFO_GMID_MASK) >>
++			FPA_UNMAP_INFO_GMID_SHIFT;
++		gaura = (unmap_info & FPA_UNMAP_INFO_GAURA_MASK) >>
++			FPA_UNMAP_INFO_GAURA_SHIFT;
++		dev_err(&fpa->pdev->dev,
++			"GMID: 0x%x GAURA: 0x%x has multiple maps\n", gmid,
++			gaura);
++	}
++
++	inp_ctl = fpa_reg_read(fpa, FPA_PF_INP_CTL);
++
++	if (gen_int & FPA_GEN_INT_FREE_DIS_MASK)
++		dev_err(&fpa->pdev->dev,
++			"Free request is dropped inp_ctl: %llx\n", inp_ctl);
++
++	if (gen_int & FPA_GEN_INT_ALLOC_DIS_MASK)
++		dev_err(&fpa->pdev->dev,
++			"Alloc request is dropped inp_ctl: %llx\n", inp_ctl);
++
++	fpa_reg_write(fpa, FPA_PF_GEN_INT, gen_int);
++	return IRQ_HANDLED;
++}
++
++static int fpa_irq_init(struct fpapf *fpa)
++{
++	u64 ecc_int = ((0ULL | FPA_ECC_RAM_SBE_MASK) << FPA_ECC_RAM_SBE_SHIFT) |
++		((0ULL | FPA_ECC_RAM_DBE_MASK) << FPA_ECC_RAM_DBE_SHIFT);
++	u64 gen_int = 0x1f;
++	int i, ret;
++
++	/*clear ECC irq status */
++	fpa_reg_write(fpa, FPA_PF_ECC_INT_ENA_W1C, ecc_int);
++	/*clear GEN irq status */
++	fpa_reg_write(fpa, FPA_PF_GEN_INT_ENA_W1C, gen_int);
++
++	ret = FPA_PF_MSIX_COUNT;
++	if (ret < 0) {
++		dev_err(&fpa->pdev->dev, "Failed to get MSIX table size\n");
++		return ret;
++	}
++
++	fpa->msix_entries = devm_kzalloc(&fpa->pdev->dev,
++			ret * sizeof(struct msix_entry), GFP_KERNEL);
++	if (!fpa->msix_entries)
++		return -ENOMEM;
++	for (i = 0; i < ret; i++)
++		fpa->msix_entries[i].entry = i;
++
++	ret = pci_enable_msix(fpa->pdev, fpa->msix_entries, ret);
++	if (ret) {
++		dev_err(&fpa->pdev->dev, "Enabling msix failed\n");
++		return ret;
++	}
++
++	/* register ECC intr handler */
++	ret = request_irq(fpa->msix_entries[0].vector, fpa_pf_ecc_intr_handler,
++			  0, "fpapf ecc", fpa);
++	if (ret)
++		return ret;
++
++	/* register GEN intr handler */
++	ret = request_irq(fpa->msix_entries[1].vector, fpa_pf_gen_intr_handler,
++			  0, "fpapf gen", fpa);
++	if (ret)
++		goto free_ecc_irq;
++
++	/* it's time to enable interrupts*/
++	fpa_reg_write(fpa, FPA_PF_ECC_INT_ENA_W1S, ecc_int);
++	fpa_reg_write(fpa, FPA_PF_GEN_INT_ENA_W1S, gen_int);
++
++	return 0;
++
++free_ecc_irq:
++	free_irq(fpa->msix_entries[0].vector, fpa);
++
++	return ret;
++}
++
++static void fpa_irq_free(struct fpapf *fpa)
++{
++	u64 ecc_int = ((0ULL | FPA_ECC_RAM_SBE_MASK) << FPA_ECC_RAM_SBE_SHIFT) |
++		((0ULL | FPA_ECC_RAM_DBE_MASK) << FPA_ECC_RAM_DBE_SHIFT);
++	u64 gen_int = 0x1f;
++
++	/*clear ECC irq status */
++	fpa_reg_write(fpa, FPA_PF_ECC_INT_ENA_W1C, ecc_int);
++	/*clear GEN irq status */
++	fpa_reg_write(fpa, FPA_PF_GEN_INT_ENA_W1C, gen_int);
++
++	free_irq(fpa->msix_entries[0].vector, fpa);
++	free_irq(fpa->msix_entries[1].vector, fpa);
++
++	pci_disable_msix(fpa->pdev);
++}
++
++static void fpa_init(struct fpapf *fpa)
++{
++	u64 gen_cfg = DEF_GEN_CFG_FLAGS;
++	u64 fpa_reg;
++	u32 max_maps;
++	u32 max_auras;
++	u32 max_pools;
++	u32 stack_ln_ptrs;
++	int i;
++
++	/* RST FPA */
++	fpa_reg_write(fpa, FPA_PF_SFT_RST, 0x1);
++	/*A 100ms delay is required before reading the completion */
++	msleep(100);
++	while (fpa_reg_read(fpa, FPA_PF_SFT_RST))
++		udelay(1);
++
++	fpa_reg = fpa_reg_read(fpa, FPA_PF_CONST);
++	max_pools = (fpa_reg >> FPA_CONST_POOLS_SHIFT) & FPA_CONST_POOLS_MASK;
++	max_auras = (fpa_reg >> FPA_CONST_AURAS_SHIFT) & FPA_CONST_AURAS_MASK;
++	stack_ln_ptrs = (fpa_reg >> FPA_CONST_STACK_LN_PTRS_SHIFT) &
++		FPA_CONST_STACK_LN_PTRS_MASK;
++
++	fpa_reg = fpa_reg_read(fpa, FPA_PF_CONST1);
++	max_maps = (fpa_reg >> FPA_CONST1_MAPS_SHIFT) & FPA_CONST1_MAPS_MASK;
++
++	/* set GEN CFG */
++	fpa_reg_write(fpa, FPA_PF_GEN_CFG, gen_cfg);
++
++	/* allow all coprocessors to use FPA */
++	fpa_reg_write(fpa, FPA_PF_INP_CTL, 0x0);
++
++	for (i = 0; i < max_maps; i++)
++		fpa_reg_write(fpa, FPA_PF_MAPX(i), 0x0);
++
++	/*initialize all pools to 0 */
++	for (i = 0; i < max_pools; i++) {
++		fpa_reg_write(fpa, FPA_PF_VFX_GMCTL(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_POOLX_CFG(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_POOLX_STACK_BASE(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_POOLX_STACK_END(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_POOLX_STACK_ADDR(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_POOLX_OP_PC(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_POOLX_FPF_MARKS(i), (0x80 << 16));
++	}
++
++	/* Initialize all AURAs to 0 */
++	for (i = 0; i < max_auras; i++) {
++		fpa_reg_write(fpa, FPA_PF_AURAX_POOL(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_AURAX_CFG(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_AURAX_POOL_LEVELS(i), 0x0);
++		fpa_reg_write(fpa, FPA_PF_AURAX_CNT_LEVELS(i), 0x0);
++	}
++
++	fpa->stack_ln_ptrs = stack_ln_ptrs;
++
++	dev_notice(&fpa->pdev->dev, "max_maps: %d max_pools: %d max_auras: %d\n",
++		   max_maps, max_pools, max_auras);
++}
++
++static int fpa_sriov_configure(struct pci_dev *pdev, int numvfs)
++{
++	struct fpapf *fpa = pci_get_drvdata(pdev);
++	int ret = -EBUSY;
++	int disable = 0;
++
++	if (fpa->vfs_in_use != 0)
++		return ret;
++
++	ret = 0;
++	if (fpa->flags & FPA_SRIOV_ENABLED)
++		disable = 1;
++
++	if (disable) {
++		pci_disable_sriov(pdev);
++		fpa->flags &= ~FPA_SRIOV_ENABLED;
++		fpa->total_vfs = 0;
++	}
++
++	if (numvfs > 0) {
++		if (numvfs <= 16)
++			numvfs = 16;
++		else
++			numvfs = 32;
++
++		ret = pci_enable_sriov(pdev, numvfs);
++		if (ret == 0) {
++			fpa->flags |= FPA_SRIOV_ENABLED;
++			fpa->total_vfs = numvfs;
++			ret = numvfs;
++		}
++	}
++	dev_notice(&fpa->pdev->dev, " Pools Enabled: %d\n", ret);
++	return ret;
++}
++
++static int fpa_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
++{
++	struct device *dev = &pdev->dev;
++	struct fpapf *fpa;
++	int err = -ENOMEM;
++
++	fpa = devm_kzalloc(dev, sizeof(*fpa), GFP_KERNEL);
++	if (!fpa)
++		return err;
++
++	pci_set_drvdata(pdev, fpa);
++	fpa->pdev = pdev;
++
++	err = pcim_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed\n");
++		return err;
++	}
++
++	/*Map CFG registers */
++	fpa->reg_base = pcim_iomap(pdev, PCI_FPA_PF_CFG_BAR, 0);
++	if (!fpa->reg_base) {
++		dev_err(dev, "Can't map CFG space\n");
++		err = -ENOMEM;
++		return err;
++	}
++
++	/*set FPA ID */
++	fpa->id = atomic_add_return(1, &fpa_count);
++	fpa->id -= 1;
++
++	fpa_init(fpa);
++
++	err = fpa_irq_init(fpa);
++	if (err) {
++		dev_err(dev, "failed init irqs\n");
++		err = -EINVAL;
++		return err;
++	}
++
++	err = fpa_sriov_configure(pdev, 16);
++	if (err < 0) {
++		dev_err(dev, "failed to configure sriov\n");
++		fpa_irq_free(fpa);
++		return err;
++	}
++
++	INIT_LIST_HEAD(&fpa->list);
++	spin_lock(&octeontx_fpa_devices_lock);
++	list_add(&fpa->list, &octeontx_fpa_devices);
++	spin_unlock(&octeontx_fpa_devices_lock);
++
++	return 0;
++}
++
++static void fpa_remove(struct pci_dev *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct fpapf *fpa = pci_get_drvdata(pdev);
++	struct fpapf *curr;
++
++	if (!fpa)
++		return;
++
++	spin_lock(&octeontx_fpa_devices_lock);
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr == fpa) {
++			list_del(&fpa->list);
++			break;
++		}
++	}
++	spin_unlock(&octeontx_fpa_devices_lock);
++
++	fpa_irq_free(fpa);
++	fpa_sriov_configure(pdev, 0);
++	pci_release_regions(pdev);
++	pci_disable_device(pdev);
++	pci_set_drvdata(pdev, NULL);
++	devm_kfree(dev, fpa);
++}
++
++/* devices supported */
++static const struct pci_device_id fpa_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_OCTEONTX_FPA_PF) },
++	{ 0, } /* end of table */
++};
++
++static struct pci_driver fpa_driver = {
++	.name = DRV_NAME,
++	.id_table = fpa_id_table,
++	.probe = fpa_probe,
++	.remove = fpa_remove,
++};
++
++MODULE_AUTHOR("Tirumalesh Chalamarla");
++MODULE_DESCRIPTION("Cavium OCTEONTX FPA Physical Function Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, fpa_id_table);
++
++static int __init fpa_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return pci_register_driver(&fpa_driver);
++}
++
++static void __exit fpa_cleanup_module(void)
++{
++	pci_unregister_driver(&fpa_driver);
++}
++
++module_init(fpa_init_module);
++module_exit(fpa_cleanup_module);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+new file mode 100644
+index 000000000000..fc4881a961ad
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+@@ -0,0 +1,498 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/delay.h>
++#include <linux/slab.h>
++
++#include "fpa.h"
++
++#define DRV_NAME "octeontx-fpavf"
++#define DRV_VERSION "0.1"
++
++static int setup_test = 1;
++module_param(setup_test, int, 0644);
++MODULE_PARM_DESC(setup_test, "does a test after doing setup");
++
++static DEFINE_SPINLOCK(octeontx_fpavf_devices_lock);
++static DEFINE_SPINLOCK(octeontx_fpavf_alloc_lock);
++static LIST_HEAD(octeontx_fpavf_devices);
++
++/* In Cavium OcteonTX SoCs, all accesses to the device registers are
++ * implicitly strongly ordered.
++ * So writeq_relaxed() and readq_relaxed() are safe to use
++ * with out any memory barriers.
++ */
++
++/* Register read/write APIs */
++static void fpavf_reg_write(struct fpavf *fpa, u64 offset, u64 val)
++{
++	writeq_relaxed(val, fpa->reg_base + offset);
++}
++
++static u64 fpavf_reg_read(struct fpavf *fpa, u64 offset)
++{
++	return readq_relaxed(fpa->reg_base + offset);
++}
++
++static void fpa_vf_free(struct fpavf *fpa, u32 aura, u64 addr, u32 dwb_count)
++{
++	u64 free_addr = FPA_FREE_ADDRS_S(FPA_VF_VHAURA_OP_FREE(aura),
++			dwb_count);
++
++	fpavf_reg_write(fpa, free_addr, addr);
++}
++
++static u64 fpa_vf_alloc(struct fpavf *fpa, u32 aura)
++{
++	u64 addr = 0;
++
++	addr = fpavf_reg_read(fpa, FPA_VF_VHAURA_OP_ALLOC(aura));
++
++	return addr;
++}
++
++static int fpa_vf_do_test(struct fpavf *fpa, u64 num_buffers)
++{
++	int buf_count = num_buffers;
++	u64 *buf;
++	u64 avail;
++	int i;
++
++	buf = kcalloc(num_buffers, sizeof(u64), GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	memset(buf, 0, sizeof(u64) * num_buffers);
++
++	i = 0;
++	while (buf_count) {
++		buf[i] = fpa_vf_alloc(fpa, 0);
++		if (!buf[i])
++			break;
++		i++;
++	}
++
++	if (i != num_buffers) {
++		dev_err(&fpa->pdev->dev, "Didn't get enough buffers");
++		dev_err(&fpa->pdev->dev, "expected :%llu got %d\n",
++			num_buffers, i);
++	}
++
++	while (i) {
++		fpa_vf_free(fpa, 0, buf[i], 0);
++		i--;
++	}
++	avail = fpavf_reg_read(fpa, FPA_VF_VHPOOL_AVAILABLE(0));
++	dev_info(&fpa->pdev->dev, "Fpa vf setup test done::");
++	dev_info(&fpa->pdev->dev, " requested:%llu avail_count:%llu\n",
++		 num_buffers, avail);
++	return 0;
++}
++
++static int fpa_vf_addbuffers(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
++{
++	dma_addr_t iova;
++	void *addr;
++	struct page *p;
++
++	while (num_buffers) {
++		p = alloc_page(GFP_KERNEL | __GFP_NOWARN);
++		if (!p) {
++			dev_err(&fpa->pdev->dev, "failed to allocate vhpool buffers\n");
++			return -ENOMEM;
++		}
++		addr = page_address(p);
++		/*TODO: add dma mappings here if needed.*/
++		iova = dma_map_single(&fpa->pdev->dev, addr, PAGE_SIZE,
++				      DMA_BIDIRECTIONAL);
++		fpa_vf_free(fpa, 0, iova, 0);
++		num_buffers--;
++	}
++
++	return 0;
++}
++
++static int fpa_vf_addmemory(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
++{
++	dma_addr_t iova;
++
++	fpa->vhpool_size = num_buffers * buf_len;
++	fpa->vhpool_addr = dma_zalloc_coherent(&fpa->pdev->dev,
++			fpa->vhpool_size, &fpa->vhpool_iova, GFP_KERNEL);
++	if (!fpa->vhpool_addr) {
++		dev_err(&fpa->pdev->dev, "failed to allocate vhpool memory\n");
++		dma_free_coherent(&fpa->pdev->dev, fpa->pool_size,
++				  fpa->pool_addr, fpa->pool_iova);
++		return -ENOMEM;
++	}
++
++	iova = fpa->vhpool_iova;
++	while (num_buffers) {
++		fpa_vf_free(fpa, 0, iova, 0);
++		iova += buf_len;
++		num_buffers--;
++	}
++
++	return 0;
++}
++
++static int fpa_vf_setup(struct fpavf *fpa, u64 num_buffers, u32 buf_len,
++			u32 flags)
++{
++	u64 reg;
++	struct mbox_hdr hdr;
++	union mbox_data req;
++	union mbox_data resp;
++	struct mbox_fpa_cfg cfg;
++	int ret;
++
++	buf_len = round_up(buf_len, FPA_LN_SIZE);
++	num_buffers = round_up(num_buffers, FPA_LN_SIZE);
++	fpa->pool_size = round_up(num_buffers / fpa->stack_ln_ptrs,
++			FPA_LN_SIZE);
++	fpa->pool_size = num_buffers * FPA_LN_SIZE;
++
++	fpa->pool_addr = dma_zalloc_coherent(&fpa->pdev->dev, fpa->pool_size,
++			&fpa->pool_iova, GFP_KERNEL);
++
++	if (!fpa->pool_addr) {
++		dev_err(&fpa->pdev->dev, "failed to allocate Pool stack\n");
++		return -ENOMEM;
++	}
++
++	fpa->num_buffers = num_buffers;
++	fpa->alloc_count = ((atomic_t) { (0) });
++	fpa->alloc_thold = (num_buffers * 10) / 100;
++	fpa->buf_len = buf_len;
++
++	req.data = 0;
++	hdr.coproc = FPA_COPROC;
++	hdr.msg = FPA_CONFIGSET;
++	hdr.vfid = fpa->subdomain_id;
++
++	/*POOL setup */
++	reg = POOL_BUF_SIZE(buf_len / FPA_LN_SIZE) | POOL_BUF_OFFSET(0) |
++		POOL_LTYPE(0x2) | POOL_STYPE(0) | POOL_SET_NAT_ALIGN | POOL_ENA;
++
++	cfg.aid = 0;
++	cfg.pool_cfg = reg;
++	cfg.pool_stack_base = fpa->pool_iova;
++	cfg.pool_stack_end = fpa->pool_iova + fpa->pool_size;
++	cfg.aura_cfg = (1 << 9);
++
++	ret = fpa->master->send_message(&hdr, &req, &resp, fpa->master_data,
++					&cfg);
++	if (ret || hdr.res_code)
++		return -EINVAL;
++
++	/*disable buffer check*/
++	fpavf_reg_write(fpa, FPA_VF_VHPOOL_START_ADDR(0), 0ULL);
++	fpavf_reg_write(fpa, FPA_VF_VHPOOL_END_ADDR(0), 0xffffffffffffffffULL);
++
++	if (flags & FPA_VF_FLAG_CONT_MEM)
++		fpa_vf_addmemory(fpa, num_buffers, buf_len);
++	else
++		fpa_vf_addbuffers(fpa, num_buffers, buf_len);
++
++	req.data = 0;
++	hdr.coproc = FPA_COPROC;
++	hdr.msg = FPA_START_COUNT;
++	hdr.vfid = fpa->subdomain_id;
++	ret = fpa->master->send_message(&hdr, &req, &resp, fpa->master_data,
++					NULL);
++	if (ret || hdr.res_code)
++		return -EINVAL;
++
++	if (setup_test)
++		fpa_vf_do_test(fpa, num_buffers);
++
++	/*Setup THRESHOLD*/
++	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_THRESHOLD(0), num_buffers / 2);
++	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_LIMIT(0), num_buffers - 50);
++
++	return 0;
++}
++
++static struct fpavf *fpa_vf_get(u16 domain_id, u16 subdomain_id,
++				struct octeontx_master_com_t *master,
++				void *master_data)
++{
++	struct mbox_hdr hdr;
++	struct fpavf *fpa = NULL;
++	struct fpavf *curr;
++	union mbox_data req;
++	union mbox_data resp;
++	u64 reg;
++	u32 d_id, sd_id;
++	int ret;
++
++	spin_lock(&octeontx_fpavf_devices_lock);
++	list_for_each_entry(curr, &octeontx_fpavf_devices, list) {
++		if (curr->domain_id == domain_id &&
++		    curr->subdomain_id == subdomain_id) {
++			fpa = curr;
++			break;
++		}
++	}
++	spin_unlock(&octeontx_fpavf_devices_lock);
++
++	if (!fpa) {
++		/*Try sending identify to PF*/
++		req.data = 0;
++		hdr.coproc = FPA_COPROC;
++		hdr.msg = IDENTIFY;
++		hdr.vfid = subdomain_id;
++		ret = master->send_message(&hdr, &req, &resp,
++					master_data, NULL);
++		if (ret)
++			return NULL;
++
++		spin_lock(&octeontx_fpavf_devices_lock);
++		list_for_each_entry(curr, &octeontx_fpavf_devices, list) {
++			reg = fpavf_reg_read(curr, FPA_VF_VHPOOL_START_ADDR(0));
++
++			if (reg)
++				continue;
++
++			/* get did && sdid */
++			reg = fpavf_reg_read(curr,
++					     FPA_VF_VHAURA_CNT_THRESHOLD(0));
++
++			reg = reg >> 8;
++			d_id = (reg & 0xffff);
++			sd_id = ((reg >> 16) & 0xffff);
++			if (domain_id == d_id && subdomain_id == sd_id) {
++				fpa = curr;
++				break;
++			}
++		}
++		spin_unlock(&octeontx_fpavf_devices_lock);
++	}
++
++	if (fpa) {
++		reg = fpavf_reg_read(fpa,
++				     FPA_VF_VHPOOL_THRESHOLD(0));
++		fpa->domain_id = domain_id;
++		fpa->subdomain_id = subdomain_id;
++		fpa->master = master;
++		fpa->master_data = master_data;
++		fpa->stack_ln_ptrs = reg;
++	}
++
++	return fpa;
++}
++
++static int fpa_vf_refill(struct fpavf *fpa)
++{
++	u64 alloc_count;
++
++	spin_lock(&octeontx_fpavf_alloc_lock);
++	alloc_count = atomic_read(&fpa->alloc_count);
++	if (alloc_count >= fpa->alloc_thold)
++		fpa_vf_addbuffers(fpa, alloc_count, fpa->buf_len);
++
++	atomic_sub_return(alloc_count, &fpa->alloc_count);
++	spin_unlock(&octeontx_fpavf_alloc_lock);
++	return alloc_count;
++}
++
++static void fpa_vf_add_alloc(struct fpavf *fpa, int count)
++{
++	atomic_add_return(count, &fpa->alloc_count);
++}
++
++struct fpavf_com_s fpavf_com = {
++	.get = fpa_vf_get,
++	.setup = fpa_vf_setup,
++	.free = fpa_vf_free,
++	.alloc = fpa_vf_alloc,
++	.refill = fpa_vf_refill,
++	.add_alloc = fpa_vf_add_alloc,
++};
++EXPORT_SYMBOL(fpavf_com);
++
++static irqreturn_t fpa_vf_intr_handler (int irq, void *fpa_irq)
++{
++	struct fpavf *fpa = (struct fpavf *)fpa_irq;
++	u64 vf_int = fpavf_reg_read(fpa, FPA_VF_INT(0));
++
++	if (!(vf_int & 0x8))
++		dev_err(&fpa->pdev->dev, "VF interrupt: %llx\n", vf_int);
++
++	/* clear irq status */
++	fpavf_reg_write(fpa, FPA_VF_INT(0), vf_int);
++
++	return IRQ_HANDLED;
++}
++
++static int fpavf_irq_init(struct fpavf *fpa)
++{
++	u64 vf_int = 0xFFFF0000007f;
++	int i, ret;
++
++	/*clear irq status */
++	fpavf_reg_write(fpa, FPA_VF_INT_ENA_W1C(0), vf_int);
++
++	ret = FPA_VF_MSIX_COUNT;
++	if (ret < 0) {
++		dev_err(&fpa->pdev->dev, "Failed to get MSIX table size\n");
++		return ret;
++	}
++
++	fpa->msix_entries = devm_kzalloc(&fpa->pdev->dev,
++			ret * sizeof(struct msix_entry), GFP_KERNEL);
++	if (!fpa->msix_entries)
++		return -ENOMEM;
++	for (i = 0; i < ret; i++)
++		fpa->msix_entries[i].entry = i;
++
++	ret = pci_enable_msix(fpa->pdev, fpa->msix_entries, ret);
++	if (ret) {
++		dev_err(&fpa->pdev->dev, "Enabling msix failed\n");
++		return ret;
++	}
++
++	/* register GEN intr handler */
++	ret = request_irq(fpa->msix_entries[0].vector, fpa_vf_intr_handler,
++			  0, "fpavf", fpa);
++	if (ret)
++		return ret;
++
++	/* it's time to enable interrupts*/
++	fpavf_reg_write(fpa, FPA_VF_INT_ENA_W1S(0), vf_int);
++
++	return 0;
++}
++
++static void fpavf_irq_free(struct fpavf *fpa)
++{
++	u64 vf_int = 0xFFFF0000007f;
++
++	/*clear GEN irq status */
++	fpavf_reg_write(fpa, FPA_VF_INT_ENA_W1C(0), vf_int);
++
++	free_irq(fpa->msix_entries[0].vector, fpa);
++	pci_disable_msix(fpa->pdev);
++}
++
++static int fpavf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
++{
++	struct device *dev = &pdev->dev;
++	struct fpavf *fpa;
++	int err = -ENOMEM;
++
++	fpa = devm_kzalloc(dev, sizeof(*fpa), GFP_KERNEL);
++	if (!fpa)
++		return err;
++
++	pci_set_drvdata(pdev, fpa);
++	fpa->pdev = pdev;
++
++	err = pcim_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed\n");
++		return err;
++	}
++
++	/*Map CFG registers */
++	fpa->reg_base = pcim_iomap(pdev, PCI_FPA_VF_CFG_BAR, 0);
++	if (!fpa->reg_base) {
++		dev_err(dev, "Can't map CFG space\n");
++		err = -ENOMEM;
++		return err;
++	}
++
++	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(48));
++	if (err) {
++		dev_err(dev, "Unable to get usable DMA configuration\n");
++		return err;
++	}
++
++	err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(48));
++	if (err) {
++		dev_err(dev, "Unable to get 48-bit DMA\n");
++		return err;
++	}
++
++	err = fpavf_irq_init(fpa);
++	if (err) {
++		dev_err(dev, "failed init irqs\n");
++		err = -EINVAL;
++		return err;
++	}
++
++	INIT_LIST_HEAD(&fpa->list);
++	spin_lock(&octeontx_fpavf_devices_lock);
++	list_add(&fpa->list, &octeontx_fpavf_devices);
++	spin_unlock(&octeontx_fpavf_devices_lock);
++
++	return 0;
++}
++
++static void fpavf_remove(struct pci_dev *pdev)
++{
++	struct fpavf *fpa = pci_get_drvdata(pdev);
++	struct fpavf *curr;
++
++	if (!fpa)
++		return;
++
++	spin_lock(&octeontx_fpavf_devices_lock);
++	list_for_each_entry(curr, &octeontx_fpavf_devices, list) {
++		if (curr == fpa) {
++			list_del(&fpa->list);
++			break;
++		}
++	}
++	spin_unlock(&octeontx_fpavf_devices_lock);
++
++	fpavf_irq_free(fpa);
++}
++
++/* devices supported */
++static const struct pci_device_id fpavf_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_OCTEONTX_FPA_VF) },
++	{ 0, }  /* end of table */
++};
++
++static struct pci_driver fpavf_driver = {
++	.name = DRV_NAME,
++	.id_table = fpavf_id_table,
++	.probe = fpavf_probe,
++	.remove = fpavf_remove,
++};
++
++MODULE_AUTHOR("Tirumalesh Chalamarla");
++MODULE_DESCRIPTION("Cavium OCTEONTX FPA Virtual Function Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, fpavf_id_table);
++
++static int __init fpavf_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return pci_register_driver(&fpavf_driver);
++}
++
++static void __exit fpavf_cleanup_module(void)
++{
++	pci_unregister_driver(&fpavf_driver);
++}
++
++module_init(fpavf_init_module);
++module_exit(fpavf_cleanup_module);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+new file mode 100644
+index 000000000000..10b6410a4d8e
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+@@ -0,0 +1,98 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef OCTEONTX_H
++#define OCTEONTX_H
++
++#include <linux/netdevice.h>
++
++#include "octeontx_mbox.h"
++
++#define OCTTX_MAX_NODES	1 /* Maximum number of CPU devices/nodes */
++
++#define get_gmid(x) (x)
++
++struct octeontx_pf_vf {
++	bool			in_use;
++	u16			domain_id;
++	u16			subdomain_id;
++	u32			gmid;
++
++	void __iomem		*reg_base;
++	struct octeontx_master_com_t *master;
++	void			*master_data;
++};
++
++struct octeontx_master_com_t {
++	int (*send_message)(struct mbox_hdr *hdr,
++			    union mbox_data *req,
++			    union mbox_data *resp,
++			    void *master_data,
++			    void *add_data);
++	int (*receive_message)(struct mbox_hdr *hdr,
++			       union mbox_data *req,
++			       union mbox_data *resp,
++			       void *master_data,
++			       void *add_data);
++	int (*reset_domain)(void *master_data);
++};
++
++struct wqe_s {
++	u64 work0;
++	u64 *work1;
++};
++
++struct intr_hand {
++	u64	mask;
++	char	name[50];
++	u64	coffset;
++	u64	soffset;
++	irqreturn_t (*handler)(int, void *);
++};
++
++enum domain_type {
++	APP_NET = 0,
++	HOST_NET
++};
++
++/* Domain network (BGX) port */
++#define OCTEONTX_MAX_BGX_PORTS 16 /* Maximum BGX ports per System */
++
++struct octtx_bgx_port {
++	struct list_head list;
++	int	domain_id;
++	int	dom_port_idx; /* Domain-local index of BGX port */
++	int	glb_port_idx; /* System global index of BGX port */
++	int	node; /* CPU node */
++	int	bgx; /* Node-local BGX device index */
++	int	lmac; /* BGX-local port/LMAC number/index */
++	int	base_chan; /* Node-local base channel (PKI_CHAN_E) */
++	int	num_chans;
++	int	pkind; /* PKI port number */
++	int	link_up; /* Last retrieved link status */
++};
++
++/* Domain internal (LBK) port */
++#define OCTEONTX_MAX_LBK_PORTS 2 /* Maximum LBK ports per System */
++
++struct octtx_lbk_port {
++	struct list_head list;
++	int	domain_id;
++	int	dom_port_idx; /* Domain-local index of LBK port */
++	int	glb_port_idx; /* System global index of LBK port */
++	int	node; /* CPU node */
++	int	ilbk; /* Node-local index of ingress LBK device */
++	int	olbk; /* Node-local index of egress LBK device */
++	int	ilbk_base_chan; /* Node-local base channel (PKI_CHAN_E) */
++	int	ilbk_num_chans;
++	int	olbk_base_chan; /* Node-local base channel (PKI_CHAN_E) */
++	int	olbk_num_chans;
++	int	pkind; /* PKI port number */
++};
++#endif
++
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+new file mode 100644
+index 000000000000..858aa8176a0f
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -0,0 +1,736 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef OCTEONTX_MBOX_H
++#define OCTEONTX_MBOX_H
++
++enum coproc_t {
++	NO_COPROC = 0,
++	FPA_COPROC = 1,
++	SSO_COPROC = 2,
++	SSOW_COPROC = 3,
++	PKO_COPROC = 4,
++	PKI_COPROC = 5,
++	BGX_COPROC = 6,
++	LBK_COPROC = 7,
++	TIM_COPROC = 8
++};
++
++/*req messages*/
++#define IDENTIFY		0x0
++
++#define FPA_CONFIGSET		0x1
++#define FPA_CONFIGGET		0x2
++#define FPA_START_COUNT		0x3
++#define FPA_STOP_COUNT		0x4
++#define FPA_ATTACHAURA		0x5
++#define FPA_DETACHAURA		0x6
++#define FPA_SETAURALVL		0x7
++#define FPA_GETAURALVL		0x8
++
++#define SSO_GETDOMAINCFG	0x1
++#define SSO_IDENTIFY		0x2
++#define SSO_GET_DEV_INFO	0x3
++#define SSO_GET_GETWORK_WAIT	0x4
++#define SSO_SET_GETWORK_WAIT	0x5
++#define SSO_CONVERT_NS_GETWORK_ITER	0x6
++#define SSO_GRP_GET_PRIORITY	0x7
++#define SSO_GRP_SET_PRIORITY	0x8
++#define SSO_GET_DUMP		0x9
++
++/*resp messages*/
++#define MBOX_RET_SUCCESS	0x0
++#define MBOX_RET_INVALID	0x2
++#define MBOX_RET_INTERNAL_ERR	0x3
++
++#define MBOX_MAX_MSG_SIZE	1024
++
++/* Structure used for mbox synchronization
++ * This structure sits at the begin of Mbox RAM and is used as main
++ * synchronization point for channel communication
++ */
++struct mbox_ram_hdr {
++	union {
++		u64 val;
++		struct __attribute__((__packed__)) {
++			u8	chan_state : 1;
++			u8	coproc : 7;
++			u8	msg;
++			u8	vfid;
++			u8	res_code;
++			u16	tag;
++			u16	len;
++		};
++	};
++};
++
++struct mbox_hdr {
++	/* VF idx or PF resource index local to the domain */
++	u16 vfid;
++	/* coprocessor coproc */
++	u8 coproc;
++	/* message type */
++	u8 msg;
++	/* out of band data */
++	u8 oob;
++	/* Functional layer response code */
++	u8 res_code;
++};
++
++struct mbox {
++	void *mbox_base;
++	void *ram_base;
++	size_t ram_size;
++	/* last header received from party channel */
++	struct mbox_ram_hdr hdr_party;
++	/* last tag which was written to own channel */
++	u16 tag_own;
++	/* of wchich channel direction we are the owner */
++	u8 chan_own;
++	/* OOB in progress */
++	u8 oob;
++};
++
++typedef enum {
++	MBOX_SIDE_PF = 0,
++	MBOX_SIDE_VF = 1
++} mbox_side_t;
++
++/* This function initializes the mbox module and communication channel.
++ * This function should be called before any other mbox function calls.
++ *
++ * @param sso_base Bar base address for SSO
++ * @param ram_base Ram base for extended msg
++ * @param ram_size Ram size for extended msg (must be power of 2)
++ * @param pf Working mode for mastering of the correct channel ,
++ * PF - true, VF - false
++ *
++ * @note The excact actions taken by this function depends on excact protocol
++ *       version implemented. Refer to git changeset or source code file for
++ *       detailed desctiption.
++ */
++void mbox_init(
++	struct mbox *mbox,
++	void *sso_base,
++	void *ram_base,
++	size_t ram_size,
++	mbox_side_t side);
++
++/* Function called by sender (master) to perform whole send-recv transaction.
++ * Function bloks until msg received or timeout.
++ *
++ * @param hdr Common message fields
++ * @param txmsg pointer to msg body to be send out
++ * @param txsize length of req msg to be send out
++ * @param rxmsg Pointer to buffer for msg body to be recv warning: this buffer
++ *        need to be large enough. Size of it need to be stored in rxsize
++ *        param
++ * @param rxsize length of buffer for resp msg which could be recv. If the
++ *        given size is smaller than received message body, the message will be
++ *        truncated
++ *
++ * @return length of received message (can be 0), <0 in case of error
++ *
++ * @note in case of error, channel will reset channel to initial state
++ */
++int mbox_send(
++	struct mbox *mbox,
++	struct mbox_hdr *hdr,
++	const void *txmsg,
++	size_t txsize,
++	void *rxmsg,
++	size_t rxsize);
++
++/* Function called by slave (receiver)
++ * to fetch the request from master (sender).
++ *
++ * @param hdr Common message fields
++ * @param rxmsg pointer to buffer for msg body to be recv warning: this buffer
++ *        need to be large enough. Size of it need to be stored in size
++ *        param
++ * @param rxsize length of buffer for resp msg which could be recv. If the
++ *        given size is smaller than received message body, the message will be
++ *        truncated
++ *
++ * @return length of received message (can be 0),
++ *         <0 in case of error or there was no message in mbox
++ *
++ * @note in case of error, function does not reset the channel
++ */
++int mbox_receive(
++	struct mbox *mbox,
++	struct mbox_hdr *hdr,
++	void *rxmsg,
++	size_t rxsize);
++
++/* Function called by slave (receiver) to send the response to master
++ * (initial sende)
++ *
++ * @param res_code Functional layer response code.
++ * @param txmsg pointer to msg body to be send out
++ * @param txsize length of req msg to be send out. The length of the message
++ *        cannot exceed the mbox ram buffer or the message will be truncated
++ *
++ * @return 0 in case response msg was successfully transmited
++ *	   != 0 in case of error or there was detected timeout for current
++ *	   trasaction
++ *
++ * @note in case of error, function does not reset the channel
++ */
++int mbox_reply(
++	struct mbox *mbox,
++	u8 res_code,
++	const void *txmsg,
++	size_t txsize);
++
++struct __attribute__((__packed__)) gen_req {
++	u32	value;
++};
++
++struct __attribute__((__packed__)) idn_req {
++	u8	domain_id;
++};
++
++struct __attribute__((__packed__)) gen_resp {
++	u16	domain_id;
++	u16	vfid;
++};
++
++struct __attribute__((__packed__)) dcfg_resp {
++	u8	sso_count;
++	u8	ssow_count;
++	u8	fpa_count;
++	u8	pko_count;
++	u8	tim_count;
++	u8	net_port_count;
++	u8	virt_port_count;
++};
++
++/* FPA specific */
++struct mbox_fpa_cfg {
++	int	aid;
++	u64	pool_cfg;
++	u64	pool_stack_base;
++	u64	pool_stack_end;
++	u64	aura_cfg;
++};
++
++/* SSOW */
++struct mbox_ssow_identify {
++	u16	domain_id;
++	u16	subdomain_id;
++};
++
++/* FIXME: This union is temporary until we agree to move all messages to RAM */
++union mbox_data {
++	u64			data;
++	struct gen_req		gen_req;
++	struct gen_resp		gen_resp;
++	struct idn_req		id;
++	struct dcfg_resp	cfg;
++
++	//TODO: warning Remove resp_hdr
++	struct gen_resp		resp_hdr;
++};
++
++/*----------------------------------------------------------------------------*/
++/* BGX messages:                                                              */
++/*----------------------------------------------------------------------------*/
++/* Message IDs for BGX_COPROC */
++#define MBOX_BGX_PORT_OPEN 0
++#define MBOX_BGX_PORT_CLOSE 1
++#define MBOX_BGX_PORT_START 2
++#define MBOX_BGX_PORT_STOP 3
++#define MBOX_BGX_PORT_GET_CONFIG 4
++#define MBOX_BGX_PORT_GET_STATUS 5
++#define MBOX_BGX_PORT_GET_STATS 6
++#define MBOX_BGX_PORT_CLR_STATS 7
++#define MBOX_BGX_PORT_GET_LINK_STATUS 8
++#define MBOX_BGX_PORT_SET_PROMISC 9
++#define MBOX_BGX_PORT_SET_MACADDR 10
++#define MBOX_BGX_PORT_SET_BP 11
++#define MBOX_BGX_PORT_SET_BCAST 12
++#define MBOX_BGX_PORT_SET_MCAST 13
++
++/* BGX port configuration parameters: */
++typedef struct mbox_bgx_port_conf {
++	/* 1 = port activated, 0 = port is idle.*/
++	u8 enable;
++	/* 1 = enabled, 0 = disabled */
++	u8 promisc;
++	/* 1 = backpressure enabled, 0 = disabled.*/
++	u8 bpen;
++	/* MAC address.*/
++	u8 macaddr[6];
++	/* 1 = enabled, 0 = disabled (BGX[]_CMR_GLOBAL_CONFIG[fcs_strip]).*/
++	u8 fcs_strip;
++	/* 1 = enabled, 0 = disabled (BGX[]_CMR[]_RX_DMAC_CTL[bcst_mode]).*/
++	u8 bcast_mode;
++	/* BGX[]_CMR[]_RX_DMAC_CTL[mcst_mode].*/
++	u8 mcast_mode;
++	/* CPU node */
++	u8 node;
++	/* Base channel (PKI_CHAN_E) */
++	u16 base_chan;
++	/* Number of channels */
++	u16 num_chans;
++	/* Diagnostics support: */
++	/* BGX number */
++	u8 bgx;
++	/* LMAC number */
++	u8 lmac;
++	/* As shown in BGX[]_CMR[]_CONFIG[lmac_type]: SGMII, XAUI, ... */
++	u8 mode;
++	/* PF value of PKIND (PKI port: BGX[]_CMR[]_RX_ID_MAP[pknd]).*/
++	u8 pkind;
++} mbox_bgx_port_conf_t;
++
++/* BGX port status: */
++typedef struct mbox_bgx_port_status {
++	/* 1 = link is up, 0 = link is down. */
++	u8 link_up;
++	/* 1 = LMAC is backpressured, 0 = no backpressure. */
++	u8 bp;
++} mbox_bgx_port_status_t;
++
++/* BGX port statistics: */
++typedef struct mbox_bgx_port_stats {
++	u64 rx_packets;
++	u64 tx_packets;
++	u64 rx_bytes;
++	u64 tx_bytes;
++	u64 rx_errors;
++	u64 tx_errors;
++	u64 rx_dropped;
++	u64 tx_dropped;
++	u64 multicast;
++	u64 collisions;
++	/* Detailed receive errors. */
++	u64 rx_length_errors;
++	u64 rx_over_errors;
++	u64 rx_crc_errors;
++	u64 rx_frame_errors;
++	u64 rx_fifo_errors;
++	u64 rx_missed_errors;
++
++	/* Detailed transmit errors. */
++	u64 tx_aborted_errors;
++	u64 tx_carrier_errors;
++	u64 tx_fifo_errors;
++	u64 tx_heartbeat_errors;
++	u64 tx_window_errors;
++
++	/* Extended statistics based on RFC2819. */
++	u64 rx_1_to_64_packets;
++	u64 rx_65_to_127_packets;
++	u64 rx_128_to_255_packets;
++	u64 rx_256_to_511_packets;
++	u64 rx_512_to_1023_packets;
++	u64 rx_1024_to_1522_packets;
++	u64 rx_1523_to_max_packets;
++
++	u64 tx_1_to_64_packets;
++	u64 tx_65_to_127_packets;
++	u64 tx_128_to_255_packets;
++	u64 tx_256_to_511_packets;
++	u64 tx_512_to_1023_packets;
++	u64 tx_1024_to_1522_packets;
++	u64 tx_1523_to_max_packets;
++
++	u64 tx_multicast_packets;
++	u64 rx_broadcast_packets;
++	u64 tx_broadcast_packets;
++	u64 rx_undersized_errors;
++	u64 rx_oversize_errors;
++	u64 rx_fragmented_errors;
++	u64 rx_jabber_errors;
++} mbox_bgx_port_stats_t;
++
++/*----------------------------------------------------------------------------*/
++/* LBK messages:                                                              */
++/*----------------------------------------------------------------------------*/
++/* Message IDs for LBK_COPROC */
++#define MBOX_LBK_PORT_OPEN 0
++#define MBOX_LBK_PORT_CLOSE 1
++#define MBOX_LBK_PORT_START 2
++#define MBOX_LBK_PORT_STOP 3
++#define MBOX_LBK_PORT_GET_CONFIG 4
++#define MBOX_LBK_PORT_GET_STATUS 5
++#define MBOX_LBK_PORT_GET_STATS 6
++#define MBOX_LBK_PORT_CLR_STATS 7
++#define MBOX_LBK_PORT_GET_LINK_STATUS 8
++
++/* LBK port configuration parameters: */
++typedef struct mbox_lbk_port_conf {
++	/* 1 = activated, 0 = idle.*/
++	u8 enabled;
++	u8 node;
++	/* Base input channel (PKI_CHAN_E) */
++	u16 base_ichan;
++	/* Number of input channels */
++	u16 num_ichans;
++	/* Base output channel (PKI_CHAN_E) */
++	u16 base_ochan;
++	/* Number of output channels */
++	u16 num_ochans;
++	/* Diagnostics support: */
++	/* Ingress and egress LBK numbers */
++	u8 ilbk, olbk;
++	/* PKI port (PF value).*/
++	u8 pkind;
++} mbox_lbk_port_conf_t;
++
++/* LBK port status: */
++typedef struct mbox_lbk_port_status {
++	/* 1 = link is up, 0 = link is down. */
++	int link_up;
++	/* Channel overflow */
++	u8 chan_oflow;
++	/* Channel underflow */
++	u8 chan_uflow;
++	/* Packet data overflow */
++	u8 data_oflow;
++	/* Packet data underflow */
++	u8 data_uflow;
++} mbox_lbk_port_status_t;
++
++/* LBK port statistics: */
++typedef struct mbox_lbk_port_stats {
++	u64 rx_octets;
++	u64 rx_frames;
++	u64 tx_octets;
++	u64 tx_frames;
++} mbox_lbk_port_stats_t;
++
++/* SSO Message struct */
++struct mbox_sso_get_dev_info {
++	/* minimum getwork wait in ns [out] */
++	u64 min_getwork_wait_ns;
++	/* maximum getwork wait in ns [out] */
++	u64 max_getwork_wait_ns;
++	/* maximum xaq ddr event entries [out] */
++	u32 max_events;
++};
++
++struct mbox_sso_getwork_wait {
++	u64 wait_ns;
++};
++
++struct mbox_sso_convert_ns_getworks_iter {
++	u64 wait_ns;
++	u32 getwork_iter;
++};
++
++struct mbox_sso_grp_priority {
++	/* vhgrp id, PF driver is reposible for
++	 * convertig to physical sso grp id [in]
++	 * filelds of SSO_GRP(0..63)_PRI
++	 */
++	u8 vhgrp_id;
++	u8 wgt_left;
++	u8 weight;
++	u8 affinity;
++	u8 pri;
++};
++
++struct mbox_sso_get_dump {
++	size_t len;
++	u8 buf[MBOX_MAX_MSG_SIZE];
++};
++
++/*----------------------------------------------------------------------------*/
++/* TIM messages:                                                              */
++/*----------------------------------------------------------------------------*/
++#define MBOX_TIM_IDENT_CODE(__dom, __subdom) \
++	((((u64)(__subdom) << 16) | (__dom)) << 7)
++
++#define MBOX_TIM_DOM_FROM_IDENT(__ident) \
++	(((u64)(__ident) >> 7) & 0xFFFFull)
++
++#define MBOX_TIM_SDOM_FROM_IDENT(__ident) \
++	(((u64)(__ident) >> (7 + 16)) & 0xFFFFull)
++
++/* Message IDs for TIM_COPROC */
++/* #define IDENTIFY              0 */
++/* Read TIM device config and status.*/
++#define MBOX_TIM_DEV_INFO_GET    1
++/* Read TIM ring config and status.*/
++#define MBOX_TIM_RING_INFO_GET   2
++/* Write ring configuration */
++#define MBOX_TIM_RING_CONFIG_SET 3
++
++/* TIM device configuration and status parameters: */
++struct __attribute__((__packed__)) mbox_tim_dev_info {
++	/* TIM_ENGINE_ACTIVE register images */
++	u64 eng_active[4];
++	/* TIM device base clock (SCLK) rate */
++	u64 tim_clk_freq;
++};
++
++/* TIM ring configuration and status parameters: */
++struct __attribute__((__packed__)) mbox_tim_ring_info {
++	/* CPU node/TIM device this ring resides on.*/
++	u8 node;
++	/* TIM_VRING_LATE register image */
++	u64 ring_late;
++};
++
++/* TIM ring configuration and status parameters: */
++struct __attribute__((__packed__)) mbox_tim_ring_conf {
++	/* TIM_RING_CTL0 register image */
++	u64 ctl0;
++	/* TIM_RING_CTL1 register image */
++	u64 ctl1;
++	/* TIM_RING_CTL2 register image */
++	u64 ctl2;
++};
++
++/*----------------------------------------------------------------------------*/
++/* PKI messages:                                                              */
++/*----------------------------------------------------------------------------*/
++/* Message IDs for PKI_COPROC */
++/* Message 0-7 are privileged messages applies to pkind */
++#define MBOX_PKI_GLOBAL_CONFIG			0
++
++/* alloc and assign initial syle, 1st release port not sharing style
++ * set style to drop all packets, style_cfg->DROP =1
++ */
++#define MBOX_PKI_PORT_OPEN			1
++/* set port to start receive packets style_cfg->DROP=0 */
++#define MBOX_PKI_PORT_START			2
++/* set style of this port to drop all packets style_cfg->DROP =1*/
++#define MBOX_PKI_PORT_STOP			3
++/* Free the style/qpg/pcam entries allocated to this port,
++ * if not shared. Set to DROP style
++ */
++#define MBOX_PKI_PORT_CLOSE			4
++#define MBOX_PKI_PORT_CONFIG			5
++#define MBOX_PKI_PORT_OPT_PARSER_CONFIG		6
++#define MBOX_PKI_PORT_CUSTOM_PARSER_CONFIG	7
++#define MBOX_PKI_PORT_PKTBUF_CONFIG		8
++#define MBOX_PKI_PORT_HASH_CONFIG		9
++#define MBOX_PKI_PORT_ERRCHK_CONFIG		10
++/* alloc consecutive number of qpg entry and setup passed parameters.
++ * set style qpg_base to allocated entries base,
++ * 1st version don't allow sharing but later
++ * check if qpg entry with same parameters already exist
++ * and use it and mark it shared
++ */
++#define MBOX_PKI_PORT_CREATE_QOS		11
++/* Modify offset from the qpg_base */
++#define MBOX_PKI_PORT_MODIFY_QOS		12
++/* Delet the complete qpg entries attached to this port */
++#define MBOX_PKI_PORT_DELETE_QOS		13
++/* Enable/disable RSS by setting qpg_grptag in all the qpg entries */
++#define MBOX_PKI_PORT_ENABLE_RSS		14
++#define MBOX_PKI_PORT_PKTDROP_CONFIG		15
++#define MBOX_PKI_PORT_WQE_GEN_CONFIG		16
++#define MBOX_PKI_BACKPRESSURE_CONFIG		17
++#define MBOX_PKI_PORT_GET_STATS			18
++#define MBOX_PKI_PORT_RESET_STATS		19
++#define MBOX_PKI_GET_PORT_CONFIG		20
++#define MBOX_PKI_GET_PORT_QOS_CONFIG		22
++
++/* pki pkind parse mode */
++enum  {
++	MBOX_PKI_PARSE_LA_TO_LG = 0,
++	MBOX_PKI_PARSE_LB_TO_LG = 1,
++	MBOX_PKI_PARSE_LC_TO_LG = 3,
++	MBOX_PKI_PARSE_LG = 0x3f,
++	MBOX_PKI_PARSE_NOTHING = 0x7f
++};
++
++/* pki port config */
++typedef struct mbox_pki_port_type {
++	u8 port_type;
++} mbox_pki_port_t;
++
++/* pki port config */
++typedef struct mbox_pki_port_cfg {
++	struct {
++		/* modify mask 1=modify 0=dont modify*/
++		u8 fcs_pres:1;
++		u8 fcs_skip:1;
++		u8 parse_mode:1;
++		u8 mpls_parse:1;
++		u8 inst_hdr_parse:1;
++		u8 fulc_parse:1;
++		u8 dsa_parse:1;
++		u8 hg2_parse:1;
++		u8 hg_parse:1;
++	} mmask;
++	u8 fcs_pres;
++	u8 fcs_skip;
++	u8 parse_mode;
++	u8 mpls_parse;
++	u8 inst_hdr_parse;
++	u8 fulc_parse;
++	u8 dsa_parse;
++	u8 hg2_parse;
++	u8 hg_parse;
++} mbox_pki_prt_cfg_t;
++
++/* pki Flow/style packet buffer config */
++typedef struct mbox_pki_port_pktbuf_cfg {
++	struct {
++		/* modify mask  1=modify 0=no moidfy*/
++		u16 f_mbuff_size:1;
++		u16 f_wqe_skip:1;
++		u16 f_first_skip:1;
++		u16 f_later_skip:1;
++		u16 f_pkt_outside_wqe:1;
++		u16 f_wqe_endian:1;
++		u16 f_cache_mode:1;
++	} mmask;
++	u16 mbuff_size;
++	u16 wqe_skip;
++	u16 first_skip;
++	u16 later_skip;
++	u8 pkt_outside_wqe;
++	u8 wqe_endian;
++	u8 cache_mode;
++} mbox_pki_pktbuf_cfg_t;
++
++/* pki flow/style tag config */
++typedef struct mbox_pki_port_hash_cfg {
++	u32 tag_slf:1;
++	u32 tag_sle:1;
++	u32 tag_sld:1;
++	u32 tag_slc:1;
++	u32 tag_dlf:1;
++	u32 tag_dle:1;
++	u32 tag_dld:1;
++	u32 tag_dlc:1;
++	u32 tag_prt:1;
++	u32 tag_vlan0:1;
++	u32 tag_vlan1:1;
++	u32 tag_ip_pctl:1;
++	u32 tag_sync:1;
++	u32 tag_spi:1;
++	u32 tag_gtp:1;
++	u32 tag_vni:1;
++} mbox_pki_hash_cfg_t;
++
++/* pki flow/style errcheck config */
++typedef struct mbox_pki_port_errcheck_cfg {
++	struct {
++		/* modify mask 1=modify 0=dont modify*/
++		u32 f_ip6_udp_opt:1;
++		u32 f_lenerr_en:1;
++		u32 f_maxerr_en:1;
++		u32 f_minerr_en:1;
++		u32 f_fcs_chk:1;
++		u32 f_fcs_strip:1;
++		u32 f_len_lf:1;
++		u32 f_len_le:1;
++		u32 f_len_ld:1;
++		u32 f_len_lc:1;
++		u32 f_csum_lf:1;
++		u32 f_csum_le:1;
++		u32 f_csum_ld:1;
++		u32 f_csum_lc:1;
++		u32 f_min_frame_len;
++		u32 f_max_frame_len;
++	} mmask;
++	u64 ip6_udp_opt:1;
++	u64 lenerr_en:1;
++	u64 maxerr_en:1;
++	u64 minerr_en:1;
++	u64 fcs_chk:1;
++	u64 fcs_strip:1;
++	u64 len_lf:1;
++	u64 len_le:1;
++	u64 len_ld:1;
++	u64 len_lc:1;
++	u64 csum_lf:1;
++	u64 csum_le:1;
++	u64 csum_ld:1;
++	u64 csum_lc:1;
++	u64 min_frame_len;
++	u64 max_frame_len;
++} mbox_pki_errcheck_cfg_t;
++
++/* CACHE MODE*/
++enum {
++	MBOX_PKI_OPC_MODE_STT = 0LL,
++	MBOX_PKI_OPC_MODE_STF = 1LL,
++	MBOX_PKI_OPC_MODE_STF1_STT = 2LL,
++	MBOX_PKI_OPC_MODE_STF2_STT = 3LL
++};
++
++/**
++ * Tag type definitions
++ */
++/* SSO TAG TYPES*/
++enum {
++	/* Tag ordering is maintained */
++	MBOX_SSO_TAG_TYPE_ORDERED = 0L,
++	/*Tag ordering is maintained, and at most one PP has the tag */
++	MBOX_SSO_TAG_TYPE_ATOMIC = 1L,
++	MBOX_SSO_TAG_TYPE_UNTAGGED = 2L,
++	/* A tag switch to NULL, and there is no space reserved in POW */
++	MBOX_SSO_TAG_TYPE_EMPTY = 3L
++};
++
++/* PKI QPG QOS*/
++enum {
++	MBOX_PKI_QPG_QOS_NONE = 0,
++	MBOX_PKI_QPG_QOS_VLAN,
++	MBOX_PKI_QPG_QOS_MPLS,
++	MBOX_PKI_QPG_QOS_DSA_SRC,
++	MBOX_PKI_QPG_QOS_DIFFSERV,
++	MBOX_PKI_QPG_QOS_HIGIG,
++};
++
++struct mbox_pki_qos_entry {
++	u16 port_add;
++	u16 ggrp_ok;
++	u16 ggrp_bad;
++	u16 gaura;
++};
++
++/* hardcoded TODO */
++#define MBOX_PKI_MAX_QOS_ENTRY 64
++
++/* pki flow/style enable qos */
++typedef struct mbox_pki_port_create_qos {
++	u8 qpg_qos;
++	/* number of qos entries to create */
++	u8 num_entry;
++	/* All the queues have same tag type */
++	u8 tag_type;
++	/* All the queues have same drop policy */
++	u8 drop_policy;
++	struct mbox_pki_qos_entry qos_entry[MBOX_PKI_MAX_QOS_ENTRY];
++} mbox_pki_qos_cfg_t;
++
++/* pki flow/style enable qos */
++typedef struct mbox_pki_port_modify_qos_entry {
++	u16 index;
++	struct {
++		/* modify mask 1=modify 0=don't modify*/
++		u8 f_port_add:1;
++		u8 f_grp_ok:1;
++		u8 f_grp_bad:1;
++		u8 f_gaura:1;
++	} mmask;
++	struct mbox_pki_qos_entry qos_entry;
++} mbox_pki_mod_qos_t;
++
++/* pki flow/style enable rss
++ * If this message is received before create_qos, store the number of queues in
++ * the database and when enable_qos received, program it same for all the
++ * entries in first release.
++ */
++typedef struct mbox_pki_port_enable_rss {
++	/* 1=enable 0=disable*/
++	u8 en_dis;
++	u8 num_queues;
++} mbox_pki_rss_cfg_t;
++
++#endif
+-- 
+2.14.1
+

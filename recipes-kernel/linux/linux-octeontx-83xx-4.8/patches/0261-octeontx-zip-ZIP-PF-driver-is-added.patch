@@ -1,0 +1,1074 @@
+From 9f1237e719081ffa39c3dcf1d81ce38a5f3623c8 Mon Sep 17 00:00:00 2001
+From: Ashish Gupta <Ashish.Gupta@cavium.com>
+Date: Tue, 5 Dec 2017 12:07:30 +0530
+Subject: [PATCH 261/375] octeontx-zip: ZIP PF driver is added.
+
+The ZIP PF driver is included in a collection of modules required by the
+octeontx driver.
+
+Signed-off-by: Ashish Gupta <Ashish.Gupta@cavium.com>
+Signed-off-by: snilla <snilla@caviumnetworks.com>
+Signed-off-by: mchalla <mchalla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/Kconfig                |  10 +
+ drivers/net/ethernet/cavium/octeontx-83xx/Makefile |   2 +
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  |  62 +-
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  |   3 +-
+ drivers/net/ethernet/cavium/octeontx-83xx/zip.h    | 170 ++++++
+ .../net/ethernet/cavium/octeontx-83xx/zippf_main.c | 625 +++++++++++++++++++++
+ 6 files changed, 868 insertions(+), 4 deletions(-)
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/zip.h
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/zippf_main.c
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index 5262aa4ddad4..9daebd64d073 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -154,11 +154,21 @@ config OCTEONTX_DPI
+ 	  It transfers data between onchip IO bus and SLI.
+ 	  SLI interfaces PEM(PCIe) blocks.
+ 
++config OCTEONTX_ZIP_PF
++	tristate "OcteonTX ZIP physical function driver(ZIP_PF)"
++	depends on 64BIT
++	default y
++	help
++	  Select this option to enable ZIP Physical function.
++	  ZIP provides hardware compression/decompression support.
++
++
+ config OCTEONTX
+ 	tristate "OcteonTX coprocessor maintanier"
+ 	depends on THUNDER_NIC_BGX && OCTEONTX_FPA_PF && OCTEONTX_SSO_PF
+ 	depends on OCTEONTX_PKO_PF
+ 	depends on OCTEONTX_DPI
++	depends on OCTEONTX_ZIP_PF
+ 	default y
+ 	help
+ 	  Select this option to enable Octeon coprocessor management.
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+index 761c3b4a53e3..46162caeb206 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+@@ -12,6 +12,7 @@ obj-$(CONFIG_OCTEONTX_LBK) += lbk.o
+ obj-$(CONFIG_OCTEONTX_TIM_PF) += timpf.o
+ obj-$(CONFIG_OCTEONTX_PKI) += pki.o
+ obj-$(CONFIG_OCTEONTX_DPI) += dpi.o
++obj-$(CONFIG_OCTEONTX_ZIP_PF) += zippf.o
+ obj-$(CONFIG_OCTEONTX) += octeontx.o
+ 
+ fpapf-objs := fpapf_main.o
+@@ -25,3 +26,4 @@ lbk-objs := lbk_main.o
+ timpf-objs := timpf_main.o
+ pki-objs := pki_main.o pki_ucode.o pki_config.o
+ dpi-objs := dpipf_main.o
++zippf-objs := zippf_main.o
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index ec0ee32584ef..4be47f7a20b1 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -29,6 +29,7 @@
+ #include "tim.h"
+ #include "pki.h"
+ #include "dpi.h"
++#include "zip.h"
+ 
+ #define DRV_NAME "octeontx"
+ #define DRV_VERSION "1.0"
+@@ -58,6 +59,7 @@ static struct timpf_com_s *timpf;
+ static struct ssowpf_com_s *ssowpf;
+ static struct pki_com_s *pki;
+ static struct dpipf_com_s *dpipf;
++static struct zippf_com_s *zippf;
+ 
+ struct delayed_work dwork;
+ struct delayed_work dwork_reset;
+@@ -82,6 +84,7 @@ struct octtx_domain {
+ 	int ssow_vf_count;
+ 	int tim_vf_count;
+ 	int dpi_vf_count;
++	int zip_vf_count;
+ 
+ 	u64 aura_set;
+ 	u64 grp_mask;
+@@ -107,6 +110,7 @@ struct octtx_domain {
+ 	bool pko_domain_created;
+ 	bool tim_domain_created;
+ 	bool dpi_domain_created;
++	bool zip_domain_created;
+ };
+ 
+ static int gpio_in_use;
+@@ -125,7 +129,7 @@ MODULE_VERSION(DRV_VERSION);
+ static int octeontx_create_domain(const char *name, int type, int sso_count,
+ 				  int fpa_count, int ssow_count, int pko_count,
+ 				  int pki_count, int tim_count, int bgx_count,
+-				  int lbk_count, int dpi_count,
++				  int lbk_count, int dpi_count, int zip_count,
+ 				  const long int *bgx_port,
+ 				  const long int *lbk_port);
+ 
+@@ -170,6 +174,7 @@ static ssize_t octtx_create_domain_store(struct device *dev,
+ 	long int bgx_count = 0;
+ 	long int lbk_count = 0;
+ 	long int dpi_count = 0;
++	long int zip_count = 0;
+ 	long int pki_count = 0;
+ 	long int lbk_port[OCTTX_MAX_LBK_PORTS];
+ 	long int bgx_port[OCTTX_MAX_BGX_PORTS];
+@@ -255,6 +260,12 @@ static ssize_t octtx_create_domain_store(struct device *dev,
+ 				goto error;
+ 			if (kstrtol(start, 10, &dpi_count))
+ 				goto error;
++		} else if (!strncmp(start, "zip", sizeof("zip") - 1)) {
++			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
++			if (kstrtol(start, 10, &zip_count))
++				goto error;
+ 		} else {
+ 			goto error;
+ 		}
+@@ -263,7 +274,7 @@ static ssize_t octtx_create_domain_store(struct device *dev,
+ 	ret = octeontx_create_domain(name, type, sso_count, fpa_count,
+ 				     ssow_count, pko_count, pki_count,
+ 				     tim_count, bgx_count, lbk_count,
+-				     dpi_count,
++				     dpi_count, zip_count,
+ 				     (const long int *)bgx_port,
+ 				     (const long int *)lbk_port);
+ 	if (ret) {
+@@ -410,6 +421,10 @@ static int octtx_master_receive_message(struct mbox_hdr *hdr,
+ 		dpipf->receive_message(0, domain->domain_id, hdr,
+ 				       req, resp, add_data);
+ 		break;
++	case ZIP_COPROC:
++		zippf->receive_message(0, domain->domain_id, hdr,
++				req, resp, add_data);
++		break;
+ 	case NO_COPROC:
+ 		rm_receive_message(domain, hdr, resp, add_data);
+ 		break;
+@@ -558,6 +573,15 @@ static void do_destroy_domain(struct octtx_domain *domain)
+ 		}
+ 	}
+ 
++	if (domain->zip_domain_created) {
++		ret = zippf->destroy_domain(node, domain_id, domain->kobj);
++		if (ret) {
++			dev_err(octtx_device,
++				"Failed to remove zip of domain %d on node %d.\n",
++				domain->domain_id, node);
++		}
++	}
++
+ 	if (domain->sysfs_domain_in_use_created)
+ 		sysfs_remove_file(domain->kobj,
+ 				  &domain->sysfs_domain_in_use.attr);
+@@ -630,7 +654,7 @@ static ssize_t octtx_netport_stats_show(struct kobject *kobj,
+ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 			   int fpa_count, int ssow_count, int pko_count,
+ 			   int pki_count, int tim_count, int bgx_count,
+-			   int lbk_count, int dpi_count,
++			   int lbk_count, int dpi_count, int zip_count,
+ 			   const long int *bgx_port,
+ 			   const long int *lbk_port)
+ {
+@@ -908,6 +932,18 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 	}
+ 	domain->dpi_domain_created = true;
+ 
++	domain->zip_vf_count = zip_count;
++	if (domain->zip_vf_count) {
++		ret = zippf->create_domain(node, domain_id,
++			domain->zip_vf_count, &octtx_master_com, domain,
++			domain->kobj);
++		if (ret) {
++			dev_err(octtx_device, "Failed to create ZIP domain\n");
++			goto error;
++		}
++		domain->zip_domain_created = true;
++	}
++
+ 	domain->sysfs_domain_id.show = octtx_domain_id_show;
+ 	domain->sysfs_domain_id.attr.name = "domain_id";
+ 	domain->sysfs_domain_id.attr.mode = 0444;
+@@ -1034,6 +1070,15 @@ static int octeontx_reset_domain(void *master_data)
+ 		}
+ 	}
+ 
++	if (domain->zip_domain_created) {
++		ret = zippf->reset_domain(node, domain->domain_id);
++		if (ret) {
++			dev_err(octtx_device,
++				"Failed to reset ZIP of domain %d on node %d.\n",
++				domain->domain_id, node);
++		}
++	}
++
+ 	/* Reset mailbox */
+ 	ret = ssowpf->get_ram_mbox_addr(node, domain->domain_id,
+ 					&ssow_ram_mbox_addr);
+@@ -1235,6 +1280,7 @@ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ void cleanup_el3_irqs(struct task_struct *task)
+ {
+ 	int i;
++
+ 	for (i = 0; i < MAX_GPIO; i++) {
+ 		if (gpio_installed[i] &&
+ 		    gpio_installed_tasks[i] &&
+@@ -1330,6 +1376,12 @@ static int __init octeontx_init_module(void)
+ 		goto dpipf_err;
+ 	}
+ 
++	zippf = try_then_request_module(symbol_get(zippf_com), "zippf");
++	if (!zippf) {
++		ret = -ENODEV;
++		goto zippf_err;
++	}
++
+ 	timpf = try_then_request_module(symbol_get(timpf_com), "timpf");
+ 	if (!timpf) {
+ 		ret = -ENODEV;
+@@ -1418,6 +1470,9 @@ wq_err:
+ 	symbol_put(timpf_com);
+ 
+ timpf_err:
++	symbol_put(zippf_com);
++
++zippf_err:
+ 	symbol_put(dpipf_com);
+ 
+ dpipf_err:
+@@ -1463,6 +1518,7 @@ static void __exit octeontx_cleanup_module(void)
+ 	symbol_put(fpapf_com);
+ 	symbol_put(pkopf_com);
+ 	symbol_put(timpf_com);
++	symbol_put(zippf_com);
+ 	symbol_put(lbk_com);
+ 	symbol_put(thunder_bgx_com);
+ }
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index 19b3cde906f9..b79ee9985d27 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -19,7 +19,8 @@ enum coproc_t {
+ 	BGX_COPROC = 6,
+ 	LBK_COPROC = 7,
+ 	TIM_COPROC = 8,
+-	DPI_COPROC = 9
++	DPI_COPROC = 9,
++	ZIP_COPROC = 10
+ };
+ 
+ /*req messages*/
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/zip.h b/drivers/net/ethernet/cavium/octeontx-83xx/zip.h
+new file mode 100644
+index 000000000000..7fe1b8182d3d
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/zip.h
+@@ -0,0 +1,170 @@
++/*
++ * Copyright (C) 2017 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++#ifndef ZIP_H
++#define ZIP_H
++
++#include <linux/pci.h>
++#include "octeontx.h"
++
++/* PCI DEV IDs */
++#define PCI_DEVICE_ID_OCTEONTX_ZIP_PF	0xA01A
++#define PCI_DEVICE_ID_OCTEONTX_ZIP_VF	0xA037
++
++#define ZIP_VF_CFG_SIZE			0x100000
++#define ZIP_VF_OFFSET(__x)		(0x20000000 |  \
++					(ZIP_VF_CFG_SIZE * (__x)))
++
++#define ZIP_MAX_VF			8
++
++#define PCI_ZIP_PF_CFG_BAR		0
++#define PCI_ZIP_PF_MSIX_BAR		4
++
++#define PCI_ZIP_VF_CFG_BAR		0
++#define PCI_ZIP_VF_MSIX_BAR		4
++#define ZIP_VF_MSIX_COUNT		2
++
++/* ZIP PF register offsets */
++#define ZIP_PF_CMD_CTL			(0x0)
++#define ZIP_PF_QUEX_GMCTL(x)		(0x800  | ((x) << 20))
++#define ZIP_PF_QUEX_SBUF_CTL(x)		(0x1200 | ((x) << 3))
++#define ZIP_PF_QUEX_MAP(x)		(0x1400 | ((x) << 3))
++#define ZIP_PF_FIFE_INT			0x78
++#define ZIP_PF_FIFE_INT_W1S		0x80
++#define ZIP_PF_FIFE_ENA_W1S		0x88
++#define ZIP_PF_FIFE_ENA_W1C		0x90
++#define ZIP_PF_ECCE_INT			0x580
++#define ZIP_PF_ECCE_INT_W1S		0x588
++#define ZIP_PF_ECCE_ENA_W1S		0x590
++#define ZIP_PF_ECCE_ENA_W1C		0x998
++#define ZIP_PF_MBOX_INT			0x900
++#define ZIP_PF_MBOX_INT_W1S		0x920
++#define ZIP_PF_MBOX_ENA_W1C		0x940
++#define ZIP_PF_MBOX_ENA_W1S		0x960
++#define ZIP_PF_VFX_MBOXX(x, y)		(0x2000 | ((x) << 4) | ((y) << 3))
++#define ZIP_VF_PF_MBOXX(x)		(0x400 | ((x) << 3))
++#define ZIP_PF_MSIX_COUNT		3
++#define ZIP_SRIOV_ENABLED		1
++#define ZIP_PF_SRIOV_ENABLED		BIT(0)
++
++/* ZIP Mailbox message commands */
++#define ZIP_MBOX0_INDEX			0
++#define ZIP_MBOX1_INDEX			1
++
++#define ZIP_MBOX_SET_CMD_BUF_SIZE	0x1
++
++/***************** Structures *****************/
++struct zippf_vf {
++	struct octeontx_pf_vf	domain;
++};
++
++struct zippf {
++	struct pci_dev		*pdev;
++	void __iomem		*reg_base;
++	int			id;
++	struct msix_entry	*msix_entries;
++	struct list_head	list;
++
++	int			total_vfs;
++	int			vfs_in_use;
++	u32			flags;
++
++	struct zippf_vf		vf[ZIP_MAX_VF];
++};
++
++struct zippf_com_s {
++	int (*create_domain)(u32 id, u16 domain_id, u32 num_vfs,
++			     void *master, void *master_data,
++			     struct kobject *kobj);
++	int (*destroy_domain)(u32 id, u16 domain_id, struct kobject *kobj);
++	int (*reset_domain)(u32 id, u16 domain_id);
++	int (*receive_message)(u32 id, u16 domain_id, struct mbox_hdr *hdr,
++			       union mbox_data *req, union mbox_data *resp,
++			       void *mdata);
++	int (*get_vf_count)(u32 id);
++};
++
++extern struct zippf_com_s zippf_com;
++
++/**
++ * Register (NCB) zip_que#_map
++ *
++ * ZIP Queue Mapping Registers
++ * These registers control how each instruction queue maps to ZIP cores.
++ */
++union zip_quex_map {
++	u64 u;
++	struct zip_quex_map_s {
++#if defined(__BIG_ENDIAN_BITFIELD) /* Word 0 - Big Endian */
++		u64 reserved_6_63         : 58;
++		u64 zce                   : 6;
++#else /* Word 0 - Little Endian */
++		u64 zce                   : 6;
++		u64 reserved_6_63         : 58;
++#endif /* Word 0 - End */
++	} s;
++	/* struct zip_quex_map_s cn83xx; */
++};
++
++/**
++ * Register (NCB) zip_que#_sbuf_ctl
++ *
++ * ZIP Queue Buffer Parameter Registers
++ * These registers set the buffer parameters for the instruction queues.
++ * When quiescent (i.e. outstanding doorbell count is 0), it is safe to
++ * rewrite this register to effectively reset the command buffer state
++ * machine. These registers must be programmed before software programs
++ * the corresponding ZIP_QUE(0..7)_SBUF_ADDR.
++ */
++union zip_quex_sbuf_ctl {
++	u64 u;
++	struct zip_quex_sbuf_ctl_s {
++#if defined(__BIG_ENDIAN_BITFIELD) /* Word 0 - Big Endian */
++		u64 reserved_45_63        : 19;
++		u64 size                  : 13;
++		u64 inst_be               : 1;
++		u64 inst_free             : 1;
++		u64 reserved_24_29        : 6;
++		u64 stream_id             : 8;
++		u64 reserved_12_15        : 4;
++		u64 aura                  : 12;
++#else /* Word 0 - Little Endian */
++		u64 aura                  : 12;
++		u64 reserved_12_15        : 4;
++		u64 stream_id             : 8;
++		u64 reserved_24_29        : 6;
++		u64 inst_free             : 1;
++		u64 inst_be               : 1;
++		u64 size                  : 13;
++		u64 reserved_45_63        : 19;
++#endif /* Word 0 - End */
++	} s;
++	/* struct zip_quex_sbuf_ctl_s cn83xx; */
++};
++
++/**
++ * Register (NCB) zip_cmd_ctl
++ *
++ * ZIP Clock/Reset Control Register
++ * This register controls clock and reset.
++ */
++union zip_cmd_ctl {
++	u64 u;
++	struct zip_cmd_ctl_s {
++#if defined(__BIG_ENDIAN_BITFIELD) /* Word 0 - Big Endian */
++		u64 reserved_2_63         : 62;
++		u64 forceclk              : 1;
++		u64 reset                 : 1;
++#else /* Word 0 - Little Endian */
++		u64 reset                 : 1;
++		u64 forceclk              : 1;
++		u64 reserved_2_63         : 62;
++#endif /* Word 0 - End */
++	} s;
++};
++
++#endif
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/zippf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/zippf_main.c
+new file mode 100644
+index 000000000000..ecd3efaf02e7
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/zippf_main.c
+@@ -0,0 +1,625 @@
++/*
++ * Copyright (C) 2017 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/of.h>
++
++#include "zip.h"
++
++#define DRV_NAME "octeontx-zip"
++#define DRV_VERSION "1.0"
++
++static atomic_t zip_count = ATOMIC_INIT(0);
++static DEFINE_MUTEX(octeontx_zip_devices_lock);
++static LIST_HEAD(octeontx_zip_devices);
++static DEFINE_MUTEX(pf_mbox_lock);
++
++/* ZIP register write API */
++static void zip_reg_write(struct zippf *zip, u64 offset, u64 val)
++{
++	writeq_relaxed(val, zip->reg_base + offset);
++}
++
++/* ZIP register read API */
++static u64 zip_reg_read(struct zippf *zip, u64 offset)
++{
++	return readq_relaxed(zip->reg_base + offset);
++}
++
++static void identify(struct zippf_vf *vf, u16 domain_id, u16 subdomain_id)
++{
++	/* sub_domainid | domainid */
++	u64 reg = ((subdomain_id << 16) | domain_id);
++
++	writeq_relaxed(reg, vf->domain.reg_base + ZIP_VF_PF_MBOXX(0));
++}
++
++static int zip_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
++{
++	struct zippf *zip = NULL;
++	struct zippf *curr;
++	u64 reg;
++	int i, vf_idx = 0;
++	struct pci_dev *virtfn;
++
++	mutex_lock(&octeontx_zip_devices_lock);
++	list_for_each_entry(curr, &octeontx_zip_devices, list) {
++		if (curr->id == id) {
++			zip = curr;
++			break;
++		}
++	}
++
++	if (!zip) {
++		mutex_unlock(&octeontx_zip_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < zip->total_vfs; i++) {
++		if (zip->vf[i].domain.in_use &&
++		    zip->vf[i].domain.domain_id == domain_id) {
++			zip->vf[i].domain.in_use = false;
++			identify(&zip->vf[i], 0x0, 0x0);
++			reg = zip_reg_read(zip, ZIP_PF_QUEX_GMCTL(i));
++			reg &= ~0xFFFFull; /*GMID*/
++			zip_reg_write(zip, ZIP_PF_QUEX_GMCTL(i), reg);
++
++			if (zip->vf[i].domain.reg_base)
++				iounmap(zip->vf[i].domain.reg_base);
++
++			virtfn = pci_get_domain_bus_and_slot(
++					pci_domain_nr(zip->pdev->bus),
++					pci_iov_virtfn_bus(zip->pdev, i),
++					pci_iov_virtfn_devfn(zip->pdev, i));
++
++			if (virtfn && kobj)
++				sysfs_remove_link(kobj, virtfn->dev.kobj.name);
++
++			dev_info(&zip->pdev->dev,
++				 "Free vf[%d] from domain:%d subdomain_id:%d\n",
++				 i, zip->vf[i].domain.domain_id, vf_idx);
++			vf_idx++;
++		}
++	}
++
++	zip->vfs_in_use -= vf_idx;
++	mutex_unlock(&octeontx_zip_devices_lock);
++	return 0;
++}
++
++static int zip_pf_create_domain(u32 id, u16 domain_id, u32 num_vfs,
++				void *master, void *master_data,
++				struct kobject *kobj)
++{
++	struct zippf *zip = NULL;
++	struct zippf *curr;
++	resource_size_t vf_start;
++	u64 reg;
++	int i, vf_idx = 0, ret = 0;
++	struct pci_dev *virtfn;
++
++	union zip_quex_sbuf_ctl		quex_sbuf_ctl;
++	union zip_quex_map		quex_map;
++
++	if (!kobj)
++		return -EINVAL;
++
++	mutex_lock(&octeontx_zip_devices_lock);
++	list_for_each_entry(curr, &octeontx_zip_devices, list) {
++		if (curr->id == id) {
++			zip = curr;
++			break;
++		}
++	}
++
++	if (!zip) {
++		ret = -ENODEV;
++		goto err_unlock;
++	}
++
++	for (i = 0; i < zip->total_vfs; i++) {
++		if (zip->vf[i].domain.in_use) {
++			continue;
++		} else {
++			virtfn = pci_get_domain_bus_and_slot(
++					pci_domain_nr(zip->pdev->bus),
++					pci_iov_virtfn_bus(zip->pdev, i),
++					pci_iov_virtfn_devfn(zip->pdev, i));
++			if (!virtfn)
++				break;
++
++			ret = sysfs_create_link(kobj, &virtfn->dev.kobj,
++						virtfn->dev.kobj.name);
++			if (ret < 0)
++				goto err_unlock;
++
++			zip->vf[i].domain.domain_id = domain_id;
++			zip->vf[i].domain.subdomain_id = vf_idx;
++			zip->vf[i].domain.gmid = get_gmid(domain_id);
++
++			zip->vf[i].domain.in_use = true;
++			zip->vf[i].domain.master = master;
++			zip->vf[i].domain.master_data = master_data;
++
++			vf_start = pci_resource_start(zip->pdev,
++						      PCI_ZIP_PF_CFG_BAR);
++			vf_start += ZIP_VF_OFFSET(i);
++
++			zip->vf[i].domain.reg_base = ioremap(vf_start,
++							     ZIP_VF_CFG_SIZE);
++			if (!zip->vf[i].domain.reg_base)
++				break;
++
++			identify(&zip->vf[i], domain_id, vf_idx);
++
++			/* Program SBUF_CTL of all queues */
++			quex_sbuf_ctl.u = 0ull;
++			quex_sbuf_ctl.s.inst_be = 0;
++			/* for VFs support on Guest */
++			quex_sbuf_ctl.s.stream_id = (i + 1);
++			quex_sbuf_ctl.s.inst_free = 0;
++			zip_reg_write(zip, ZIP_PF_QUEX_SBUF_CTL(i),
++				      quex_sbuf_ctl.u);
++			dev_info(&zip->pdev->dev,
++				 "QUEX_SBUF_CTL[%d]: 0x%016llx\n", i,
++				 zip_reg_read(zip, ZIP_PF_QUEX_SBUF_CTL(i)));
++
++			/* Queue-to-ZIP core mapping
++			 * If a queue is not mapped to a particular core,
++			 * it is equivalent to the ZIP core being disabled.
++			 */
++			quex_map.u = 0ull;
++			/* Map queue to all zip engines */
++			quex_map.s.zce = 0x3F;
++			zip_reg_write(zip, ZIP_PF_QUEX_MAP(i), quex_map.u);
++			dev_info(&zip->pdev->dev, "QUEX_MAP[%d]: 0x%016llx\n",
++				 i, zip_reg_read(zip, ZIP_PF_QUEX_MAP(i)));
++
++			/* Program GMID */
++			reg = zip->vf[i].domain.gmid;
++			zip_reg_write(zip, ZIP_PF_QUEX_GMCTL(i), reg);
++
++			dev_dbg(&zip->pdev->dev, "DOMAIN Details of ZIP\n");
++
++			dev_dbg(&zip->pdev->dev,
++				"domain creation @index: %d for domain: %d",
++				i, zip->vf[i].domain.domain_id);
++			dev_dbg(&zip->pdev->dev,
++				"sub domain: %d, gmid: %d, vf_idx: %d\n",
++				zip->vf[i].domain.subdomain_id,
++				zip->vf[i].domain.gmid, vf_idx);
++
++			vf_idx++;
++			if (vf_idx == num_vfs) {
++				zip->vfs_in_use += num_vfs;
++				break;
++			}
++		}
++	}
++
++	mutex_unlock(&octeontx_zip_devices_lock);
++	if (vf_idx != num_vfs) {
++		ret = -ENODEV;
++		zip_pf_destroy_domain(id, domain_id, kobj);
++	}
++	return ret;
++
++err_unlock:
++	mutex_unlock(&octeontx_zip_devices_lock);
++	return ret;
++}
++
++static void zip_vfx_reset(struct zippf *zip, int vf)
++{
++	/* clear domain resources.*/
++	zip->vf[vf].domain.in_use = 0;
++	zip->vf[vf].domain.master = NULL;
++	zip->vf[vf].domain.master_data = NULL;
++}
++
++static int zip_pf_reset_domain(u32 id, u16 domain_id)
++{
++	struct zippf *zip = NULL;
++	struct zippf *curr;
++	int i;
++
++	mutex_lock(&octeontx_zip_devices_lock);
++	list_for_each_entry(curr, &octeontx_zip_devices, list) {
++		if (curr->id == id) {
++			zip = curr;
++			break;
++		}
++	}
++
++	if (!zip) {
++		mutex_unlock(&octeontx_zip_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < zip->total_vfs; i++) {
++		if (zip->vf[i].domain.in_use &&
++		    zip->vf[i].domain.domain_id == domain_id) {
++			zip_vfx_reset(zip, i);
++			identify(&zip->vf[i], domain_id,
++				 zip->vf[i].domain.subdomain_id);
++		}
++	}
++	mutex_unlock(&octeontx_zip_devices_lock);
++	return 0;
++}
++
++static int zip_pf_receive_message(u32 id, u16 domain_id,
++				  struct mbox_hdr *hdr, union mbox_data *req,
++				  union mbox_data *resp, void *mdata)
++{
++	return 0;
++}
++
++static int zip_pf_get_vf_count(u32 id)
++{
++	struct zippf *zip = NULL;
++	struct zippf *curr;
++	int ret = 0;
++
++	mutex_lock(&octeontx_zip_devices_lock);
++	list_for_each_entry(curr, &octeontx_zip_devices, list) {
++		if (curr->id == id) {
++			zip = curr;
++			break;
++		}
++	}
++
++	mutex_unlock(&octeontx_zip_devices_lock);
++	if (zip)
++		ret = zip->total_vfs;
++
++	return ret;
++}
++
++struct zippf_com_s zippf_com = {
++	.create_domain = zip_pf_create_domain,
++	.destroy_domain = zip_pf_destroy_domain,
++	.reset_domain = zip_pf_reset_domain,
++	.receive_message = zip_pf_receive_message,
++	.get_vf_count = zip_pf_get_vf_count,
++};
++EXPORT_SYMBOL(zippf_com);
++
++static int zip_sriov_conf(struct pci_dev *pdev, int numvfs)
++{
++	struct zippf *zip = pci_get_drvdata(pdev);
++	int ret = -EBUSY;
++	int disable = 0;
++
++	if (zip->vfs_in_use != 0)
++		return ret;
++
++	ret = 0;
++	if (zip->flags & ZIP_PF_SRIOV_ENABLED)
++		disable = 1;
++
++	if (disable) {
++		pci_disable_sriov(pdev);
++		zip->flags &= ~ZIP_PF_SRIOV_ENABLED;
++		zip->total_vfs = 0;
++	}
++
++	if (numvfs > 0) {
++		ret = pci_enable_sriov(pdev, numvfs);
++		if (ret == 0) {
++			zip->flags |= ZIP_PF_SRIOV_ENABLED;
++			zip->total_vfs = numvfs;
++			ret = numvfs;
++		}
++	}
++	dev_notice(&zip->pdev->dev, "ZIP VF's enabled: %d\n", ret);
++
++	return ret;
++}
++
++static void zip_init(struct zippf *zip)
++{
++	/* Initialize zip hardware to defaults */
++	union zip_cmd_ctl  cmd_ctl = {0};
++	union zip_quex_map quex_map;
++	int i;
++
++	/* Enable the ZIP Engine(Core) Clock */
++	cmd_ctl.u = zip_reg_read(zip, ZIP_PF_CMD_CTL);
++	cmd_ctl.s.forceclk = 1;
++	zip_reg_write(zip, ZIP_PF_CMD_CTL, cmd_ctl.u & 0xFF);
++
++	/* Clear queue mapping bits */
++	quex_map.u = 0ull;
++
++	/* Initialize domain resources.*/
++	for (i = 0; i < ZIP_MAX_VF; i++) {
++		zip->vf[i].domain.in_use = 0;
++		zip->vf[i].domain.master = NULL;
++		zip->vf[i].domain.master_data = NULL;
++		/* Unmap queue from all zip engines. */
++		zip_reg_write(zip, ZIP_PF_QUEX_MAP(i), quex_map.u);
++	}
++}
++
++static irqreturn_t zip_pf_ecce_intr_handler (int irq, void *zip_irq)
++{
++	struct zippf *zip = (struct zippf *)zip_irq;
++	u64 zip_reg;
++
++	zip_reg = zip_reg_read(zip, ZIP_PF_ECCE_INT);
++
++	/* clear all interrupts*/
++	zip_reg = ~0ull;
++	zip_reg_write(zip, ZIP_PF_ECCE_INT, zip_reg);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t zip_pf_fife_intr_handler (int irq, void *zip_irq)
++{
++	struct zippf *zip = (struct zippf *)zip_irq;
++	u64 zip_reg;
++
++	zip_reg = zip_reg_read(zip, ZIP_PF_FIFE_INT);
++
++	/* clear all interrupts*/
++	zip_reg = ~0ull;
++	zip_reg_write(zip, ZIP_PF_FIFE_INT, zip_reg);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t zip_pf_mbox_intr_handler (int irq, void *zip_irq)
++{
++	struct zippf *zip = (struct zippf *)zip_irq;
++	u64 reg_val, cmd = 0ull, data = 0ull;
++	union zip_quex_sbuf_ctl  quex_sbuf_ctl = {0};
++	int i;
++
++	reg_val = zip_reg_read(zip, ZIP_PF_MBOX_INT);
++	/* Determine which VF used Mbox service */
++	for (i = 0; i < zip->vfs_in_use; i++) {
++		if (reg_val & (1ull << i)) {
++			/* Read Mbox registers */
++			wmb();
++			cmd = zip_reg_read(zip,
++					   ZIP_PF_VFX_MBOXX(i,
++							    ZIP_MBOX0_INDEX));
++			data = zip_reg_read(zip,
++					    ZIP_PF_VFX_MBOXX(i,
++							     ZIP_MBOX1_INDEX));
++			if (cmd == ZIP_MBOX_SET_CMD_BUF_SIZE) {
++				quex_sbuf_ctl.u = zip_reg_read
++					(zip, ZIP_PF_QUEX_SBUF_CTL(i));
++				quex_sbuf_ctl.s.size = data;
++				zip_reg_write(zip, ZIP_PF_QUEX_SBUF_CTL(i),
++					      quex_sbuf_ctl.u);
++
++				zip_reg_write(zip,
++					      ZIP_PF_VFX_MBOXX(i,
++							       ZIP_MBOX0_INDEX),
++					      0ull);
++				zip_reg_write(zip,
++					      ZIP_PF_VFX_MBOXX(i,
++							       ZIP_MBOX1_INDEX),
++					      0ull);
++				/* Memory barrier */
++				wmb();
++			}
++		}
++	}
++	/* clear triggered interrupts*/
++	zip_reg_write(zip, ZIP_PF_MBOX_INT, reg_val);
++
++	return IRQ_HANDLED;
++}
++
++static void zip_irq_free(struct zippf *zip)
++{
++	int i;
++	u64 reg_val;
++
++	/* Clear all enables */
++	reg_val = ~0ull;
++	zip_reg_write(zip, ZIP_PF_ECCE_ENA_W1C, reg_val);
++	zip_reg_write(zip, ZIP_PF_FIFE_ENA_W1C, reg_val);
++	zip_reg_write(zip, ZIP_PF_MBOX_ENA_W1C, reg_val);
++
++	for (i = 0; i < ZIP_PF_MSIX_COUNT; i++)
++		if (zip->msix_entries[i].vector)
++			free_irq(zip->msix_entries[i].vector, zip);
++
++	pci_disable_msix(zip->pdev);
++}
++
++static int zip_irq_init(struct zippf *zip)
++{
++	int ret = 0;
++	u64 zip_reg;
++	int i;
++
++	/* clear all interrupts */
++	zip_reg = ~0ull;
++	zip_reg_write(zip, ZIP_PF_ECCE_INT, zip_reg);
++	zip_reg_write(zip, ZIP_PF_FIFE_INT, zip_reg);
++	zip_reg_write(zip, ZIP_PF_MBOX_INT, zip_reg);
++
++	/* clear all enables */
++	zip_reg = ~0ull;
++	zip_reg_write(zip, ZIP_PF_ECCE_ENA_W1C, zip_reg);
++	zip_reg_write(zip, ZIP_PF_FIFE_ENA_W1C, zip_reg);
++	zip_reg_write(zip, ZIP_PF_MBOX_ENA_W1C, zip_reg);
++
++	zip->msix_entries = devm_kzalloc(&zip->pdev->dev,
++			ZIP_PF_MSIX_COUNT *
++			sizeof(struct msix_entry), GFP_KERNEL);
++	if (!zip->msix_entries)
++		return -ENOMEM;
++	for (i = 0; i < ZIP_PF_MSIX_COUNT; i++)
++		zip->msix_entries[i].entry = i;
++
++	ret = pci_enable_msix(zip->pdev, zip->msix_entries, ZIP_PF_MSIX_COUNT);
++	if (ret) {
++		dev_err(&zip->pdev->dev, "Enabling msix failed(%d)\n", ret);
++		return ret;
++	}
++
++	/* register ECCE intr handler */
++	ret = request_irq(zip->msix_entries[0].vector,
++			  zip_pf_ecce_intr_handler, 0, "zippf ecce", zip);
++	if (ret)
++		goto free_irq;
++
++	/* register FIFE intr handler */
++	ret = request_irq(zip->msix_entries[1].vector,
++			  zip_pf_fife_intr_handler, 0, "zippf fife", zip);
++	if (ret)
++		goto free_irq;
++
++	/* register MBOX intr handler */
++	ret = request_irq(zip->msix_entries[2].vector, zip_pf_mbox_intr_handler,
++			  0, "zippf mbox", zip);
++	if (ret)
++		goto free_irq;
++
++	/*Enable all intr */
++	zip_reg = ~0ull;
++	zip_reg_write(zip, ZIP_PF_ECCE_ENA_W1S, zip_reg);
++	zip_reg_write(zip, ZIP_PF_FIFE_ENA_W1S, zip_reg);
++	zip_reg_write(zip, ZIP_PF_MBOX_ENA_W1S, zip_reg);
++
++	return 0;
++
++free_irq:
++	zip_irq_free(zip);
++
++	return ret;
++}
++
++static int zip_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
++{
++	struct device *dev = &pdev->dev;
++	struct zippf *zip;
++	int    err = -ENOMEM;
++
++	zip = devm_kzalloc(dev, sizeof(*zip), GFP_KERNEL);
++	if (!zip)
++		return -ENOMEM;
++
++	pci_set_drvdata(pdev, zip);
++
++	zip->pdev = pdev;
++
++	err = pcim_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		pci_set_drvdata(pdev, NULL);
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed 0x%x\n", err);
++		goto err_disable_device;
++	}
++
++	/* MAP zip configuration registers from bar 0 */
++	zip->reg_base = pcim_iomap(pdev, PCI_ZIP_PF_CFG_BAR, 0);
++	if (!zip->reg_base) {
++		dev_err(dev, "ZIP: Cannot map CSR memory space, aborting");
++		err = -ENOMEM;
++		goto err_release_regions;
++	}
++	/* Set ZIP ID */
++	zip->id = atomic_add_return(1, &zip_count);
++	zip->id -= 1; /* make zip_id 0 as domain ops invoked with zero */
++
++	zip_init(zip);
++
++	/* enable interrupts */
++	if (zip_irq_init(zip) < 0)
++		atomic_sub_return(1, &zip_count);
++
++	INIT_LIST_HEAD(&zip->list);
++	mutex_lock(&octeontx_zip_devices_lock);
++	list_add(&zip->list, &octeontx_zip_devices);
++	mutex_unlock(&octeontx_zip_devices_lock);
++
++	return 0;
++
++err_release_regions:
++	if (zip->reg_base)
++		iounmap((void *)zip->reg_base);
++	pci_release_regions(pdev);
++err_disable_device:
++	pci_disable_device(pdev);
++	pci_set_drvdata(pdev, NULL);
++	return err;
++}
++
++static void zip_remove(struct pci_dev *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct zippf *zip = pci_get_drvdata(pdev);
++	struct zippf *curr;
++
++	if (!zip)
++		return;
++
++	mutex_lock(&octeontx_zip_devices_lock);
++	list_for_each_entry(curr, &octeontx_zip_devices, list) {
++		if (curr == zip) {
++			list_del(&zip->list);
++			break;
++		}
++	}
++	mutex_unlock(&octeontx_zip_devices_lock);
++
++	zip_irq_free(zip);
++	zip_sriov_conf(pdev, 0);
++	pci_release_regions(pdev);
++	pci_disable_device(pdev);
++	pci_set_drvdata(pdev, NULL);
++	devm_kfree(dev, zip);
++}
++
++/* Supported devices */
++static const struct pci_device_id zip_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_OCTEONTX_ZIP_PF) },
++	{ 0, }  /* end of table */
++};
++
++static struct pci_driver zip_driver = {
++	.name = DRV_NAME,
++	.id_table = zip_id_table,
++	.probe = zip_probe,
++	.remove = zip_remove,
++	.sriov_configure = zip_sriov_conf,
++};
++
++MODULE_AUTHOR("Cavium Inc");
++MODULE_DESCRIPTION("Cavium OCTEONTX ZIP Physical Function Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, zip_id_table);
++
++static int __init zip_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++	return pci_register_driver(&zip_driver);
++}
++
++static void __exit zip_cleanup_module(void)
++{
++	pci_unregister_driver(&zip_driver);
++}
++
++module_init(zip_init_module);
++module_exit(zip_cleanup_module);
+-- 
+2.14.1
+

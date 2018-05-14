@@ -1,0 +1,39 @@
+From 6bf3e3c0843b972bb288bd3f34f17e1ef084ad20 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:59 +0100
+Subject: [PATCH 268/375] octeontx: move domain creation flags for TIM & DPI
+
+Move TIM and DPI domain creation flags to correct location.
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 9cb4d1ad49ea..512880361bbc 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -936,8 +936,8 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 			dev_err(octtx_device, "Failed to create TIM domain\n");
+ 			goto error;
+ 		}
++		domain->tim_domain_created = true;
+ 	}
+-	domain->tim_domain_created = true;
+ 
+ 	domain->cpt_vf_count = cpt_count;
+ 	if (domain->cpt_vf_count > 0) {
+@@ -960,8 +960,8 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 			dev_err(octtx_device, "Failed to create DPI domain\n");
+ 			goto error;
+ 		}
++		domain->dpi_domain_created = true;
+ 	}
+-	domain->dpi_domain_created = true;
+ 
+ 	domain->zip_vf_count = zip_count;
+ 	if (domain->zip_vf_count) {
+-- 
+2.14.1
+

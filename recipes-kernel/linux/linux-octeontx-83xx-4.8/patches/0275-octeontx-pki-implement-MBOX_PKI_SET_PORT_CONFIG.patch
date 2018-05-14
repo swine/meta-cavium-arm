@@ -1,0 +1,217 @@
+From a73ce711b07b31bb461ac233795e0ff323b356c3 Mon Sep 17 00:00:00 2001
+From: Angela Czubak <aczubak@caviumnetworks.com>
+Date: Fri, 16 Mar 2018 13:05:44 +0100
+Subject: [PATCH 275/375] octeontx-pki: implement MBOX_PKI_SET_PORT_CONFIG
+
+pki_set_port_config() is used to configure various port config,
+including enabling of packet instruction header support. Others
+are DSA, Fulcrum, HG & HG2, MPL enablement, setting FCS skip
+and parse mode.
+
+Signed-off-by: Angela Czubak <aczubak@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    |  25 +++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_config.c | 125 +++++++++++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_main.c   |   4 +
+ 3 files changed, 154 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+index 93b2ecb4f3ed..59d8490b7508 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -178,9 +178,32 @@
+ #define PKI_CONST2_STATS_MASK		0xffff
+ #define PKI_CONST2_STATS_SHIFT		48
+ 
++#define PKI_PKIND_SKIP_FCS_MASK		0xffULL
++#define PKI_PKIND_SKIP_FCS_SHIFT	8
++#define PKI_PKIND_SKIP_INST_MASK	0xffULL
++#define PKI_PKIND_SKIP_INST_SHIFT	0
++
++#define PKI_PKIND_STYLE_PM_MASK		0x7fULL
++#define PKI_PKIND_STYLE_PM_SHIFT	8
+ #define PKI_PKIND_STYLE_MASK		0xffULL
+ #define PKI_PKIND_STYLE_SHIFT		0
++
++#define PKI_PKIND_CFG_FCS_MASK		0x1
+ #define PKI_PKIND_CFG_FCS_SHIFT		7
++#define PKI_PKIND_CFG_MPLS_MASK		0x1
++#define PKI_PKIND_CFG_MPLS_SHIFT	6
++#define PKI_PKIND_CFG_INST_MASK		0x1
++#define PKI_PKIND_CFG_INST_SHIFT	5
++#define PKI_PKIND_CFG_FULC_MASK		0x1
++#define PKI_PKIND_CFG_FULC_SHIFT	3
++#define PKI_PKIND_CFG_DSA_MASK		0x1
++#define PKI_PKIND_CFG_DSA_SHIFT		2
++#define PKI_PKIND_CFG_HG2_MASK		0x1
++#define PKI_PKIND_CFG_HG2_SHIFT		1
++#define PKI_PKIND_CFG_HG_MASK		0x1
++#define PKI_PKIND_CFG_HG_SHIFT		0
++#define PKI_PKIND_CFG_FULC_DSA_HG_MASK	0xf
++#define PKI_PKIND_CFG_FULC_DSA_HG_SHIFT	0
+ 
+ #define PKI_STYLE_ALG_TT_MASK			0x3
+ #define PKI_STLYE_ALG_TT_SHIFT			30
+@@ -527,6 +550,8 @@ int pki_port_alloc_qpg(struct pkipf_vf *vf, u16 vf_id,
+ 		       struct mbox_pki_port_qpg_attr *qpg_attr);
+ int pki_port_free_qpg(struct pkipf_vf *vf, u16 vf_id,
+ 		      struct mbox_pki_port_qpg_attr *qpg_attr);
++int pki_set_port_config(struct pkipf_vf *vf, u16 vf_id,
++			mbox_pki_prt_cfg_t *port_cfg);
+ int pki_port_start(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
+ int pki_port_stop(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
+ int pki_port_close(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index d4a22cedcf71..e4dc5ae79491 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -423,6 +423,131 @@ int pki_port_create_qos(struct pkipf_vf *vf, u16 vf_id,
+ 	return MBOX_RET_SUCCESS;
+ }
+ 
++int pki_set_port_config(struct pkipf_vf *vf, u16 vf_id,
++			mbox_pki_prt_cfg_t *port_cfg)
++{
++	struct pki_port *port;
++	struct pki_t	*pki = vf->pki;
++	u64 cfg, skip, style;
++	bool cfg_change, skip_change, style_change;
++	int i = 0;
++	int ret = MBOX_RET_SUCCESS;
++
++	switch (port_cfg->port_type) {
++	case OCTTX_PORT_TYPE_NET:
++		port = &vf->bgx_port[vf_id];
++		break;
++	case OCTTX_PORT_TYPE_INT:
++		port = &vf->lbk_port[vf_id];
++		break;
++	default:
++		return MBOX_RET_INVALID;
++	}
++	if (port->state != PKI_PORT_STOP && port->state != PKI_PORT_OPEN)
++		return MBOX_RET_INVALID;
++
++	cfg = pki_reg_read(pki, PKI_CLX_PKINDX_CFG(i, port->pkind));
++	skip = pki_reg_read(pki, PKI_CLX_PKINDX_SKIP(i, port->pkind));
++	style = pki_reg_read(pki, PKI_CLX_PKINDX_STYLE(i, port->pkind));
++
++	cfg_change = false;
++	skip_change = false;
++	style_change = false;
++
++	if (port_cfg->mmask.parse_mode) {
++		switch (port_cfg->parse_mode) {
++		case 0x0:
++		case 0x1:
++		case 0x3:
++		case 0x7f:
++			break;
++		default:
++			return MBOX_RET_INVALID;
++		}
++		set_field(&style, PKI_PKIND_STYLE_PM_MASK,
++			  PKI_PKIND_STYLE_PM_SHIFT, port_cfg->parse_mode);
++		style_change = true;
++	}
++
++	if (port_cfg->mmask.fcs_skip) {
++		if (port_cfg->fcs_skip & 0x1)
++			return MBOX_RET_INVALID;
++		set_field(&skip, PKI_PKIND_SKIP_FCS_MASK,
++			  PKI_PKIND_SKIP_FCS_SHIFT, port_cfg->fcs_skip);
++		skip_change = true;
++	}
++	if (port_cfg->mmask.inst_skip) {
++		if (port_cfg->inst_skip & 0x1)
++			return MBOX_RET_INVALID;
++		set_field(&skip, PKI_PKIND_SKIP_INST_MASK,
++			  PKI_PKIND_SKIP_INST_SHIFT, port_cfg->inst_skip);
++		skip_change = true;
++	}
++
++	if (port_cfg->mmask.fcs_pres) {
++		set_field(&cfg, PKI_PKIND_CFG_FCS_MASK,
++			  PKI_PKIND_CFG_FCS_SHIFT, port_cfg->fcs_pres);
++		cfg_change = true;
++	}
++	if (port_cfg->mmask.fulc_parse) {
++		set_field(&cfg, PKI_PKIND_CFG_FULC_MASK,
++			  PKI_PKIND_CFG_FULC_SHIFT, port_cfg->fulc_parse);
++		cfg_change = true;
++	}
++	if (port_cfg->mmask.inst_hdr_parse) {
++		set_field(&cfg, PKI_PKIND_CFG_INST_MASK,
++			  PKI_PKIND_CFG_INST_SHIFT, port_cfg->inst_hdr_parse);
++		cfg_change = true;
++	}
++	if (port_cfg->mmask.mpls_parse) {
++		set_field(&cfg, PKI_PKIND_CFG_MPLS_MASK,
++			  PKI_PKIND_CFG_MPLS_SHIFT, port_cfg->mpls_parse);
++		cfg_change = true;
++	}
++	if (port_cfg->mmask.hg2_parse) {
++		set_field(&cfg, PKI_PKIND_CFG_HG2_MASK, PKI_PKIND_CFG_HG2_SHIFT,
++			  port_cfg->hg2_parse);
++		cfg_change = true;
++	}
++	if (port_cfg->mmask.hg_parse) {
++		set_field(&cfg, PKI_PKIND_CFG_HG_MASK, PKI_PKIND_CFG_HG_SHIFT,
++			  port_cfg->hg_parse);
++		cfg_change = true;
++	}
++	if (port_cfg->mmask.dsa_parse) {
++		set_field(&cfg, PKI_PKIND_CFG_DSA_MASK, PKI_PKIND_CFG_DSA_SHIFT,
++			  port_cfg->dsa_parse);
++		cfg_change = true;
++	}
++
++	if (cfg_change) {
++		switch ((cfg >> PKI_PKIND_CFG_FULC_DSA_HG_SHIFT) &
++			PKI_PKIND_CFG_FULC_DSA_HG_MASK) {
++		case 0:
++		case (PKI_PKIND_CFG_FULC_MASK << PKI_PKIND_CFG_FULC_SHIFT):
++		case (PKI_PKIND_CFG_DSA_MASK << PKI_PKIND_CFG_DSA_SHIFT):
++		case (PKI_PKIND_CFG_HG_MASK << PKI_PKIND_CFG_HG_SHIFT):
++		case (PKI_PKIND_CFG_HG_MASK << PKI_PKIND_CFG_HG2_SHIFT):
++			break;
++		default:
++			return MBOX_RET_INVALID;
++		}
++		for (i = 0; i < pki->max_cls; i++)
++			pki_reg_write(pki, PKI_CLX_PKINDX_CFG(i, port->pkind),
++				      cfg);
++	}
++	if (style_change)
++		for (i = 0; i < pki->max_cls; i++)
++			pki_reg_write(pki, PKI_CLX_PKINDX_STYLE(i, port->pkind),
++				      style);
++	if (skip_change)
++		for (i = 0; i < pki->max_cls; i++)
++			pki_reg_write(pki, PKI_CLX_PKINDX_SKIP(i, port->pkind),
++				      skip);
++
++	return ret;
++}
++
+ int pki_port_start(struct pkipf_vf *vf, u16 vf_id,
+ 		   mbox_pki_port_t *port_data)
+ {
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+index 664d5aad4e8f..ba5ed304ff09 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -576,6 +576,10 @@ static int pki_receive_message(u32 id, u16 domain_id,
+ 		hdr->res_code = pki_port_free_qpg(vf, hdr->vfid,
+ 						  mdata);
+ 		break;
++	case MBOX_PKI_SET_PORT_CONFIG:
++		hdr->res_code = pki_set_port_config(vf, hdr->vfid,
++						    mdata);
++		break;
+ 	case MBOX_PKI_PORT_START:
+ 		hdr->res_code = pki_port_start(vf, hdr->vfid, mdata);
+ 		break;
+-- 
+2.14.1
+

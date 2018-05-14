@@ -1,0 +1,43 @@
+From df5dfffc8130cb40a28259e7b7215e334262afac Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:58 +0100
+Subject: [PATCH 289/375] crypto: cpt - update dependencies in Kconfig
+
+Update dependencies for OCTEONTX and PKO modules in
+drivers/net/ethernet/cavium/Kconfig.
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/net/ethernet/cavium/Kconfig | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index 9daebd64d073..bf6deb08c1cb 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -117,7 +117,7 @@ config OCTEONTX_SSOW_PF
+ 
+ config OCTEONTX_PKO_PF
+ 	tristate "OcteonTX PKO physical function driver(PKO_PF)"
+-	depends on 64BIT
++	depends on 64BIT && OCTEONTX_FPA_PF && OCTEONTX_FPA_VF
+ 	default y
+ 	help
+ 	  Select this option to enable PKO Physical function.
+@@ -166,9 +166,10 @@ config OCTEONTX_ZIP_PF
+ config OCTEONTX
+ 	tristate "OcteonTX coprocessor maintanier"
+ 	depends on THUNDER_NIC_BGX && OCTEONTX_FPA_PF && OCTEONTX_SSO_PF
+-	depends on OCTEONTX_PKO_PF
+-	depends on OCTEONTX_DPI
+-	depends on OCTEONTX_ZIP_PF
++	depends on OCTEONTX_PKO_PF && OCTEONTX_SSOW_PF && OCTEONTX_PKI
++	depends on OCTEONTX_DPI && OCTEONTX_LBK && OCTEONTX_TIM_PF
++	depends on OCTEONTX_ZIP_PF && CRYPTO_DEV_CPT
++
+ 	default y
+ 	help
+ 	  Select this option to enable Octeon coprocessor management.
+-- 
+2.14.1
+

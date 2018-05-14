@@ -1,0 +1,36 @@
+From 7974445c050c1607cfcdd7f48ec88d864fa78d8d Mon Sep 17 00:00:00 2001
+From: Vinita Gupta <vinita.gupta@caviumnetworks.com>
+Date: Tue, 13 Jun 2017 16:46:06 -0700
+Subject: [PATCH 202/375] octeontx-pki: Enable/fix the pki packet drop on port
+ open
+
+Signed-off-by: Vinita Gupta <vinita.gupta@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index d3f24fc0c188..da0004d79a04 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -71,7 +71,9 @@ static void reset_port_reg(struct pki_t *pki, struct pki_port *port)
+ 			      cfg);
+ 		pki_reg_write(pki, PKI_CLX_PKINDX_LG_CUSTOM(i, port->pkind),
+ 			      cfg);
++		cfg = 0x1ull << PKI_STYLE_CFG_DROP_SHIFT;
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, style), cfg);
++		cfg = 0x0;
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_CFG2(i, style), cfg);
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_ALG(i, style), cfg);
+ 	}
+@@ -196,6 +198,7 @@ int pki_port_open(struct pkipf_vf *vf, u16 vf_id,
+ 		cfg |= (0x1ULL << PKI_STYLE_CFG_FCS_STRIP_SHIFT);
+ 	}
+ 	cfg |= (0x1ULL << PKI_STYLE_CFG_LENERR_EN_SHIFT);
++	cfg |= (0x1ull << PKI_STYLE_CFG_DROP_SHIFT);
+ 	for (i = 0; i < pki->max_cls; i++)
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, port->init_style),
+ 			      cfg);
+-- 
+2.14.1
+

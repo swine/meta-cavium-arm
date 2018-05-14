@@ -1,0 +1,31 @@
+From 842473bad4c1c12c20e28fa87014cd74aedf5294 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Fri, 13 Oct 2017 06:56:00 -0700
+Subject: [PATCH 248/375] octeontx-pko: Reduce number of FPA buffers used by
+ DQs
+
+New setting (4096 buffers) will give:
+Memory usage = 4096 * 4096 (buffer size) = 16,777,216 bytes.
+Packets per PKO = ((4096 - 6) * 127 * 1022) / (127 + 1022) = 462,016
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+index 21de19041073..c040e6f48f8c 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+@@ -1099,7 +1099,7 @@ static int setup_dpfi(struct pkopf *pko)
+ 		symbol_put(fpavf_com);
+ 		return -ENODEV;
+ 	}
+-	buffers = 80000;
++	buffers = 4096;
+ 
+ 	err = fpavf->setup(fpa, buffers, pko->pdm_buf_size,
+ 			FPA_VF_FLAG_CONT_MEM);
+-- 
+2.14.1
+

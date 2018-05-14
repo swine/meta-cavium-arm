@@ -1,0 +1,63 @@
+From 16872f95e6d96c8bb67a06179a7433eb39878457 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:54 +0100
+Subject: [PATCH 286/375] crypto: cpt - change log level from info to debug
+
+Change log level for a few messages in cptvf driver from info to debug.
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cptvf_main.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/crypto/cavium/cpt/cptvf_main.c b/drivers/crypto/cavium/cpt/cptvf_main.c
+index f83b5a55357a..d06a4539f456 100644
+--- a/drivers/crypto/cavium/cpt/cptvf_main.c
++++ b/drivers/crypto/cavium/cpt/cptvf_main.c
+@@ -45,8 +45,8 @@ static int init_worker_threads(struct cpt_vf *cptvf)
+ 		return -ENOMEM;
+ 
+ 	if (cptvf->nr_queues) {
+-		dev_info(&pdev->dev, "Creating VQ worker threads (%d)\n",
+-			 cptvf->nr_queues);
++		dev_dbg(&pdev->dev, "Creating VQ worker threads (%d)\n",
++			cptvf->nr_queues);
+ 	}
+ 
+ 	for (i = 0; i < cptvf->nr_queues; i++) {
+@@ -72,8 +72,8 @@ static void cleanup_worker_threads(struct cpt_vf *cptvf)
+ 		return;
+ 
+ 	if (cptvf->nr_queues) {
+-		dev_info(&pdev->dev, "Cleaning VQ worker threads (%u)\n",
+-			 cptvf->nr_queues);
++		dev_dbg(&pdev->dev, "Cleaning VQ worker threads (%u)\n",
++			cptvf->nr_queues);
+ 	}
+ 
+ 	for (i = 0; i < cptvf->nr_queues; i++)
+@@ -166,8 +166,8 @@ static void cleanup_pending_queues(struct cpt_vf *cptvf)
+ 	if (!cptvf->nr_queues)
+ 		return;
+ 
+-	dev_info(&pdev->dev, "Cleaning VQ pending queue (%u)\n",
+-		 cptvf->nr_queues);
++	dev_dbg(&pdev->dev, "Cleaning VQ pending queue (%u)\n",
++		cptvf->nr_queues);
+ 	free_pending_queues(&cptvf->pqinfo);
+ }
+ 
+@@ -308,8 +308,8 @@ static void cleanup_command_queues(struct cpt_vf *cptvf)
+ 	if (!cptvf->nr_queues)
+ 		return;
+ 
+-	dev_info(&pdev->dev, "Cleaning VQ command queue (%u)\n",
+-		 cptvf->nr_queues);
++	dev_dbg(&pdev->dev, "Cleaning VQ command queue (%u)\n",
++		cptvf->nr_queues);
+ 	free_command_queues(cptvf, &cptvf->cqinfo);
+ }
+ 
+-- 
+2.14.1
+

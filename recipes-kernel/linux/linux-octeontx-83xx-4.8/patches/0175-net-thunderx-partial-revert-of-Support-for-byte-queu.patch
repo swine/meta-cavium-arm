@@ -1,0 +1,55 @@
+From 344d418f04dc953713e6df228d11bde92a569614 Mon Sep 17 00:00:00 2001
+From: Peter Swain <peter.swain@cavium.com>
+Date: Tue, 24 Apr 2018 18:13:41 -0700
+Subject: [PATCH 175/375] net: thunderx: partial revert of Support for byte
+ queue limits
+
+this crashes in 4.8 context, rolling back until understood
+
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_main.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_main.c b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+index 733379e2975e..9584570aef3e 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_main.c
+@@ -653,7 +653,7 @@ static int nicvf_cq_intr_handler(struct net_device *netdev, u8 cq_idx,
+ 	struct cqe_rx_t *cq_desc;
+ 	struct netdev_queue *txq;
+ 	struct snd_queue *sq;
+-	unsigned int tx_pkts = 0, tx_bytes = 0;
++	unsigned int tx_pkts = 0, tx_bytes = 0, txq_idx;
+ 
+ 	spin_lock_bh(&cq->lock);
+ loop:
+@@ -715,14 +715,13 @@ done:
+ 	if (subdesc_cnt)
+ 		nicvf_put_sq_desc(sq, subdesc_cnt);
+ 
++	txq_idx = nicvf_netdev_qidx(nic, cq_idx);
++
+ 	/* Wakeup TXQ if its stopped earlier due to SQ full */
+ 	if (tx_done ||
+ 	    (atomic_read(&sq->free_cnt) >= MIN_SQ_DESC_PER_PKT_XMIT)) {
+ 		netdev = nic->pnicvf->netdev;
+-		txq = netdev_get_tx_queue(netdev,
+-					  nicvf_netdev_qidx(nic, cq_idx));
+-		if (tx_pkts)
+-			netdev_tx_completed_queue(txq, tx_pkts, tx_bytes);
++		txq = netdev_get_tx_queue(netdev, txq_idx);
+ 
+ 		/* To read updated queue and carrier status */
+ 		smp_mb();
+@@ -1074,7 +1073,6 @@ static netdev_tx_t nicvf_xmit(struct sk_buff *skb, struct net_device *netdev)
+ 		return NETDEV_TX_OK;
+ 	}
+ 
+-	snic = nic;
+ 	/* Get secondary Qset's SQ structure */
+ 	if (qid >= MAX_SND_QUEUES_PER_QS) {
+ 		tmp = qid / MAX_SND_QUEUES_PER_QS;
+-- 
+2.14.1
+

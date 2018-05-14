@@ -1,0 +1,50 @@
+From ec8baa63e1d1e43d46670d3c5557a4596d9de48c Mon Sep 17 00:00:00 2001
+From: Alex Belits <Alex.Belits@cavium.com>
+Date: Sat, 23 Sep 2017 07:56:52 -0700
+Subject: [PATCH 356/375] exit: Add task cleanup callbacks.
+
+Signed-off-by: Alex Belits <Alex.Belits@cavium.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ include/linux/kernel.h | 11 +++++++----
+ kernel/exit.c          |  2 ++
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/include/linux/kernel.h b/include/linux/kernel.h
+index d96a6118d26a..1e5d0bb52477 100644
+--- a/include/linux/kernel.h
++++ b/include/linux/kernel.h
+@@ -266,10 +266,13 @@ extern void oops_enter(void);
+ extern void oops_exit(void);
+ void print_oops_end_marker(void);
+ extern int oops_may_print(void);
+-void do_exit(long error_code)
+-	__noreturn;
+-void complete_and_exit(struct completion *, long)
+-	__noreturn;
++
++struct task_struct;
++extern int task_cleanup_handler_add(void (*handler)(struct task_struct *));
++extern int task_cleanup_handler_remove(void (*handler)(struct task_struct *));
++
++void do_exit(long error_code) __noreturn;
++void complete_and_exit(struct completion *, long) __noreturn;
+ 
+ /* Internal, do not use. */
+ int __must_check _kstrtoul(const char *s, unsigned int base, unsigned long *res);
+diff --git a/kernel/exit.c b/kernel/exit.c
+index d84c90896486..e6f6e7d09dd9 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -872,6 +872,8 @@ void __noreturn do_exit(long code)
+ 	tsk->exit_code = code;
+ 	taskstats_exit(tsk, group_dead);
+ 
++	task_cleanup_handlers_call(tsk);
++
+ 	exit_mm(tsk);
+ 
+ 	if (group_dead)
+-- 
+2.14.1
+

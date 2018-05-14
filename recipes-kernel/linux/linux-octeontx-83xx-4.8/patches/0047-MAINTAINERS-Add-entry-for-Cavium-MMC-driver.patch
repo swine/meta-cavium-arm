@@ -1,0 +1,49 @@
+From ca2a37120cd9645c036a2ed6166adf27ae1e5803 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Mon, 16 Jan 2017 14:03:29 +0100
+Subject: [PATCH 047/375] MAINTAINERS: Add entry for Cavium MMC driver
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Signed-off-by: David Daney <david.daney@cavium.com>
+Signed-off-by: Steven J. Hill <steven.hill@cavium.com>
+---
+ MAINTAINERS | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 69604e41cb67..0506e8c8ccc6 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -2902,6 +2902,14 @@ S:	Maintained
+ F:	drivers/iio/light/cm*
+ F:	Documentation/devicetree/bindings/i2c/trivial-devices.txt
+ 
++CAVIUM I2C DRIVER
++M:	Jan Glauber <jglauber@cavium.com>
++M:	David Daney <david.daney@cavium.com>
++W:	http://www.cavium.com
++S:	Supported
++F:	drivers/i2c/busses/i2c-octeon*
++F:	drivers/i2c/busses/i2c-thunderx*
++
+ CAVIUM LIQUIDIO NETWORK DRIVER
+ M:     Derek Chickles <derek.chickles@caviumnetworks.com>
+ M:     Satanand Burla <satananda.burla@caviumnetworks.com>
+@@ -2912,6 +2920,14 @@ W:     http://www.cavium.com
+ S:     Supported
+ F:     drivers/net/ethernet/cavium/liquidio/
+ 
++CAVIUM MMC DRIVER
++M:	Jan Glauber <jglauber@cavium.com>
++M:	David Daney <david.daney@cavium.com>
++M:	Steven J. Hill <Steven.Hill@cavium.com>
++W:	http://www.cavium.com
++S:	Supported
++F:	drivers/mmc/host/cavium*
++
+ CC2520 IEEE-802.15.4 RADIO DRIVER
+ M:	Varka Bhadram <varkabhadram@gmail.com>
+ L:	linux-wpan@vger.kernel.org
+-- 
+2.14.1
+

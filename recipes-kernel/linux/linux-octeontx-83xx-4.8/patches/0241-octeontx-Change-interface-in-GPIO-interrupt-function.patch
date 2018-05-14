@@ -1,0 +1,43 @@
+From 85e549fd61b41affccba9485b4b087cb7213edd8 Mon Sep 17 00:00:00 2001
+From: Alex Belits <alex.belits@cavium.com>
+Date: Sat, 23 Sep 2017 08:06:50 -0700
+Subject: [PATCH 241/375] octeontx: Change interface in GPIO interrupt
+ functionality.
+
+Signed-off-by: Alex Belits <Alex.Belits@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h | 11 +----------
+ 1 file changed, 1 insertion(+), 10 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+index e20185ac2e2d..78b669db97c1 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+@@ -64,15 +64,6 @@ struct intr_hand {
+ 	irqreturn_t (*handler)(int, void *);
+ };
+ 
+-struct octtx_gpio {
+-	u64	ttbr;
+-	u64	isr_base;
+-	u64	sp;
+-	int	in_use;
+-	u64	cpu;
+-	u64	gpio_num;
+-};
+-
+ struct octtx_gpio_usr_data {
+ 	u64	isr_base;
+ 	u64	sp;
+@@ -84,7 +75,7 @@ struct octtx_gpio_usr_data {
+ 	_IOW(OCTTX_IOC_MAGIC, 1, struct octtx_gpio_usr_data)
+ 
+ #define OCTTX_IOC_CLR_GPIO_HANDLER \
+-	_IOW(OCTTX_IOC_MAGIC, 2, int)
++	_IO(OCTTX_IOC_MAGIC, 2)
+ 
+ enum domain_type {
+ 	APP_NET = 0,
+-- 
+2.14.1
+

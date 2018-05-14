@@ -1,0 +1,42 @@
+From a8575a3bbed25cde42e4b747712d5dfcea9ec3ae Mon Sep 17 00:00:00 2001
+From: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+Date: Tue, 15 Aug 2017 16:27:13 -0700
+Subject: [PATCH 184/375] PCI: Move pci-octeontx-ecam driver before the
+ pci-host-generic
+
+The pci-octeontx-ecam driver emulates the PKI VF space and so uses a
+custom compatible string but we want the ability to use upstream kernels
+too on CN83xx which doesn't have pci-octeontx-ecam driver. The upstream
+kernels use the pci-host-generic driver. We pass both the compatible
+strings in the device tree so that same firmware can be used for
+multiple kernels. Moving the pci-octeontx-ecam driver up in the Makefile
+makes it to be called before the pci-host-generic driver, thereby giving
+the advantage.
+
+Signed-off-by: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+---
+ drivers/pci/host/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pci/host/Makefile b/drivers/pci/host/Makefile
+index 5e831585a96d..9155a3090493 100644
+--- a/drivers/pci/host/Makefile
++++ b/drivers/pci/host/Makefile
+@@ -9,6 +9,7 @@ obj-$(CONFIG_PCI_AARDVARK) += pci-aardvark.o
+ obj-$(CONFIG_PCI_TEGRA) += pci-tegra.o
+ obj-$(CONFIG_PCI_RCAR_GEN2) += pci-rcar-gen2.o
+ obj-$(CONFIG_PCIE_RCAR) += pcie-rcar.o
++obj-$(CONFIG_PCI_HOST_OCTEONTX_ECAM) += pci-octeontx-ecam.o
+ obj-$(CONFIG_PCI_HOST_COMMON) += pci-host-common.o
+ obj-$(CONFIG_PCI_HOST_GENERIC) += pci-host-generic.o
+ obj-$(CONFIG_PCIE_SPEAR13XX) += pcie-spear13xx.o
+@@ -29,6 +30,5 @@ obj-$(CONFIG_PCI_HISI) += pcie-hisi.o
+ obj-$(CONFIG_PCIE_QCOM) += pcie-qcom.o
+ obj-$(CONFIG_ARM64) += pci-thunder-ecam.o
+ obj-$(CONFIG_ARM64) += pci-thunder-pem.o
+-obj-$(CONFIG_PCI_HOST_OCTEONTX_ECAM) += pci-octeontx-ecam.o
+ obj-$(CONFIG_PCIE_ARMADA_8K) += pcie-armada8k.o
+ obj-$(CONFIG_PCIE_ARTPEC6) += pcie-artpec6.o
+-- 
+2.14.1
+

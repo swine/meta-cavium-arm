@@ -1,0 +1,29 @@
+From 0fad2e094968bc8678feb34e5cef2a4adeaea64e Mon Sep 17 00:00:00 2001
+From: Peter Swain <pswain@cavium.com>
+Date: Tue, 19 Sep 2017 15:14:53 -0700
+Subject: [PATCH 300/375] mtd: nand: denali: undo premature change
+
+Undo premature nand_onfi_get_set_features_notsupp change.
+which came in while backporting Micron support.
+
+Signed-off-by: Peter Swain <pswain@cavium.com>
+---
+ drivers/mtd/nand/denali.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/mtd/nand/denali.c b/drivers/mtd/nand/denali.c
+index bf6eddfe4423..0476ae8776d9 100644
+--- a/drivers/mtd/nand/denali.c
++++ b/drivers/mtd/nand/denali.c
+@@ -1504,8 +1504,6 @@ int denali_init(struct denali_nand_info *denali)
+ 	denali->nand.cmdfunc = denali_cmdfunc;
+ 	denali->nand.read_byte = denali_read_byte;
+ 	denali->nand.waitfunc = denali_waitfunc;
+-	denali->onfi_set_features = nand_onfi_get_set_features_notsupp;
+-	denali->onfi_get_features = nand_onfi_get_set_features_notsupp;
+ 
+ 	/*
+ 	 * scan for NAND devices attached to the controller
+-- 
+2.14.1
+

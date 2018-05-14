@@ -1,0 +1,56 @@
+From bf05ee4b3e13e3b1bbddb2195325eab4f3a3fee8 Mon Sep 17 00:00:00 2001
+From: Bjorn Helgaas <bhelgaas@google.com>
+Date: Wed, 30 Nov 2016 14:48:33 -0600
+Subject: [PATCH 144/375] arm64: PCI: Search ACPI namespace to ensure ECAM
+ space is reserved
+
+The static MCFG table tells us the base of ECAM space, but it does not
+reserve the space -- the reservation should be done via a device in the
+ACPI namespace whose _CRS includes the ECAM region.
+
+Use acpi_resource_consumer() to check whether the ECAM space is reserved by
+an ACPI namespace device.  If it is, emit a message showing which device
+reserves it.  If not, emit a "[Firmware Bug]" warning.
+
+Signed-off-by: Bjorn Helgaas <bhelgaas@google.com>
+Acked-by: Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>
+(cherry picked from commit 08b1c19606b5fc7f895dae4d43d507b4da4a83bf)
+Signed-off-by: Tomasz Nowicki <tn@semihalf.com>
+---
+ arch/arm64/kernel/pci.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kernel/pci.c b/arch/arm64/kernel/pci.c
+index e2c146de4819..6e10a320228f 100644
+--- a/arch/arm64/kernel/pci.c
++++ b/arch/arm64/kernel/pci.c
+@@ -124,8 +124,9 @@ pci_acpi_setup_ecam_mapping(struct acpi_pci_root *root)
+ 	struct device *dev = &root->device->dev;
+ 	struct resource *bus_res = &root->secondary;
+ 	u16 seg = root->segment;
+-	struct pci_config_window *cfg;
+ 	struct resource cfgres;
++	struct acpi_device *adev;
++	struct pci_config_window *cfg;
+ 	unsigned int bsz;
+ 
+ 	/* Use address from _CBA if present, otherwise lookup MCFG */
+@@ -141,6 +142,15 @@ pci_acpi_setup_ecam_mapping(struct acpi_pci_root *root)
+ 	cfgres.start = root->mcfg_addr + bus_res->start * bsz;
+ 	cfgres.end = cfgres.start + resource_size(bus_res) * bsz - 1;
+ 	cfgres.flags = IORESOURCE_MEM;
++
++	adev = acpi_resource_consumer(&cfgres);
++	if (adev)
++		dev_info(dev, "ECAM area %pR reserved by %s\n", &cfgres,
++			 dev_name(&adev->dev));
++	else
++		dev_warn(dev, FW_BUG "ECAM area %pR not reserved in ACPI namespace\n",
++			 &cfgres);
++
+ 	cfg = pci_ecam_create(dev, &cfgres, bus_res, &pci_generic_ecam_ops);
+ 	if (IS_ERR(cfg)) {
+ 		dev_err(dev, "%04x:%pR error %ld mapping ECAM\n", seg, bus_res,
+-- 
+2.14.1
+

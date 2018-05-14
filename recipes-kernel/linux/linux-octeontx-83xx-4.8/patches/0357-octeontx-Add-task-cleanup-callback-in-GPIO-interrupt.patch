@@ -1,0 +1,66 @@
+From 1ff1bf09190c841c291e589329bb13fd0dd693a5 Mon Sep 17 00:00:00 2001
+From: Alex Belits <alex.belits@cavium.com>
+Date: Sat, 23 Sep 2017 08:22:56 -0700
+Subject: [PATCH 357/375] octeontx: Add task cleanup callback in GPIO interrupt
+ functionality.
+
+Signed-off-by: Alex Belits <Alex.Belits@cavium.com>
+---
+ .../net/ethernet/cavium/octeontx-83xx/octeontx_main.c  | 18 +++++++++++-------
+ 1 file changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 4ae302b5b9eb..ae95d9b55e10 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -1350,15 +1350,8 @@ static int octtx_dev_open(struct inode *inode, struct file *fp)
+ 
+ static int octtx_dev_release(struct inode *inode, struct file *fp)
+ {
+-	int i;
+-
+ 	if (gpio_in_use == 0)
+ 		return -EINVAL;
+-
+-	for (i = 0; i < MAX_GPIO; i++)
+-		if (gpio_installed[i] != 0)
+-			__remove_el3_inthandler(i);
+-
+ 	gpio_in_use = 0;
+ 	return 0;
+ }
+@@ -1455,6 +1448,13 @@ static int __init octeontx_init_module(void)
+ 	queue_delayed_work(check_link, &dwork, 0);
+ 	queue_delayed_work(reset_domain, &dwork_reset, 0);
+ 
++	/* Register task cleanup handler */
++	ret = task_cleanup_handler_add(cleanup_el3_irqs);
++	if (ret != 0) {
++		ret = -ENODEV;
++		goto cleanup_handler_err;
++	}
++
+ 	/* create a char device */
+ 	ret = alloc_chrdev_region(&octtx_dev, 1, 1, DEVICE_NAME);
+ 	if (ret != 0) {
+@@ -1512,6 +1512,9 @@ cdev_alloc_err:
+ 	unregister_chrdev_region(octtx_dev, 1);
+ 
+ alloc_chrdev_err:
++cleanup_handler_err:
++	task_cleanup_handler_remove(cleanup_el3_irqs);
++
+ wq_err:
+ 	symbol_put(cptpf_com);
+ 
+@@ -1572,6 +1575,7 @@ static void __exit octeontx_cleanup_module(void)
+ 	symbol_put(dpipf_com);
+ 	symbol_put(lbk_com);
+ 	symbol_put(thunder_bgx_com);
++	task_cleanup_handler_remove(cleanup_el3_irqs);
+ }
+ 
+ module_init(octeontx_init_module);
+-- 
+2.14.1
+

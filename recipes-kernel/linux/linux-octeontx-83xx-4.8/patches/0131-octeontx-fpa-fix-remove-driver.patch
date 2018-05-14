@@ -1,0 +1,39 @@
+From cb43771cffafcdea228840cdb0a64e52f3afe82c Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Mon, 13 Mar 2017 12:16:50 -0700
+Subject: [PATCH 131/375] octeontx-fpa: fix remove driver
+
+Release resources when fpa vf driver is unbind
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+index fc4881a961ad..88dd7c46e86d 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+@@ -381,6 +381,7 @@ static void fpavf_irq_free(struct fpavf *fpa)
+ 
+ 	free_irq(fpa->msix_entries[0].vector, fpa);
+ 	pci_disable_msix(fpa->pdev);
++	devm_kfree(&fpa->pdev->dev, fpa->msix_entries);
+ }
+ 
+ static int fpavf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+@@ -461,6 +462,11 @@ static void fpavf_remove(struct pci_dev *pdev)
+ 	spin_unlock(&octeontx_fpavf_devices_lock);
+ 
+ 	fpavf_irq_free(fpa);
++	pcim_iounmap(pdev, fpa->reg_base);
++	pci_disable_device(pdev);
++	pci_release_regions(pdev);
++
++	devm_kfree(&pdev->dev, fpa);
+ }
+ 
+ /* devices supported */
+-- 
+2.14.1
+

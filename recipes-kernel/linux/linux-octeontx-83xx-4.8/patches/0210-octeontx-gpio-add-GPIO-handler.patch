@@ -1,0 +1,78 @@
+From 06cb06aa14294405090bcf2597767cf7d2c57f01 Mon Sep 17 00:00:00 2001
+From: vinita gupta <vgupta@caviumnetworks.com>
+Date: Sun, 30 Jul 2017 01:16:38 -0700
+Subject: [PATCH 210/375] octeontx-gpio:add GPIO handler
+
+Signed-off-by: Alex Belits <Alex.Belits@cavium.com>
+---
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index b0260ce78eaf..1bc548a28793 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -95,6 +95,7 @@ struct octtx_domain {
+ };
+ 
+ struct octtx_gpio gpio;
++int gpio_installed[MAX_GPIO];
+ 
+ static DEFINE_SPINLOCK(octeontx_domains_lock);
+ static LIST_HEAD(octeontx_domains);
+@@ -947,6 +948,10 @@ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ 	switch (cmd) {
+ 	case OCTTX_IOC_SET_GPIO_HANDLER: /*Install GPIO ISR handler*/
+ 		ret = copy_from_user(&gpio_usr, (void *)arg, _IOC_SIZE(cmd));
++		if (gpio_usr.gpio_num >= MAX_GPIO)
++			return -EINVAL;
++		if (gpio_installed[gpio_usr.gpio_num] != 0)
++			return -EEXIST;
+ 		if (ret)
+ 			return -EFAULT;
+ 		gpio.ttbr = 0;
+@@ -958,13 +963,18 @@ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ 		gpio.gpio_num = gpio_usr.gpio_num;
+ 		ret = __install_el3_inthandler(gpio.gpio_num, gpio.sp,
+ 					       gpio.cpu, gpio.isr_base);
+-//		printk("%s::%d ttbr:%llx sp:%llx isr_base:%llx\n",
+-//		       __FILE__, __LINE__, gpio.ttbr, gpio.sp, gpio.isr_base);
++		if (ret == 0)
++			gpio_installed[gpio_usr.gpio_num] = 1;
+ 		break;
+ 	case OCTTX_IOC_CLR_GPIO_HANDLER: /*Clear GPIO ISR handler*/
+ 		ret = copy_from_user(&gpio_usr, (void *)arg, _IOC_SIZE(cmd));
+ 		if (ret)
+ 			return -EFAULT;
++		gpio_usr.gpio_num = arg;
++		if (gpio_usr.gpio_num >= MAX_GPIO)
++			return -EINVAL;
++		if (gpio_installed[gpio_usr.gpio_num] == 0)
++			return -ENOENT;
+ 		__remove_el3_inthandler(gpio_usr.gpio_num);
+ 		break;
+ 	default:
+@@ -984,12 +994,20 @@ static int octtx_dev_open(struct inode *inode, struct file *fp)
+ 
+ static int octtx_dev_release(struct inode *inode, struct file *fp)
+ {
++	int i;
++
+ 	if (gpio.in_use == 0)
+ 		return -EINVAL;
+ 
+ 	if (gpio.gpio_num)
+ 		__remove_el3_inthandler(gpio.gpio_num);
+ 
++	for (i = 0; i < MAX_GPIO; i++) {
++		if (gpio_installed[i] != 0) {
++			__remove_el3_inthandler(i);
++			gpio_installed[i] = 0;
++		}
++	}
+ 	gpio.in_use = 0;
+ 	return 0;
+ }
+-- 
+2.14.1
+

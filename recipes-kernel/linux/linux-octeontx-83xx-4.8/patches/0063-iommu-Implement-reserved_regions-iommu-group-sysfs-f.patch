@@ -1,0 +1,127 @@
+From fdbb83f274bb851146ce93b6a46b5fb596c70dcb Mon Sep 17 00:00:00 2001
+From: Eric Auger <eric.auger@redhat.com>
+Date: Fri, 27 Jan 2017 02:09:40 -0800
+Subject: [PATCH 063/375] iommu: Implement reserved_regions iommu-group sysfs
+ file
+
+A new iommu-group sysfs attribute file is introduced. It contains
+the list of reserved regions for the iommu-group. Each reserved
+region is described on a separate line:
+- first field is the start IOVA address,
+- second is the end IOVA address,
+- third is the type.
+
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Tested-by: Tomasz Nowicki <tomasz.nowicki@caviumnetworks.com>
+Tested-by: Bharat Bhushan <bharat.bhushan@nxp.com>
+
+---
+v7 -> v8:
+- remove iommu_group_remove_file() in iommu_group_release since
+  the /sys/kernel/iommu_groups/n directory seems to be removed
+  already
+
+v6 -> v7:
+- also report the type of the reserved region as a string
+- updated ABI documentation
+
+v3 -> v4:
+- add cast to long long int when printing to avoid warning on
+  i386
+- change S_IRUGO into 0444
+- remove sort. The list is natively sorted now.
+
+The file layout is inspired of /sys/bus/pci/devices/BDF/resource.
+I also read Documentation/filesystems/sysfs.txt so I expect this
+to be frowned upon.
+---
+ .../ABI/testing/sysfs-kernel-iommu_groups          | 12 ++++++++
+ drivers/iommu/iommu.c                              | 36 ++++++++++++++++++++++
+ 2 files changed, 48 insertions(+)
+
+diff --git a/Documentation/ABI/testing/sysfs-kernel-iommu_groups b/Documentation/ABI/testing/sysfs-kernel-iommu_groups
+index 9b31556cfdda..35c64e00b35c 100644
+--- a/Documentation/ABI/testing/sysfs-kernel-iommu_groups
++++ b/Documentation/ABI/testing/sysfs-kernel-iommu_groups
+@@ -12,3 +12,15 @@ Description:	/sys/kernel/iommu_groups/ contains a number of sub-
+ 		file if the IOMMU driver has chosen to register a more
+ 		common name for the group.
+ Users:
++
++What:		/sys/kernel/iommu_groups/reserved_regions
++Date: 		January 2017
++KernelVersion:  v4.11
++Contact: 	Eric Auger <eric.auger@redhat.com>
++Description:    /sys/kernel/iommu_groups/reserved_regions list IOVA
++		regions that are reserved. Not necessarily all
++		reserved regions are listed. This is typically used to
++		output direct-mapped, MSI, non mappable regions. Each
++		region is described on a single line: the 1st field is
++		the base IOVA, the second is the end IOVA and the third
++		field describes the type of the region.
+diff --git a/drivers/iommu/iommu.c b/drivers/iommu/iommu.c
+index d8578a9409d7..6ef476e8c81d 100644
+--- a/drivers/iommu/iommu.c
++++ b/drivers/iommu/iommu.c
+@@ -67,6 +67,12 @@ struct iommu_group_attribute {
+ 			 const char *buf, size_t count);
+ };
+ 
++static const char * const iommu_group_resv_type_string[] = {
++	[IOMMU_RESV_DIRECT]	= "direct",
++	[IOMMU_RESV_RESERVED]	= "reserved",
++	[IOMMU_RESV_MSI]	= "msi",
++};
++
+ #define IOMMU_GROUP_ATTR(_name, _mode, _show, _store)		\
+ struct iommu_group_attribute iommu_group_attr_##_name =		\
+ 	__ATTR(_name, _mode, _show, _store)
+@@ -230,8 +236,33 @@ int iommu_get_group_resv_regions(struct iommu_group *group,
+ }
+ EXPORT_SYMBOL_GPL(iommu_get_group_resv_regions);
+ 
++static ssize_t iommu_group_show_resv_regions(struct iommu_group *group,
++					     char *buf)
++{
++	struct iommu_resv_region *region, *next;
++	struct list_head group_resv_regions;
++	char *str = buf;
++
++	INIT_LIST_HEAD(&group_resv_regions);
++	iommu_get_group_resv_regions(group, &group_resv_regions);
++
++	list_for_each_entry_safe(region, next, &group_resv_regions, list) {
++		str += sprintf(str, "0x%016llx 0x%016llx %s\n",
++			       (long long int)region->start,
++			       (long long int)(region->start +
++						region->length - 1),
++			       iommu_group_resv_type_string[region->type]);
++		kfree(region);
++	}
++
++	return (str - buf);
++}
++
+ static IOMMU_GROUP_ATTR(name, S_IRUGO, iommu_group_show_name, NULL);
+ 
++static IOMMU_GROUP_ATTR(reserved_regions, 0444,
++			iommu_group_show_resv_regions, NULL);
++
+ static void iommu_group_release(struct kobject *kobj)
+ {
+ 	struct iommu_group *group = to_iommu_group(kobj);
+@@ -309,6 +340,11 @@ struct iommu_group *iommu_group_alloc(void)
+ 	 */
+ 	kobject_put(&group->kobj);
+ 
++	ret = iommu_group_create_file(group,
++				      &iommu_group_attr_reserved_regions);
++	if (ret)
++		return ERR_PTR(ret);
++
+ 	pr_debug("Allocated group %d\n", group->id);
+ 
+ 	return group;
+-- 
+2.14.1
+

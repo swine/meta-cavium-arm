@@ -1,0 +1,75 @@
+From 0146b7eae64139d2b0828b5d201ee2f32ae282a1 Mon Sep 17 00:00:00 2001
+From: David Daney <david.daney@cavium.com>
+Date: Wed, 11 Jan 2017 11:39:07 -0800
+Subject: [PATCH 045/375] PCI: thunder-pem: Add support for cn81xx and cn83xx
+ SoCs.
+
+The pci-thunder-pem driver was initially developed for cn88xx SoCs.
+The cn81xx and cn83xx members of the same family of SoCs has a
+slightly different configuration of interrupt resources in the PEM
+hardware, which prevents the INTA legacy interrupt source from
+functioning with the current driver.
+
+There are two fixes required:
+
+1) Don't fixup the PME interrupt on the newer SoCs as it already has
+the proper value.
+
+2) Report MSI-X Capability Table Size of 2 for the newer SoCs, so the
+core MSI-X code doesn't inadvertently clobber the INTA machinery that
+happens to reside immediately following the table.
+
+Signed-off-by: David Daney <david.daney@cavium.com>
+---
+ drivers/pci/host/pci-thunder-pem.c | 25 ++++++++++++++++++++-----
+ 1 file changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/pci/host/pci-thunder-pem.c b/drivers/pci/host/pci-thunder-pem.c
+index c3276eede82a..34cd92d5e851 100644
+--- a/drivers/pci/host/pci-thunder-pem.c
++++ b/drivers/pci/host/pci-thunder-pem.c
+@@ -32,7 +32,7 @@ struct thunder_pem_pci {
+ static int thunder_pem_bridge_read(struct pci_bus *bus, unsigned int devfn,
+ 				   int where, int size, u32 *val)
+ {
+-	u64 read_val;
++	u64 read_val, tmp_val;
+ 	struct pci_config_window *cfg = bus->sysdata;
+ 	struct thunder_pem_pci *pem_pci = (struct thunder_pem_pci *)cfg->priv;
+ 
+@@ -61,13 +61,28 @@ static int thunder_pem_bridge_read(struct pci_bus *bus, unsigned int devfn,
+ 		read_val |= 0x00007000; /* Skip MSI CAP */
+ 		break;
+ 	case 0x70: /* Express Cap */
+-		/* PME interrupt on vector 2*/
+-		read_val |= (2u << 25);
++		/*
++		 * Change PME interrupt to vector 2 on T88 where it
++		 * reads as 0, else leave it alone.
++		 */
++		if (!(read_val & (0x1f << 25)))
++			read_val |= (2u << 25);
+ 		break;
+ 	case 0xb0: /* MSI-X Cap */
+-		/* TableSize=4, Next Cap is EA */
++		/* TableSize=2 or 4, Next Cap is EA */
+ 		read_val &= 0xc00000ff;
+-		read_val |= 0x0003bc00;
++		/*
++		 * If Express Cap(0x70) raw PME vector reads as 0 we are on
++		 * T88 and TableSize is reported as 4, else TableSize
++		 * is 2.
++		 */
++		writeq(0x70, pem_pci->pem_reg_base + PEM_CFG_RD);
++		tmp_val = readq(pem_pci->pem_reg_base + PEM_CFG_RD);
++		tmp_val >>= 32;
++		if (!(tmp_val & (0x1f << 25)))
++			read_val |= 0x0003bc00;
++		else
++			read_val |= 0x0001bc00;
+ 		break;
+ 	case 0xb4:
+ 		/* Table offset=0, BIR=0 */
+-- 
+2.14.1
+

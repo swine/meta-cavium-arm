@@ -1,0 +1,63 @@
+From 064dce47070b7736e82f651e45ea1298b6c8fe20 Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:26 -0400
+Subject: [PATCH 345/375] lru_add_drain_all: factor out lru_add_drain_needed
+
+This per-cpu check was being done in the loop in lru_add_drain_all(),
+but having it be callable for a particular cpu is helpful for the
+task-isolation patches.
+
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+---
+ include/linux/swap.h |  1 +
+ mm/swap.c            | 15 ++++++++++-----
+ 2 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/swap.h b/include/linux/swap.h
+index 3c9e1a4dc1a1..b284d9a51511 100644
+--- a/include/linux/swap.h
++++ b/include/linux/swap.h
+@@ -298,6 +298,7 @@ extern void activate_page(struct page *);
+ extern void mark_page_accessed(struct page *);
+ extern void lru_add_drain(void);
+ extern void lru_add_drain_cpu(int cpu);
++extern bool lru_add_drain_needed(int cpu);
+ extern void lru_add_drain_all(void);
+ extern void rotate_reclaimable_page(struct page *page);
+ extern void deactivate_file_page(struct page *page);
+diff --git a/mm/swap.c b/mm/swap.c
+index 75c63bb2a1da..a2be6f0931b5 100644
+--- a/mm/swap.c
++++ b/mm/swap.c
+@@ -655,6 +655,15 @@ void deactivate_page(struct page *page)
+ 	}
+ }
+ 
++bool lru_add_drain_needed(int cpu)
++{
++	return (pagevec_count(&per_cpu(lru_add_pvec, cpu)) ||
++		pagevec_count(&per_cpu(lru_rotate_pvecs, cpu)) ||
++		pagevec_count(&per_cpu(lru_deactivate_file_pvecs, cpu)) ||
++		pagevec_count(&per_cpu(lru_deactivate_pvecs, cpu)) ||
++		need_activate_page_drain(cpu));
++}
++
+ void lru_add_drain(void)
+ {
+ 	lru_add_drain_cpu(get_cpu());
+@@ -699,11 +708,7 @@ void lru_add_drain_all(void)
+ 	for_each_online_cpu(cpu) {
+ 		struct work_struct *work = &per_cpu(lru_add_drain_work, cpu);
+ 
+-		if (pagevec_count(&per_cpu(lru_add_pvec, cpu)) ||
+-		    pagevec_count(&per_cpu(lru_rotate_pvecs, cpu)) ||
+-		    pagevec_count(&per_cpu(lru_deactivate_file_pvecs, cpu)) ||
+-		    pagevec_count(&per_cpu(lru_deactivate_pvecs, cpu)) ||
+-		    need_activate_page_drain(cpu)) {
++		if (lru_add_drain_needed(cpu)) {
+ 			INIT_WORK(work, lru_add_drain_per_cpu);
+ 			queue_work_on(cpu, lru_add_drain_wq, work);
+ 			cpumask_set_cpu(cpu, &has_work);
+-- 
+2.14.1
+

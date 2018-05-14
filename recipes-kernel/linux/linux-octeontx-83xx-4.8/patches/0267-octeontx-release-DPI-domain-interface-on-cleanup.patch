@@ -1,0 +1,25 @@
+From 9929445aef2ac815d545b32636c262252a427ec3 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:48 +0100
+Subject: [PATCH 267/375] octeontx: release DPI domain interface on cleanup
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index c76cce976006..9cb4d1ad49ea 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -1560,6 +1560,7 @@ static void __exit octeontx_cleanup_module(void)
+ 	symbol_put(timpf_com);
+ 	symbol_put(zippf_com);
+ 	symbol_put(cptpf_com);
++	symbol_put(dpipf_com);
+ 	symbol_put(lbk_com);
+ 	symbol_put(thunder_bgx_com);
+ }
+-- 
+2.14.1
+

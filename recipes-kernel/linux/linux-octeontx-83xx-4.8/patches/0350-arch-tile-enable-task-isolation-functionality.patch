@@ -1,0 +1,306 @@
+From 46211f5bdb07dbec7d019247991e9f942479cfbe Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:32 -0400
+Subject: [PATCH 350/375] arch/tile: enable task isolation functionality
+
+We add the necessary call to task_isolation_enter() in the
+prepare_exit_to_usermode() routine.  We already unconditionally
+call into this routine if TIF_NOHZ is set, since that's where
+we do the user_enter() call.
+
+We add calls to task_isolation_quiet_exception() in places
+where exceptions may not generate signals to the application.
+
+Minor formatting changes by Alex Belits.
+
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+Signed-off-by: Alex Belits <alex.belits@cavium.com>
+---
+ arch/tile/Kconfig                   |  1 +
+ arch/tile/include/asm/thread_info.h |  4 +++-
+ arch/tile/kernel/process.c          |  9 +++++++++
+ arch/tile/kernel/ptrace.c           | 10 ++++++++++
+ arch/tile/kernel/single_step.c      |  7 +++++++
+ arch/tile/kernel/smp.c              | 27 +++++++++++++++------------
+ arch/tile/kernel/unaligned.c        |  4 ++++
+ arch/tile/mm/fault.c                | 14 +++++++++++++-
+ arch/tile/mm/homecache.c            |  2 ++
+ 9 files changed, 64 insertions(+), 14 deletions(-)
+
+diff --git a/arch/tile/Kconfig b/arch/tile/Kconfig
+index 78da75b670bc..634cc971ca33 100644
+--- a/arch/tile/Kconfig
++++ b/arch/tile/Kconfig
+@@ -17,6 +17,7 @@ config TILE
+ 	select GENERIC_STRNCPY_FROM_USER
+ 	select GENERIC_STRNLEN_USER
+ 	select HAVE_ARCH_SECCOMP_FILTER
++	select HAVE_ARCH_TASK_ISOLATION
+ 	select HAVE_ARCH_TRACEHOOK
+ 	select HAVE_CONTEXT_TRACKING
+ 	select HAVE_DEBUG_BUGVERBOSE
+diff --git a/arch/tile/include/asm/thread_info.h b/arch/tile/include/asm/thread_info.h
+index b7659b8f1117..8fe17c7e872e 100644
+--- a/arch/tile/include/asm/thread_info.h
++++ b/arch/tile/include/asm/thread_info.h
+@@ -126,6 +126,7 @@ extern void _cpu_idle(void);
+ #define TIF_SYSCALL_TRACEPOINT	9	/* syscall tracepoint instrumentation */
+ #define TIF_POLLING_NRFLAG	10	/* idle is polling for TIF_NEED_RESCHED */
+ #define TIF_NOHZ		11	/* in adaptive nohz mode */
++#define TIF_TASK_ISOLATION	12	/* in task isolation mode */
+ 
+ #define _TIF_SIGPENDING		(1<<TIF_SIGPENDING)
+ #define _TIF_NEED_RESCHED	(1<<TIF_NEED_RESCHED)
+@@ -139,11 +140,12 @@ extern void _cpu_idle(void);
+ #define _TIF_SYSCALL_TRACEPOINT	(1<<TIF_SYSCALL_TRACEPOINT)
+ #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
+ #define _TIF_NOHZ		(1<<TIF_NOHZ)
++#define _TIF_TASK_ISOLATION	(1<<TIF_TASK_ISOLATION)
+ 
+ /* Work to do as we loop to exit to user space. */
+ #define _TIF_WORK_MASK \
+ 	(_TIF_SIGPENDING | _TIF_NEED_RESCHED | \
+-	 _TIF_ASYNC_TLB | _TIF_NOTIFY_RESUME)
++	 _TIF_ASYNC_TLB | _TIF_NOTIFY_RESUME | _TIF_TASK_ISOLATION)
+ 
+ /* Work to do on any return to user space. */
+ #define _TIF_ALLWORK_MASK \
+diff --git a/arch/tile/kernel/process.c b/arch/tile/kernel/process.c
+index a465d8372edd..bbe1d29b242f 100644
+--- a/arch/tile/kernel/process.c
++++ b/arch/tile/kernel/process.c
+@@ -29,6 +29,7 @@
+ #include <linux/signal.h>
+ #include <linux/delay.h>
+ #include <linux/context_tracking.h>
++#include <linux/isolation.h>
+ #include <asm/stack.h>
+ #include <asm/switch_to.h>
+ #include <asm/homecache.h>
+@@ -496,9 +497,17 @@ void prepare_exit_to_usermode(struct pt_regs *regs, u32 thread_info_flags)
+ 			tracehook_notify_resume(regs);
+ 		}
+ 
++		if (thread_info_flags & _TIF_TASK_ISOLATION)
++			task_isolation_enter();
++
+ 		local_irq_disable();
+ 		thread_info_flags = READ_ONCE(current_thread_info()->flags);
+ 
++		/* Clear task isolation from cached_flags manually. */
++		if ((thread_info_flags & _TIF_TASK_ISOLATION) &&
++		    task_isolation_ready())
++			thread_info_flags &= ~_TIF_TASK_ISOLATION;
++
+ 	} while (thread_info_flags & _TIF_WORK_MASK);
+ 
+ 	if (thread_info_flags & _TIF_SINGLESTEP) {
+diff --git a/arch/tile/kernel/ptrace.c b/arch/tile/kernel/ptrace.c
+index e279572824b1..e331b64b1b5c 100644
+--- a/arch/tile/kernel/ptrace.c
++++ b/arch/tile/kernel/ptrace.c
+@@ -23,6 +23,7 @@
+ #include <linux/elf.h>
+ #include <linux/tracehook.h>
+ #include <linux/context_tracking.h>
++#include <linux/isolation.h>
+ #include <asm/traps.h>
+ #include <arch/chip.h>
+ 
+@@ -261,6 +262,15 @@ int do_syscall_trace_enter(struct pt_regs *regs)
+ 		return -1;
+ 	}
+ 
++	/*
++	 * In task isolation mode, we may prevent the syscall from
++	 * running, and if so we also deliver a signal to the process.
++	 */
++	if (work & _TIF_TASK_ISOLATION) {
++		if (task_isolation_syscall(regs->regs[TREG_SYSCALL_NR]) == -1)
++			return -1;
++	}
++
+ 	if (secure_computing(NULL) == -1)
+ 		return -1;
+ 
+diff --git a/arch/tile/kernel/single_step.c b/arch/tile/kernel/single_step.c
+index 862973074bf9..b48da9860b80 100644
+--- a/arch/tile/kernel/single_step.c
++++ b/arch/tile/kernel/single_step.c
+@@ -23,6 +23,7 @@
+ #include <linux/types.h>
+ #include <linux/err.h>
+ #include <linux/prctl.h>
++#include <linux/isolation.h>
+ #include <asm/cacheflush.h>
+ #include <asm/traps.h>
+ #include <asm/uaccess.h>
+@@ -320,6 +321,9 @@ void single_step_once(struct pt_regs *regs)
+ 	int size = 0, sign_ext = 0;  /* happy compiler */
+ 	int align_ctl;
+ 
++	/* No signal was generated, but notify task-isolation tasks. */
++	task_isolation_quiet_exception("single step at %#lx", regs->pc);
++
+ 	align_ctl = unaligned_fixup;
+ 	switch (task_thread_info(current)->align_ctl) {
+ 	case PR_UNALIGN_NOPRINT:
+@@ -767,6 +771,9 @@ void single_step_once(struct pt_regs *regs)
+ 	unsigned long *ss_pc = this_cpu_ptr(&ss_saved_pc);
+ 	unsigned long control = __insn_mfspr(SPR_SINGLE_STEP_CONTROL_K);
+ 
++	/* No signal was generated, but notify task-isolation tasks. */
++	task_isolation_quiet_exception("single step at %#lx", regs->pc);
++
+ 	*ss_pc = regs->pc;
+ 	control |= SPR_SINGLE_STEP_CONTROL_1__CANCELED_MASK;
+ 	control |= SPR_SINGLE_STEP_CONTROL_1__INHIBIT_MASK;
+diff --git a/arch/tile/kernel/smp.c b/arch/tile/kernel/smp.c
+index 07e3ff5cc740..f0442bd173c2 100644
+--- a/arch/tile/kernel/smp.c
++++ b/arch/tile/kernel/smp.c
+@@ -20,6 +20,7 @@
+ #include <linux/irq.h>
+ #include <linux/irq_work.h>
+ #include <linux/module.h>
++#include <linux/isolation.h>
+ #include <asm/cacheflush.h>
+ #include <asm/homecache.h>
+ 
+@@ -181,10 +182,12 @@ void flush_icache_range(unsigned long start, unsigned long end)
+ 	struct ipi_flush flush = { start, end };
+ 
+ 	/* If invoked with irqs disabled, we can not issue IPIs. */
+-	if (irqs_disabled())
++	if (irqs_disabled()) {
++		task_isolation_debug_cpumask(task_isolation_map,
++					     "icache flush");
+ 		flush_remote(0, HV_FLUSH_EVICT_L1I, NULL, 0, 0, 0,
+ 			NULL, NULL, 0);
+-	else {
++	} else {
+ 		preempt_disable();
+ 		on_each_cpu(ipi_flush_icache_range, &flush, 1);
+ 		preempt_enable();
+@@ -258,10 +261,8 @@ void __init ipi_init(void)
+ 
+ #if CHIP_HAS_IPI()
+ 
+-void smp_send_reschedule(int cpu)
++static void __smp_send_reschedule(int cpu)
+ {
+-	WARN_ON(cpu_is_offline(cpu));
+-
+ 	/*
+ 	 * We just want to do an MMIO store.  The traditional writeq()
+ 	 * functions aren't really correct here, since they're always
+@@ -273,15 +274,17 @@ void smp_send_reschedule(int cpu)
+ 
+ #else
+ 
+-void smp_send_reschedule(int cpu)
++static void __smp_send_reschedule(int cpu)
+ {
+-	HV_Coord coord;
+-
+-	WARN_ON(cpu_is_offline(cpu));
+-
+-	coord.y = cpu_y(cpu);
+-	coord.x = cpu_x(cpu);
++	HV_Coord coord = { .y = cpu_y(cpu), .x = cpu_x(cpu) };
+ 	hv_trigger_ipi(coord, IRQ_RESCHEDULE);
+ }
+ 
+ #endif /* CHIP_HAS_IPI() */
++
++void smp_send_reschedule(int cpu)
++{
++	WARN_ON(cpu_is_offline(cpu));
++	task_isolation_debug(cpu, "reschedule IPI");
++	__smp_send_reschedule(cpu);
++}
+diff --git a/arch/tile/kernel/unaligned.c b/arch/tile/kernel/unaligned.c
+index 9772a3554282..0335f7cd81f4 100644
+--- a/arch/tile/kernel/unaligned.c
++++ b/arch/tile/kernel/unaligned.c
+@@ -25,6 +25,7 @@
+ #include <linux/module.h>
+ #include <linux/compat.h>
+ #include <linux/prctl.h>
++#include <linux/isolation.h>
+ #include <asm/cacheflush.h>
+ #include <asm/traps.h>
+ #include <asm/uaccess.h>
+@@ -1545,6 +1546,9 @@ void do_unaligned(struct pt_regs *regs, int vecnum)
+ 		return;
+ 	}
+ 
++	/* No signal was generated, but notify task-isolation tasks. */
++	task_isolation_quiet_exception("unaligned JIT at %#lx", regs->pc);
++
+ 	if (!info->unalign_jit_base) {
+ 		void __user *user_page;
+ 
+diff --git a/arch/tile/mm/fault.c b/arch/tile/mm/fault.c
+index beba986589e5..f3e5609957b1 100644
+--- a/arch/tile/mm/fault.c
++++ b/arch/tile/mm/fault.c
+@@ -35,6 +35,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/uaccess.h>
+ #include <linux/kdebug.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/pgalloc.h>
+ #include <asm/sections.h>
+@@ -308,8 +309,14 @@ static int handle_page_fault(struct pt_regs *regs,
+ 	 */
+ 	pgd = get_current_pgd();
+ 	if (handle_migrating_pte(pgd, fault_num, address, regs->pc,
+-				 is_kernel_mode, write))
++				 is_kernel_mode, write)) {
++		/* No signal was generated, but notify task-isolation tasks. */
++		if (!is_kernel_mode)
++			task_isolation_quiet_exception(
++						      "migration fault at %#lx",
++						       address);
+ 		return 1;
++	}
+ 
+ 	si_code = SEGV_MAPERR;
+ 
+@@ -479,6 +486,11 @@ good_area:
+ #endif
+ 
+ 	up_read(&mm->mmap_sem);
++
++	/* No signal was generated, but notify task-isolation tasks. */
++	if (flags & FAULT_FLAG_USER)
++		task_isolation_quiet_exception("page fault at %#lx", address);
++
+ 	return 1;
+ 
+ /*
+diff --git a/arch/tile/mm/homecache.c b/arch/tile/mm/homecache.c
+index 40ca30a9fee3..2fe368599df6 100644
+--- a/arch/tile/mm/homecache.c
++++ b/arch/tile/mm/homecache.c
+@@ -31,6 +31,7 @@
+ #include <linux/smp.h>
+ #include <linux/module.h>
+ #include <linux/hugetlb.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/page.h>
+ #include <asm/sections.h>
+@@ -83,6 +84,7 @@ static void hv_flush_update(const struct cpumask *cache_cpumask,
+ 	 * Don't bother to update atomically; losing a count
+ 	 * here is not that critical.
+ 	 */
++	task_isolation_debug_cpumask(&mask, "remote cache/TLB flush");
+ 	for_each_cpu(cpu, &mask)
+ 		++per_cpu(irq_stat, cpu).irq_hv_flush_count;
+ }
+-- 
+2.14.1
+

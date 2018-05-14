@@ -1,0 +1,31 @@
+From b1bfdc383e3e3cb264498a8c7c3f9a2c3cc4dba3 Mon Sep 17 00:00:00 2001
+From: Angela Czubak <aczubak@caviumnetworks.com>
+Date: Fri, 19 May 2017 12:57:26 +0200
+Subject: [PATCH 238/375] octeontx: mbox: prevent erroneous tag mismatch by
+ casting addition result to u16
+
+Even though mbox->tag_own is u16, mbox->tag_own + 1 is promoted to
+int and this causes mismatch when mbox->tag_own = 0xffff and it gets
+compared to 0 (ram_hdr.tag). Solved by casting the result to u16.
+
+Signed-off-by: Angela Czubak <aczubak@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c
+index 84d8d27d599f..33e78e6c683b 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.c
+@@ -127,7 +127,7 @@ int mbox_send(struct mbox *mbox, struct mbox_hdr *hdr, const void *txmsg,
+ 	}
+ 	if (!wait)
+ 		return -1; /* timeout */
+-	if ((mbox->tag_own + 1) != ram_hdr.tag)
++	if ((u16)(mbox->tag_own + 1) != ram_hdr.tag)
+ 		return -1; /* tag mismatch */
+ 	(mbox->tag_own)++;
+ 
+-- 
+2.14.1
+

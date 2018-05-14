@@ -1,0 +1,35 @@
+From 78baa20f89fefd702555e6babdef7896f3c08f8c Mon Sep 17 00:00:00 2001
+From: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+Date: Thu, 13 Jul 2017 16:21:24 -0700
+Subject: [PATCH 209/375] arm64: Disable preemption before entering panic()
+
+There is an issue with CONFIG_PREEMPT=y and "isolcpus" or
+CONFIG_NO_HZ_FULL_ALL, where after a kernel panic the user space
+programs are still running. This makes it difficult for the hardware
+watchdog to trigger as the user space daemon can update the timer
+through ioctls. By disabling the preemption before entering the panic()
+the issue is not seen. It is a temporary workaround until actual issue
+is fixed
+
+Signed-off-by: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+---
+ arch/arm64/kernel/traps.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/arm64/kernel/traps.c b/arch/arm64/kernel/traps.c
+index 86142e434651..87552c57d4fe 100644
+--- a/arch/arm64/kernel/traps.c
++++ b/arch/arm64/kernel/traps.c
+@@ -282,6 +282,9 @@ void die(const char *str, struct pt_regs *regs, int err)
+ 	raw_spin_unlock_irq(&die_lock);
+ 	oops_exit();
+ 
++	if (preemptible())
++		preempt_disable();
++
+ 	if (in_interrupt())
+ 		panic("Fatal exception in interrupt");
+ 	if (panic_on_oops)
+-- 
+2.14.1
+

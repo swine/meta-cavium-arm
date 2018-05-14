@@ -1,0 +1,43 @@
+From 5824b807201d4399c339538560a4dbf6f9209fa3 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Fri, 9 Dec 2016 10:31:55 +0100
+Subject: [PATCH 050/375] i2c: octeon: thunderx: TWSI software reset in
+ recovery
+
+I've seen i2c recovery reporting long loops of:
+
+[ 1035.887818] i2c i2c-4: SCL is stuck low, exit recovery
+[ 1037.999748] i2c i2c-4: SCL is stuck low, exit recovery
+[ 1040.111694] i2c i2c-4: SCL is stuck low, exit recovery
+...
+
+Add a TWSI software reset which clears the status and
+STA,STP,IFLG in SW_TWSI_EOP_TWSI_CTL.
+
+With this the recovery works fine and above message is not seen.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+Signed-off-by: Wolfram Sang <wsa@the-dreams.de>
+---
+ drivers/i2c/busses/i2c-octeon.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/i2c/busses/i2c-octeon.c b/drivers/i2c/busses/i2c-octeon.c
+index 30ae35146723..0534f46b4075 100644
+--- a/drivers/i2c/busses/i2c-octeon.c
++++ b/drivers/i2c/busses/i2c-octeon.c
+@@ -1060,6 +1060,11 @@ static void octeon_i2c_prepare_recovery(struct i2c_adapter *adap)
+ {
+ 	struct octeon_i2c *i2c = i2c_get_adapdata(adap);
+ 
++	octeon_i2c_hlc_disable(i2c);
++	octeon_i2c_reg_write(i2c, SW_TWSI_EOP_TWSI_RST, 0);
++	/* wait for software reset to settle */
++	udelay(5);
++
+ 	/*
+ 	 * The stop resets the state machine, does not _transmit_ STOP unless
+ 	 * engine was active.
+-- 
+2.14.1
+

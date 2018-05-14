@@ -1,0 +1,29 @@
+From e83fa57fcdb06f437337b52a8d174f27ba617a64 Mon Sep 17 00:00:00 2001
+From: Dan Carpenter <dan.carpenter@oracle.com>
+Date: Thu, 13 Apr 2017 22:47:48 +0300
+Subject: [PATCH 333/375] mmc: cavium: Fix a shift wrapping bug
+
+"dat" is a u64 and "shift" starts as 54 so this is a shift wrapping bug.
+
+Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+---
+ drivers/mmc/host/cavium.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/mmc/host/cavium.c b/drivers/mmc/host/cavium.c
+index a82e9843e225..df81423b96f2 100644
+--- a/drivers/mmc/host/cavium.c
++++ b/drivers/mmc/host/cavium.c
+@@ -733,7 +733,7 @@ static void do_write_request(struct cvm_mmc_host *host, struct mmc_request *mrq)
+ 		}
+ 
+ 		while (smi->consumed < smi->length && shift >= 0) {
+-			dat |= ((u8 *)smi->addr)[smi->consumed] << shift;
++			dat |= (u64)((u8 *)smi->addr)[smi->consumed] << shift;
+ 			bytes_xfered++;
+ 			smi->consumed++;
+ 			shift -= 8;
+-- 
+2.14.1
+

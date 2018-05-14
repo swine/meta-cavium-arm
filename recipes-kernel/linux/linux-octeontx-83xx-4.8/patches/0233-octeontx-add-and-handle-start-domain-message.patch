@@ -1,0 +1,113 @@
+From 4fc7db23cf64d54fd5f0cc206978058042ddd7de Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lb@semihalf.com>
+Date: Wed, 16 Aug 2017 14:46:35 +0200
+Subject: [PATCH 233/375] octeontx: add and handle start domain message
+
+The purpose of start domain message is to inform kernel driver
+that a given domain is being used by an odp application and while
+being used it can not be destroyed. Kernel driver clears the flag
+preventing domain destruction on each domain reset. It also stores
+jiffies of last domain reset and does not allow to destroy domain
+within 1 second since last domain reset to account for time difference
+when odp application opens devices and a time when it actually sends
+start domain message to the kernel driver.
+
+Signed-off-by: Lukasz Bartosik <lb@semihalf.com>
+---
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  | 31 ++++++++++++++++++++++
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  |  2 ++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index cd4623855a11..bccfcc12a1f1 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -39,6 +39,12 @@ static struct device *octtx_device;
+ static struct class *octtx_class;
+ static dev_t octtx_dev;
+ 
++/* Number of milliseconds we wait since last domain reset before we allow
++ * domain to be destroyed, this is to account for a time between application
++ * opens devices and a time it actually sends RM_START_DOMAIN message over
++ * mailbox
++ */
++#define DESTROY_DELAY_IN_MS	1000
+ #define	MIN_DOMAIN_ID	4
+ static atomic_t gbl_domain_id = ATOMIC_INIT(MIN_DOMAIN_ID);
+ 
+@@ -66,6 +72,8 @@ struct octtx_domain {
+ 	int setup;
+ 	int type;
+ 	char name[1024];
++	bool in_use;
++	ulong last_reset_jiffies;
+ 
+ 	int pko_vf_count;
+ 	int fpa_vf_count;
+@@ -349,6 +357,16 @@ static int octtx_master_receive_message(struct mbox_hdr *hdr,
+ 		dpipf->receive_message(0, domain->domain_id, hdr,
+ 				       req, resp, add_data);
+ 		break;
++	case NO_COPROC:
++		if (hdr->msg == RM_START_DOMAIN) {
++			domain->in_use = true;
++			/* make sure it is flushed to memory because threads
++			 * using it might be running on different cores
++			 */
++			mb();
++			hdr->res_code = MBOX_RET_SUCCESS;
++			break;
++		}
+ 	case SSOW_COPROC:
+ 	default:
+ 		dev_err(octtx_device, "invalid mbox message\n");
+@@ -376,6 +394,15 @@ void octeontx_destroy_domain(const char *domain_name)
+ 	}
+ 
+ 	if (domain) {
++		if (domain->in_use ||
++		    time_before(jiffies, domain->last_reset_jiffies +
++		    msecs_to_jiffies(DESTROY_DELAY_IN_MS))) {
++			dev_err(octtx_device,
++				"Error domain %d on node %d is in use.\n",
++				domain->domain_id, domain->node);
++			goto err_unlock;
++		}
++
+ 		octeontx_reset_domain(domain);
+ 		do_destroy_domain(domain);
+ 		list_del(&domain->list);
+@@ -383,6 +410,7 @@ void octeontx_destroy_domain(const char *domain_name)
+ 		kfree(domain);
+ 	}
+ 
++err_unlock:
+ 	spin_unlock(&octeontx_domains_lock);
+ }
+ 
+@@ -899,6 +927,9 @@ static int octeontx_reset_domain(void *master_data)
+ 		return ret;
+ 	}
+ 
++	domain->in_use = false;
++	domain->last_reset_jiffies = jiffies;
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index a2f4bdfd925f..715e5d7d4139 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -49,6 +49,8 @@ enum coproc_t {
+ #define DPI_REG_DUMP	0x3
+ #define DPI_GET_REG_CFG 0x4
+ 
++#define RM_START_DOMAIN		0x1
++
+ /*resp messages*/
+ #define MBOX_RET_SUCCESS	0x0
+ #define MBOX_RET_INVALID	0x1
+-- 
+2.14.1
+

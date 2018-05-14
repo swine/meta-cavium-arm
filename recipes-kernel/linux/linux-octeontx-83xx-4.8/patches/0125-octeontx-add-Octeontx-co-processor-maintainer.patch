@@ -1,0 +1,1530 @@
+From 26e57baa05135b1d572b78f8ed20db726a13ec0a Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Thu, 9 Mar 2017 15:53:14 -0800
+Subject: [PATCH 125/375] octeontx: add Octeontx co processor maintainer
+
+Add A chardev and sysfs to create domains.
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/Kconfig                |   6 +
+ drivers/net/ethernet/cavium/octeontx-83xx/Makefile |   2 +
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c    | 704 +++++++++++++++++++++
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.h    |  35 +
+ .../net/ethernet/cavium/octeontx-83xx/octeontx.h   |  13 +-
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  | 680 ++++++++++++++++++++
+ 6 files changed, 1438 insertions(+), 2 deletions(-)
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/bgx.h
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index 1518c04a330e..30c9a1a03de0 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -115,5 +115,11 @@ config OCTEONTX_SSOW_PF
+ 	  Select this option to enable SSOW Physical function.
+           SSOW is a way to get work for cores.
+ 
++config OCTEONTX
++	tristate "OcteonTX coprocessor maintanier"
++	depends on THUNDER_NIC_BGX && OCTEONTX_FPA_PF && OCTEONTX_SSO_PF
++	default y
++	help
++	  Select this option to enable Octeon coprocessor management.
+ 
+ endif # NET_VENDOR_CAVIUM
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+index 874d94ad804d..41a8b854e7dd 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+@@ -7,9 +7,11 @@ obj-$(CONFIG_OCTEONTX_FPA_VF) += fpavf.o
+ obj-$(CONFIG_OCTEONTX_RST) += rst.o
+ obj-$(CONFIG_OCTEONTX_SSO_PF) += ssopf.o
+ obj-$(CONFIG_OCTEONTX_SSOW_PF) += ssowpf.o
++obj-$(CONFIG_OCTEONTX) += octeontx.o
+ 
+ fpapf-objs := fpapf_main.o
+ fpavf-objs := fpavf_main.o
+ rst-objs := rst_main.o
+ ssopf-objs := ssopf_main.o octeontx_mbox.o
+ ssowpf-objs := ssowpf_main.o
++octeontx-objs := octeontx_main.o bgx.o
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+new file mode 100644
+index 000000000000..94fcb34be841
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -0,0 +1,704 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/random.h>
++
++#include "../thunder/thunder_bgx.h"
++#include "../thunder/nic.h"
++#include "bgx.h"
++
++#define BGX_LMAC_NUM_CHANS 16
++#define BGX_LMAC_BASE_CHAN(__bgx, __lmac) \
++	(0x800 | ((__bgx) << 8) | ((__lmac) << 4)) /* PKI_CHAN_E */
++
++#define BGX_INVALID_ID	(-1)
++
++/* BGX CSRs (offsets from the PF base address for particular BGX:LMAC).
++ * NOTE: Most of the CSR definitions are provided in thunder_bgx.h.
++ * Here, only missing registers or those, which do not match OCTEONTX
++ * definions in HRM.
++ * TODO: Consider to provide here a full list of CSRs and use them instead
++ * of those in the thunder driver.
++ */
++#define BGX_CMR_CONFIG			0x0
++#define BGX_CMR_GLOBAL_CONFIG		0x8
++#define BGX_CMR_RX_BP_STATUS		0xF0
++#define BGX_CMR_RX_DMAC_CAM(__dmac)	(0x200 + ((__dmac) * 0x8))
++
++/* BGX device Configuration and Control Block */
++struct bgxpf {
++	struct list_head list; /* List of BGX devices */
++	void __iomem *reg_base;
++	int node; /* CPU node */
++	int bgx_idx; /* CPU-local BGX device index.*/
++	int lmac_count;
++};
++
++/* Global lists of LBK devices and ports */
++static DEFINE_SPINLOCK(octeontx_bgx_lock);
++static LIST_HEAD(octeontx_bgx_devices);
++static LIST_HEAD(octeontx_bgx_ports);
++
++/* Interface with the thunder driver */
++static struct thunder_bgx_com_s *thbgx;
++
++static struct bgxpf *get_bgx_dev(int node, int bgx_idx)
++{
++	struct bgxpf *dev;
++
++	list_for_each_entry(dev, &octeontx_bgx_devices, list) {
++		if (dev->node == node && dev->bgx_idx == bgx_idx)
++			return dev;
++	}
++	return NULL;
++}
++
++static struct octtx_bgx_port *get_bgx_port(int domain_id, int port_idx)
++{
++	struct octtx_bgx_port *port;
++
++	spin_lock(&octeontx_bgx_lock);
++	list_for_each_entry(port, &octeontx_bgx_ports, list) {
++		if (port->domain_id == domain_id &&
++		    port->dom_port_idx == port_idx) {
++			spin_unlock(&octeontx_bgx_lock);
++			return port;
++		}
++	}
++	spin_unlock(&octeontx_bgx_lock);
++	return NULL;
++}
++
++static void bgx_reg_write(struct bgxpf *bgx, u64 lmac, u64 offset, u64 val)
++{
++	writeq_relaxed(val, bgx->reg_base + (lmac << 20) + offset);
++}
++
++static u64 bgx_reg_read(struct bgxpf *bgx, u64 lmac, u64 offset)
++{
++	return readq_relaxed(bgx->reg_base + (lmac << 20) + offset);
++}
++
++/* BGX Interface functions.
++ */
++static int bgx_get_num_ports(int node)
++{
++	struct octtx_bgx_port *port;
++	int count = 0;
++
++	spin_lock(&octeontx_bgx_lock);
++	list_for_each_entry(port, &octeontx_bgx_ports, list) {
++		if (port->node == node)
++			count++;
++	}
++	spin_unlock(&octeontx_bgx_lock);
++	return count;
++}
++
++static int bgx_get_link_status(int node, int bgx, int lmac)
++{
++	struct bgx_link_status link;
++
++	thbgx->get_link_status(node, bgx, lmac, &link);
++	return link.link_up;
++}
++
++static struct octtx_bgx_port *bgx_get_port_by_chan(int node, u16 domain_id,
++						   int chan)
++{
++	struct octtx_bgx_port *port;
++	int max_chan;
++
++	spin_lock(&octeontx_bgx_lock);
++	list_for_each_entry(port, &octeontx_bgx_ports, list) {
++		if (port->domain_id == BGX_INVALID_ID ||
++		    port->domain_id != domain_id ||
++				port->node != node)
++			continue;
++		max_chan = port->base_chan + port->num_chans;
++		if (chan >= port->base_chan && chan < max_chan) {
++			spin_unlock(&octeontx_bgx_lock);
++			return port;
++		}
++	}
++	spin_unlock(&octeontx_bgx_lock);
++	return NULL;
++}
++
++/* Main MBOX message processing function.
++ */
++static int bgx_port_open(struct octtx_bgx_port *port);
++static int bgx_port_close(struct octtx_bgx_port *port);
++static int bgx_port_start(struct octtx_bgx_port *port);
++static int bgx_port_stop(struct octtx_bgx_port *port);
++static int bgx_port_config(struct octtx_bgx_port *port,
++			   mbox_bgx_port_conf_t *conf);
++static int bgx_port_status(struct octtx_bgx_port *port,
++			   mbox_bgx_port_status_t *stat);
++static int bgx_port_stats_get(struct octtx_bgx_port *port,
++			      mbox_bgx_port_stats_t *stat);
++static int bgx_port_stats_clr(struct octtx_bgx_port *port);
++static int bgx_port_link_status(struct octtx_bgx_port *port, u8 *up);
++static int bgx_port_promisc_set(struct octtx_bgx_port *port, u8 on);
++static int bgx_port_macaddr_set(struct octtx_bgx_port *port, u8 macaddr[]);
++static int bgx_port_bp_set(struct octtx_bgx_port *port, u8 on);
++static int bgx_port_bcast_set(struct octtx_bgx_port *port, u8 on);
++static int bgx_port_mcast_set(struct octtx_bgx_port *port, u8 on);
++
++static int bgx_receive_message(u32 id, u16 domain_id, struct mbox_hdr *hdr,
++			       union mbox_data *req,
++			       union mbox_data *resp, void *mdata)
++{
++	struct octtx_bgx_port *port;
++
++	if (!mdata)
++		return -ENOMEM;
++	port = get_bgx_port(domain_id, hdr->vfid);
++	if (!port) {
++		hdr->res_code = MBOX_RET_INVALID;
++		return -ENODEV;
++	}
++	switch (hdr->msg) {
++	case MBOX_BGX_PORT_OPEN:
++		bgx_port_open(port);
++		bgx_port_config(port, mdata);
++		resp->data = sizeof(mbox_bgx_port_conf_t);
++		break;
++	case MBOX_BGX_PORT_CLOSE:
++		bgx_port_close(port);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_START:
++		bgx_port_start(port);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_STOP:
++		bgx_port_stop(port);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_GET_CONFIG:
++		bgx_port_config(port, mdata);
++		resp->data = sizeof(mbox_bgx_port_conf_t);
++		break;
++	case MBOX_BGX_PORT_GET_STATUS:
++		bgx_port_status(port, mdata);
++		resp->data = sizeof(mbox_bgx_port_status_t);
++		break;
++	case MBOX_BGX_PORT_GET_STATS:
++		bgx_port_stats_get(port, mdata);
++		resp->data = sizeof(mbox_bgx_port_stats_t);
++		break;
++	case MBOX_BGX_PORT_CLR_STATS:
++		bgx_port_stats_clr(port);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_GET_LINK_STATUS:
++		bgx_port_link_status(port, mdata);
++		resp->data = sizeof(u8);
++		break;
++	case MBOX_BGX_PORT_SET_PROMISC:
++		bgx_port_promisc_set(port, *(u8 *)mdata);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_SET_MACADDR:
++		bgx_port_macaddr_set(port, mdata);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_SET_BP:
++		bgx_port_bp_set(port, *(u8 *)mdata);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_SET_BCAST:
++		bgx_port_bcast_set(port, *(u8 *)mdata);
++		resp->data = 0;
++		break;
++	case MBOX_BGX_PORT_SET_MCAST:
++		bgx_port_mcast_set(port, *(u8 *)mdata);
++		resp->data = 0;
++		break;
++	default:
++		hdr->res_code = MBOX_RET_INVALID;
++		return -EINVAL;
++	}
++	hdr->res_code = MBOX_RET_SUCCESS;
++	return 0;
++}
++
++/* MBOX message processing support functions.
++ */
++int bgx_port_open(struct octtx_bgx_port *port)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++
++	/* Stop the port first:*/
++	bgx_port_stop(port);
++
++	/* Route packet data to/from PKI/PKO: */
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMR_CONFIG);
++	reg |= CMR_X2P_SELECT_PKI | CMR_P2X_SELECT_PKO;
++	bgx_reg_write(bgx, port->lmac, BGX_CMR_CONFIG, reg);
++
++	/* Setup PKI port (pkind): */
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_ID_MAP, port->pkind);
++	return 0;
++}
++
++int bgx_port_close(struct octtx_bgx_port *port)
++{
++	struct bgxpf *bgx;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	/* Park the BGX output to the PKI port 0: */
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_ID_MAP, 0);
++	return 0;
++}
++
++int bgx_port_start(struct octtx_bgx_port *port)
++{
++	thbgx->enable(port->node, port->bgx, port->lmac);
++	return 0;
++}
++
++int bgx_port_stop(struct octtx_bgx_port *port)
++{
++	thbgx->disable(port->node, port->bgx, port->lmac);
++	return 0;
++}
++
++int bgx_port_config(struct octtx_bgx_port *port, mbox_bgx_port_conf_t *conf)
++{
++	struct bgxpf *bgx;
++	const u8 *macaddr;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	conf->node = port->node;
++	conf->bgx = port->bgx;
++	conf->lmac = port->lmac;
++	conf->base_chan = port->base_chan;
++	conf->num_chans = port->num_chans;
++
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_ID_MAP);
++	conf->pkind = reg & 0x3F; /* PKND */
++
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMR_CONFIG);
++	conf->mode = (reg >> 8) & 0x7; /* LMAC_TYPE */
++	conf->enable = (reg & CMR_PKT_TX_EN) &&
++			(reg & CMR_PKT_RX_EN) && (reg & CMR_EN);
++
++	reg = bgx_reg_read(bgx, 0, BGX_CMR_GLOBAL_CONFIG);
++	conf->fcs_strip = (reg >> 6) & 0x1; /* FCS_STRIP */
++
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL);
++	conf->bcast_mode = reg & 0x1; /* BCAST_ACCEPT */
++	conf->mcast_mode = (reg >> 1) & 0x3; /* MCAST_MODE */
++
++	macaddr = thbgx->get_mac_addr(port->node, port->bgx, port->lmac);
++	memcpy(conf->macaddr, macaddr, 6);
++	return 0;
++}
++
++int bgx_port_status(struct octtx_bgx_port *port, mbox_bgx_port_status_t *stat)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMR_RX_BP_STATUS);
++	stat->bp = reg & 0x1; /* BP */
++	stat->link_up = bgx_get_link_status(port->node, port->bgx, port->lmac);
++	return 0;
++}
++
++int bgx_port_stats_get(struct octtx_bgx_port *port,
++		       mbox_bgx_port_stats_t *stats)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	memset(stats, 0, sizeof(mbox_bgx_port_stats_t));
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT0);
++	stats->rx_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT1);
++	stats->rx_bytes = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT4);
++	stats->rx_dropped = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT6);
++	stats->rx_dropped += reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT8);
++	stats->rx_errors = reg;
++	reg = bgx_reg_read(bgx, 0, BGX_CMRX_RX_STAT9);
++	stats->rx_dropped += reg;
++
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT0);
++	stats->tx_dropped = reg;
++	stats->collisions = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT2);
++	stats->collisions += reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT3);
++	stats->collisions += reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT4);
++	stats->tx_bytes = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT5);
++	stats->tx_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT6);
++	stats->tx_1_to_64_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT7);
++	stats->tx_1_to_64_packets += reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT8);
++	stats->tx_65_to_127_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT9);
++	stats->tx_128_to_255_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT10);
++	stats->tx_256_to_511_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT11);
++	stats->tx_512_to_1023_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT12);
++	stats->tx_1024_to_1522_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT13);
++	stats->tx_1523_to_max_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT14);
++	stats->tx_broadcast_packets = reg;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT15);
++	stats->tx_multicast_packets = reg;
++	return 0;
++}
++
++int bgx_port_stats_clr(struct octtx_bgx_port *port)
++{
++	struct bgxpf *bgx;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT0, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT1, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT2, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT3, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT4, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT5, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT6, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT7, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_STAT8, 0);
++	bgx_reg_write(bgx, 0, BGX_CMRX_RX_STAT9, 0);
++	bgx_reg_write(bgx, 0, BGX_CMRX_RX_STAT10, 0);
++
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT0, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT1, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT2, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT3, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT4, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT5, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT6, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT7, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT8, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT9, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT10, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT11, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT12, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT13, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT14, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT15, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT16, 0);
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_TX_STAT17, 0);
++	return 0;
++}
++
++int bgx_port_link_status(struct octtx_bgx_port *port, u8 *up)
++{
++	*up = bgx_get_link_status(port->node, port->bgx, port->lmac);
++	return 0;
++}
++
++int bgx_port_promisc_set(struct octtx_bgx_port *port, u8 on)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++	int i;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++
++	if (on) { /* Enable */
++		/* CAM_ACCEPT = 0 */
++		reg = 0x1; /* BCAST_ACCEPT = 1 */
++		reg |= 0x1ull << 1; /* MCAST_MODE = 1 */
++		bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL, reg);
++
++		for (i = 0; i < 32; i++) {
++			reg = bgx_reg_read(bgx, 0, BGX_CMR_RX_DMAC_CAM(i));
++			if (((reg >> 49) & 0x3)/* ID */ == port->lmac)
++				reg &= ~(0x1ull << 48); /* EN = 0*/
++			bgx_reg_write(bgx, 0, BGX_CMR_RX_DMAC_CAM(i), reg);
++		}
++	} else { /* Disable = enable packet filtering */
++		reg = 0x1ull << 3; /* CAM_ACCEPT = 1 */
++		reg |= 0x1ull << 1; /* MCAST_MODE = 1 */
++		reg |= 0x1; /* BCAST_ACCEPT = 1 */
++		bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL, reg);
++
++		for (i = 0; i < 32; i++) {
++			reg = bgx_reg_read(bgx, 0, BGX_CMR_RX_DMAC_CAM(i));
++			if (((reg >> 49) & 0x3)/* ID */ == port->lmac)
++				reg |= 0x1ull << 48; /* EN = 1 */
++			bgx_reg_write(bgx, 0, BGX_CMR_RX_DMAC_CAM(i), reg);
++		}
++	}
++	return 0;
++}
++
++int bgx_port_macaddr_set(struct octtx_bgx_port *port, u8 macaddr[])
++{
++	thbgx->set_mac_addr(port->node, port->bgx, port->lmac, macaddr);
++	return 0;
++}
++
++int bgx_port_bp_set(struct octtx_bgx_port *port, u8 on)
++{
++	struct bgxpf *bgx;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	/* TODO */
++	return 0;
++}
++
++int bgx_port_bcast_set(struct octtx_bgx_port *port, u8 on)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL);
++	if (on)
++		reg |= 0x1; /* BCAST_ACCEPT = 1 */
++	else
++		reg &= ~0x1; /* BCAST_ACCEPT = 0 */
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL, reg);
++	return 0;
++}
++
++int bgx_port_mcast_set(struct octtx_bgx_port *port, u8 on)
++{
++	struct bgxpf *bgx;
++	u64 reg;
++
++	bgx = get_bgx_dev(port->node, port->bgx);
++	if (!bgx)
++		return -EINVAL;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL);
++	if (on)
++		reg |= (1ull << 1) & 0x3; /* MCAST_MODE = 1 */
++	else
++		reg &= ~(0x3ull << 1); /* MCAST_MODE = 0 */
++	bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_DMAC_CTL, reg);
++	return 0;
++}
++
++/* Domain create function.
++ */
++static int bgx_create_domain(u32 id, u16 domain_id,
++			     struct octtx_bgx_port *port_tbl, int ports,
++		struct octeontx_master_com_t *com, void *domain)
++{
++	struct octtx_bgx_port *port, *gport;
++	struct bgxpf *bgx;
++	int port_idx;
++
++	/* For each domain port, find requested entry in the list of
++	 * global ports and sync up those two port structures.
++	 */
++	spin_lock(&octeontx_bgx_lock);
++	for (port_idx = 0; port_idx < ports; port_idx++) {
++		port = &port_tbl[port_idx];
++
++		list_for_each_entry(gport, &octeontx_bgx_ports, list) {
++			if (gport->node != id)
++				continue;
++			if (gport->glb_port_idx != port->glb_port_idx)
++				continue;
++			/* Check for conflicts with other domains. */
++			if (gport->domain_id != BGX_INVALID_ID) {
++				spin_unlock(&octeontx_bgx_lock);
++				return -EINVAL;
++			}
++			/* Domain port: */
++			port->node = gport->node;
++			port->bgx = gport->bgx;
++			port->lmac = gport->lmac;
++			port->lmac_type = gport->lmac_type;
++			port->base_chan = gport->base_chan;
++			port->num_chans = gport->num_chans;
++			/* Global port: */
++			gport->domain_id = domain_id;
++			gport->dom_port_idx = port_idx;
++			/* Hardware: */
++			bgx = get_bgx_dev(port->node, port->bgx);
++			bgx_reg_write(bgx, port->lmac,
++				      BGX_CMRX_RX_ID_MAP, 0);
++		}
++	}
++	spin_unlock(&octeontx_bgx_lock);
++	return 0;
++}
++
++/* Domain destroy function.
++ */
++static int bgx_destroy_domain(u32 id, u16 domain_id)
++{
++	struct octtx_bgx_port *port;
++	struct bgxpf *bgx;
++
++	spin_lock(&octeontx_bgx_lock);
++	list_for_each_entry(port, &octeontx_bgx_ports, list) {
++		if (port->node == id && port->domain_id == domain_id) {
++			port->domain_id = BGX_INVALID_ID;
++			port->dom_port_idx = BGX_INVALID_ID;
++
++			bgx = get_bgx_dev(port->node, port->bgx);
++			bgx_reg_write(bgx, port->lmac, BGX_CMRX_RX_ID_MAP, 0);
++		}
++	}
++	spin_unlock(&octeontx_bgx_lock);
++	return 0;
++}
++
++/* Domain reset function.
++ */
++static int bgx_reset_domain(u32 id, u16 domain_id)
++{
++	struct octtx_bgx_port *port;
++
++	spin_lock(&octeontx_bgx_lock);
++	list_for_each_entry(port, &octeontx_bgx_ports, list) {
++		if (port->node == id && port->domain_id == domain_id)
++			bgx_port_stop(port);
++	}
++	spin_unlock(&octeontx_bgx_lock);
++	return 0;
++}
++
++/* Set pkind for a given port.
++ */
++static int bgx_set_pkind(u32 id, u16 domain_id, int port, int pkind)
++{
++	struct octtx_bgx_port *gport;
++
++	gport = get_bgx_port(domain_id, port);
++	if (!gport)
++		return -EINVAL;
++	/* Domain port: */
++	gport->pkind = pkind;
++
++	return 0;
++}
++
++/* Interface with the main OCTEONTX driver.
++ */
++struct bgx_com_s bgx_com  = {
++	.create_domain = bgx_create_domain,
++	.free_domain = bgx_destroy_domain,
++	.reset_domain = bgx_reset_domain,
++	.receive_message = bgx_receive_message,
++	.get_num_ports = bgx_get_num_ports,
++	.get_link_status = bgx_get_link_status,
++	.get_port_by_chan = bgx_get_port_by_chan,
++	.set_pkind = bgx_set_pkind
++};
++EXPORT_SYMBOL(bgx_com);
++
++/* BGX "octeontx" driver specific initialization.
++ * NOTE: The primiary BGX driver startup and initialization is performed
++ * in the "thunder" driver.
++ */
++struct bgx_com_s *bgx_octeontx_init(void)
++{
++	struct octtx_bgx_port *port;
++	struct bgxpf *bgx = NULL;
++	u64 bgx_map;
++	int bgx_idx;
++	int lmac_idx;
++	int port_count = 0;
++	int node = 0;
++	u64 iobase, iosize, reg;
++
++	thbgx = try_then_request_module(symbol_get(thunder_bgx_com),
++					"thunder_bgx");
++	if (!thbgx)
++		return NULL;
++
++	bgx_map = thbgx->get_bgx_count(node);
++
++	for_each_set_bit(bgx_idx, (unsigned long *)&bgx_map,
++			 sizeof(bgx_map) * 8) {
++		iobase = thbgx->get_reg_base(node, bgx_idx, &iosize);
++		if (iobase == 0)
++			goto error_handler;
++
++		bgx = kzalloc(sizeof(*bgx), GFP_KERNEL);
++		if (!bgx)
++			goto error_handler;
++
++		bgx->reg_base = ioremap(iobase, iosize);
++		if (!bgx->reg_base)
++			goto error_handler;
++
++		bgx->lmac_count = thbgx->get_lmac_count(node, bgx_idx);
++		bgx->node = node;
++		bgx->bgx_idx = bgx_idx;
++		INIT_LIST_HEAD(&bgx->list);
++		list_add(&bgx->list, &octeontx_bgx_devices);
++
++		for (lmac_idx = 0; lmac_idx < bgx->lmac_count; lmac_idx++) {
++			port = kzalloc(sizeof(*port), GFP_KERNEL);
++			if (!port)
++				goto error_handler;
++			port->glb_port_idx = port_count;
++			port->node = node;
++			port->bgx = bgx_idx;
++			port->lmac = lmac_idx;
++			port->base_chan = BGX_LMAC_BASE_CHAN(bgx_idx, lmac_idx);
++			port->num_chans = BGX_LMAC_NUM_CHANS;
++			port->domain_id = BGX_INVALID_ID;
++			port->dom_port_idx = BGX_INVALID_ID;
++			reg = bgx_reg_read(bgx, lmac_idx, BGX_CMR_CONFIG);
++			port->lmac_type = (reg >> 8) & 0x7; /* LMAC_TYPE */
++			INIT_LIST_HEAD(&port->list);
++			list_add(&port->list, &octeontx_bgx_ports);
++			port_count++;
++		}
++	}
++	return &bgx_com;
++
++error_handler:
++	symbol_put(thunder_bgx_com);
++	kfree(bgx);
++	return NULL;
++}
++
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h
+new file mode 100644
+index 000000000000..5b09e2c50be4
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h
+@@ -0,0 +1,35 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef __BGX_H__
++#define __BGX_H__
++
++#include <linux/pci.h>
++#include <linux/types.h>
++#include "octeontx.h"
++
++struct bgx_com_s {
++	int (*create_domain)(u32 id, u16 domain_id,
++			     struct octtx_bgx_port *port_tbl, int ports,
++			struct octeontx_master_com_t *com, void *domain);
++	int (*free_domain)(u32 id, u16 domain_id);
++	int (*reset_domain)(u32 id, u16 domain_id);
++	int (*receive_message)(u32 id, u16 domain_id, struct mbox_hdr *hdr,
++			       union mbox_data *req, union mbox_data *resp,
++				void *mdata);
++	int (*get_num_ports)(int node);
++	int (*get_link_status)(int node, int bgx, int lmac);
++	struct octtx_bgx_port* (*get_port_by_chan)(int node, u16 domain_id,
++						   int chan);
++	int (*set_pkind)(u32 id, u16 domain_id, int port, int pkind);
++};
++
++struct bgx_com_s *bgx_octeontx_init(void);
++
++#endif /* __BGX_H__ */
++
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+index 10b6410a4d8e..03097d2458ed 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+@@ -61,7 +61,15 @@ enum domain_type {
+ };
+ 
+ /* Domain network (BGX) port */
+-#define OCTEONTX_MAX_BGX_PORTS 16 /* Maximum BGX ports per System */
++#define OCTTX_MAX_BGX_PORTS 16 /* Maximum BGX ports per System */
++
++/* Same as in BGX_CMR_CONFIG[lmac_type] */
++#define OCTTX_BGX_LMAC_TYPE_SGMII  0
++#define OCTTX_BGX_LMAC_TYPE_XAUI   1
++#define OCTTX_BGX_LMAC_TYPE_RXAUI  2
++#define OCTTX_BGX_LMAC_TYPE_10GR   3
++#define OCTTX_BGX_LMAC_TYPE_40GR   4
++#define OCTTX_BGX_LMAC_TYPE_QSGMII 6
+ 
+ struct octtx_bgx_port {
+ 	struct list_head list;
+@@ -71,6 +79,7 @@ struct octtx_bgx_port {
+ 	int	node; /* CPU node */
+ 	int	bgx; /* Node-local BGX device index */
+ 	int	lmac; /* BGX-local port/LMAC number/index */
++	int	lmac_type; /* OCTTX_BGX_LMAC_TYPE_nnn */
+ 	int	base_chan; /* Node-local base channel (PKI_CHAN_E) */
+ 	int	num_chans;
+ 	int	pkind; /* PKI port number */
+@@ -78,7 +87,7 @@ struct octtx_bgx_port {
+ };
+ 
+ /* Domain internal (LBK) port */
+-#define OCTEONTX_MAX_LBK_PORTS 2 /* Maximum LBK ports per System */
++#define OCTTX_MAX_LBK_PORTS 2 /* Maximum LBK ports per System */
+ 
+ struct octtx_lbk_port {
+ 	struct list_head list;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+new file mode 100644
+index 000000000000..810c4647e1de
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -0,0 +1,680 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/interrupt.h>
++#include <linux/etherdevice.h>
++#include <linux/cdev.h>
++#include <linux/uaccess.h>
++#include <linux/device.h>
++
++#include "octeontx.h"
++#include "octeontx_mbox.h"
++#include "fpa.h"
++#include "fpa.h"
++#include "sso.h"
++#include "bgx.h"
++
++#define DRV_NAME "octeontx"
++#define DRV_VERSION "0.1"
++#define DEVICE_NAME "octtx-ctr"
++#define CLASS_NAME "octeontx-rm"
++
++static struct cdev *octtx_cdev;
++static struct device *octtx_device;
++static struct class *octtx_class;
++static dev_t octtx_dev;
++
++static atomic_t gbl_domain_id = ATOMIC_INIT(4);
++
++static struct bgx_com_s *bgx;
++//static struct lbk_com_s *lbk;
++static struct fpapf_com_s *fpapf;
++static struct ssopf_com_s *ssopf;
++//static struct pkopf_com_s *pkopf;
++//static struct timpf_com_s *timpf;
++static struct ssowpf_com_s *ssowpf;
++//static struct pki_com_s *pki;
++
++struct delayed_work dwork;
++struct delayed_work dwork_reset;
++struct workqueue_struct *check_link;
++struct workqueue_struct *reset_domain;
++
++struct octtx_domain {
++	struct list_head list;
++	int node;
++	int domain_id;
++	int setup;
++	int type;
++	char name[1024];
++
++	int pko_vf_count;
++	int fpa_vf_count;
++	int sso_vf_count;
++	int ssow_vf_count;
++	int tim_vf_count;
++
++	u64 aura_set;
++	u64 grp_mask;
++
++	int num_bgx_ports;
++	int num_lbk_ports;
++	struct octtx_bgx_port bgx_port[OCTTX_MAX_BGX_PORTS];
++	struct octtx_lbk_port lbk_port[OCTTX_MAX_LBK_PORTS];
++
++	struct attribute_group sysfs_group;
++	struct device_attribute dom_attr;
++};
++
++static DEFINE_SPINLOCK(octeontx_domains_lock);
++static LIST_HEAD(octeontx_domains);
++
++MODULE_AUTHOR("Tirumalesh Chalamarla");
++MODULE_DESCRIPTION("Cavium OCTEONTX coprocessor management Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++
++int octeontx_create_domain(const char *name, int type,
++			   int sso_count, int fpa_count, int ssow_count,
++		int pko_count, int pki_count, int tim_count,
++		int bgx_count, int lbk_count, const long int *bgx_port,
++		const long int *lbk_port);
++
++static ssize_t octtx_create_domain_show(struct device *dev,
++					struct device_attribute *attr,
++					char *buf)
++{
++	return snprintf(buf, PAGE_SIZE, "0\n");
++}
++
++static ssize_t octtx_create_domain_store(struct device *dev,
++					 struct device_attribute *attr,
++					const char *buf,
++					size_t count)
++{
++	int ret = 0;
++	char *start;
++	char *end;
++	char *name;
++	char *temp;
++	long int type;
++	long int sso_count = 0;
++	long int fpa_count = 0;
++	long int ssow_count = 0;
++	long int pko_count = 0;
++	long int tim_count = 0;
++	long int bgx_count = 0;
++	long int lbk_count = 0;
++	long int lbk_port[OCTTX_MAX_LBK_PORTS];
++	long int bgx_port[OCTTX_MAX_BGX_PORTS];
++
++	end = kzalloc(PAGE_SIZE, GFP_KERNEL);
++	memcpy(end, buf, count);
++
++	start = strsep(&end, ";");
++	if (!start)
++		goto error;
++
++	name = strsep(&start, ":");
++	if (!start)
++		type = APP_NET;
++	else if (kstrtol(start, 10, &type))
++		goto error;
++
++	for (;;) {
++		start = strsep(&end, ";");
++		if (!start)
++			break;
++		if (!*start)
++			continue;
++
++		if (!strncmp(start, "ssow", sizeof("ssow") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &ssow_count))
++				goto error;
++		} else if (!strncmp(start, "fpa", sizeof("fpa") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &fpa_count))
++				goto error;
++		} else if (!strncmp(start, "sso", sizeof("sso") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &sso_count))
++				goto error;
++		} else if (!strncmp(start, "pko", sizeof("pko") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &pko_count))
++				goto error;
++		} else if (!strncmp(start, "pki", sizeof("pki") - 1)) {
++			continue;
++		} else if (!strncmp(start, "tim", sizeof("tim") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &tim_count))
++				goto error;
++		} else if (!strncmp(start, "net", sizeof("net") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &bgx_port[bgx_count]))
++				goto error;
++			bgx_count++;
++		} else if (!strncmp(start, "virt", sizeof("virt") - 1)) {
++			temp = strsep(&start, ":");
++			if (kstrtol(start, 10, &lbk_port[lbk_count]))
++				goto error;
++			lbk_count++;
++		} else {
++			goto error;
++		}
++	}
++
++	ret = octeontx_create_domain(name, type, sso_count, fpa_count,
++				     ssow_count, pko_count, 1, tim_count,
++					bgx_count, lbk_count,
++					(const long int *)bgx_port,
++					(const long int *)lbk_port);
++	if (ret)
++		goto error;
++
++	return count;
++error:
++	dev_err(dev, "Command failed..\n");
++	return count;
++}
++
++static DEVICE_ATTR(create_domain, 0600, octtx_create_domain_show,
++		octtx_create_domain_store);
++
++static struct attribute *octtx_attrs[] = {
++	&dev_attr_create_domain.attr,
++	NULL
++};
++
++static struct attribute *octtx_def_attrs[] = {
++	NULL
++};
++
++static struct attribute_group octtx_attr_group = {
++	.name = "octtx_attr",
++	.attrs = octtx_attrs,
++};
++
++int octtx_sysfs_init(struct device *octtx_device)
++{
++	int ret;
++
++	ret = sysfs_create_group(&octtx_device->kobj, &octtx_attr_group);
++	if (ret < 0) {
++		dev_err(octtx_device, " create_domain sysfs failed\n");
++		return ret;
++	}
++	return 0;
++}
++
++void octtx_sysfs_remove(struct device *octtx_device)
++{
++	kobject_put(&octtx_device->kobj);
++}
++
++static int octtx_master_receive_message(struct mbox_hdr *hdr,
++					union mbox_data *req,
++					union mbox_data *resp,
++					void *master_data,
++					void *add_data)
++{
++	struct octtx_domain *domain = master_data;
++
++	switch (hdr->coproc) {
++	case PKI_COPROC:
++		//pki->receive_message(0, domain->domain_id, hdr, req,
++		//			resp, add_data);
++		break;
++	case FPA_COPROC:
++		fpapf->receive_message(0, domain->domain_id, hdr, req, resp,
++				       add_data);
++		break;
++	case BGX_COPROC:
++	//	bgx->receive_message(0, domain->domain_id, hdr,
++	//			req, resp, add_data);
++		break;
++	case LBK_COPROC:
++	//	lbk->receive_message(0, domain->domain_id, hdr,
++	//			req, resp, add_data);
++		break;
++	case PKO_COPROC:
++	//	pkopf->receive_message(0, domain->domain_id, hdr, req, resp);
++		break;
++	case TIM_COPROC:
++	//	timpf->receive_message(0, domain->domain_id, hdr,
++	//			req, resp, add_data);
++		break;
++	case SSOW_COPROC:
++	case SSO_COPROC:
++	default:
++		dev_err(octtx_device, "invalid mbox message\n");
++		hdr->res_code = MBOX_RET_INVALID;
++		break;
++	}
++	return 0;
++}
++
++static struct octeontx_master_com_t octtx_master_com = {
++	.receive_message = octtx_master_receive_message,
++};
++
++void octeontx_remove_domain(int node, int domain_id)
++{
++	struct octtx_domain *domain = NULL;
++	struct octtx_domain *curr;
++
++	spin_lock(&octeontx_domains_lock);
++	list_for_each_entry(curr, &octeontx_domains, list) {
++		if (curr->domain_id == domain_id && curr->node == node)
++			domain = curr;
++	}
++
++	if (domain) {
++		list_del(&domain->list);
++		kfree(domain);
++	}
++	spin_unlock(&octeontx_domains_lock);
++
++	bgx->free_domain(node, domain_id);
++	//lbk->free_domain(node, domain_id);
++	//pkopf->free_domain(node, domain_id);
++	//pki->free_domain(node, domain_id);
++	ssopf->free_domain(node, domain_id);
++	ssowpf->free_domain(node, domain_id);
++	fpapf->free_domain(node, domain_id);
++}
++
++static ssize_t octtx_domain_id_show(struct device *dev,
++				    struct device_attribute *attr,
++				char *buf)
++{
++	struct octtx_domain *domain;
++
++	domain = container_of(attr, struct octtx_domain, dom_attr);
++
++	return snprintf(buf, PAGE_SIZE, "%d\n", domain->domain_id);
++}
++
++int octeontx_create_domain(const char *name, int type,
++			   int sso_count, int fpa_count, int ssow_count,
++		int pko_count, int pki_count, int tim_count,
++		int bgx_count, int lbk_count, const long int *bgx_port,
++		const long int *lbk_port)
++{
++	int node = 0;
++	struct octtx_domain *domain;
++	u16 domain_id;
++	int ret = -EINVAL;
++	int i;
++	void *ssow_ram_mbox_addr = NULL;
++
++	list_for_each_entry(domain, &octeontx_domains, list) {
++		if (!strcmp(name, domain->name))
++			return -EEXIST;
++	}
++	/*get DOMAIN ID */
++	domain_id = atomic_add_return(1, &gbl_domain_id);
++	domain_id -= 1;
++
++	domain = kzalloc(sizeof(*domain), GFP_KERNEL);
++	if (!domain)
++		return -ENOMEM;
++
++	domain->node = node;
++	domain->domain_id = domain_id;
++	memcpy(domain->name, name, strlen(name));
++	domain->type = type;
++
++	domain->sysfs_group.name = domain->name;
++	domain->sysfs_group.attrs = octtx_def_attrs;
++	ret = sysfs_create_group(&octtx_device->kobj, &domain->sysfs_group);
++	if (ret < 0) {
++		dev_err(octtx_device, " create_domain sysfs failed\n");
++		goto error;
++	}
++
++	domain->fpa_vf_count = fpa_count;
++	domain->aura_set = fpapf->create_domain(node, domain_id,
++						domain->fpa_vf_count,
++						&octtx_device->kobj,
++						domain->name);
++	if (!domain->aura_set) {
++		dev_err(octtx_device, "Failed to create FPA domain\n");
++		ret = -ENODEV;
++		goto error;
++	}
++
++	domain->ssow_vf_count = ssow_count;
++	ret = ssowpf->create_domain(node, domain_id, domain->ssow_vf_count,
++				&octtx_master_com, domain,
++				&octtx_device->kobj, domain->name);
++	if (ret) {
++		dev_err(octtx_device, "Failed to create SSOW domain\n");
++		goto error;
++	}
++
++	domain->sso_vf_count = sso_count;
++	domain->grp_mask = ssopf->create_domain(node, domain_id,
++			domain->sso_vf_count,
++			&octtx_master_com, domain,
++			&octtx_device->kobj, domain->name);
++	if (!domain->grp_mask) {
++		dev_err(octtx_device, "Failed to create SSO domain\n");
++		goto error;
++	}
++
++	ret = ssowpf->get_ram_mbox_addr(node, domain_id, &ssow_ram_mbox_addr);
++	if (ret) {
++		dev_err(octtx_device, "Failed to get_ssow_ram_mbox_addr\n");
++		goto error;
++	}
++
++	ret = ssopf->set_mbox_ram(node, domain_id,
++				  ssow_ram_mbox_addr, SSOW_RAM_MBOX_SIZE);
++	if (ret) {
++		dev_err(octtx_device, "Failed to set_ram_addr\n");
++		goto error;
++	}
++
++	/* There is a global list of all network (BGX-based) ports
++	 * detected by the thunder driver and provided to this driver.
++	 * This list is maintained in bgx.c (octeontx_bgx_ports).
++	 * In general domain creation, a list of domain local ports
++	 * is constructed as a subset of global ports, where mapping
++	 * of domain-local to global indexes is provided as follows:
++	 * domain->bgx_port[i].port_idx = i; -- domain-local port index.
++	 * domain->bgx_port[i].port_gidx = n; -- global port index.
++	 * In this, default configuraiton, all available ports are
++	 * given to this domain, except port 0, which is under
++	 * Linux, hosting the dataplane application, control.
++	 */
++	domain->num_bgx_ports = bgx_count;
++	for (i = 0; i < domain->num_bgx_ports; i++) {
++		domain->bgx_port[i].domain_id = domain_id;
++		domain->bgx_port[i].dom_port_idx = i;
++		domain->bgx_port[i].glb_port_idx = bgx_port[i];
++	}
++	ret = bgx->create_domain(node, domain_id, domain->bgx_port, i,
++			&octtx_master_com, domain);
++	if (ret) {
++		dev_err(octtx_device, "Failed to create BGX domain\n");
++		goto error;
++	}
++	domain->dom_attr.show = octtx_domain_id_show;
++	domain->dom_attr.attr.name = "domain_id";
++	domain->dom_attr.attr.mode = 0444;
++	sysfs_attr_init(&domain->dom_attr.attr);
++	ret = sysfs_add_file_to_group(&octtx_device->kobj,
++				      &domain->dom_attr.attr, domain->name);
++	if (ret < 0) {
++		dev_err(octtx_device, " create_domain sysfs failed\n");
++		goto error;
++	}
++	spin_lock(&octeontx_domains_lock);
++	INIT_LIST_HEAD(&domain->list);
++	list_add(&domain->list, &octeontx_domains);
++	spin_unlock(&octeontx_domains_lock);
++	return 0;
++error:
++	octeontx_remove_domain(node, domain_id);
++	return ret;
++}
++
++static int octeontx_reset_domain(void *master_data)
++{
++	struct octtx_domain *domain = master_data;
++	void *ssow_ram_mbox_addr = NULL;
++	int node = domain->node;
++	int ret;
++
++	/* Reset co-processors */
++	ret = bgx->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset BGX of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	ret = ssopf->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset SSO of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	ret = ssowpf->reset_domain(node, domain->domain_id, domain->grp_mask);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset SSOW of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	/* FPA reset should be the last one to call*/
++	ret = fpapf->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset FPA of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	/* Reset mailbox */
++	ret = ssowpf->get_ram_mbox_addr(node, domain->domain_id,
++					&ssow_ram_mbox_addr);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed ram_mbox_addr for node (%d): domain (%d)\n",
++			node, domain->domain_id);
++		return ret;
++	}
++	ret = ssopf->set_mbox_ram(node, domain->domain_id,
++				  ssow_ram_mbox_addr, SSOW_RAM_MBOX_SIZE);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to set_ram_addr for node (%d): domain (%d)\n",
++		       node, domain->domain_id);
++		return ret;
++	}
++
++	return 0;
++}
++
++static void poll_for_link(struct work_struct *work)
++{
++	struct octtx_domain *domain;
++	int i, node, bgx_idx, lmac;
++	int link_up;
++
++	spin_lock(&octeontx_domains_lock);
++	list_for_each_entry(domain, &octeontx_domains, list) {
++		/* don't bother if setup is not done */
++		if (!domain->setup)
++			continue;
++
++		for (i = 0; i < domain->num_bgx_ports; i++) {
++			node = domain->bgx_port[i].node;
++			bgx_idx = domain->bgx_port[i].bgx;
++			lmac = domain->bgx_port[i].lmac;
++			link_up = bgx->get_link_status(node, bgx_idx, lmac);
++			/* Inform only if link status changed */
++			if (link_up == domain->bgx_port[i].link_up)
++				continue;
++
++			domain->bgx_port[i].link_up = link_up;
++		}
++	}
++	spin_unlock(&octeontx_domains_lock);
++	queue_delayed_work(check_link, &dwork, HZ * 2);
++}
++
++void octtx_reset_domain(struct work_struct *work)
++{
++	struct octtx_domain *domain;
++	int i, master_sso;
++	extern atomic_t octtx_sso_reset[];
++	u64 val;
++
++	spin_lock(&octeontx_domains_lock);
++	list_for_each_entry(domain, &octeontx_domains, list) {
++		/* find first SSO from domain */
++		master_sso = __ffs(domain->grp_mask);
++		for_each_set_bit(i, (unsigned long *)&domain->grp_mask,
++				 sizeof(domain->aura_set) * 8) {
++			val = atomic_read(&octtx_sso_reset[i]);
++			if ((master_sso == i) && val) {
++				spin_unlock(&octeontx_domains_lock);
++				octeontx_reset_domain(domain);
++				spin_lock(&octeontx_domains_lock);
++			}
++			atomic_set(&octtx_sso_reset[i], 0);
++			/*makesure the otherend receives it*/
++			mb();
++		}
++	}
++	spin_unlock(&octeontx_domains_lock);
++	queue_delayed_work(reset_domain, &dwork_reset, 10);
++}
++
++static int octtx_dev_open(struct inode *inode, struct file *fp)
++{
++	/* Nothing to do */
++	return 0;
++}
++
++static int octtx_dev_release(struct inode *inode, struct file *fp)
++{
++	return 0;
++}
++
++static const struct file_operations fops = {
++	.owner = THIS_MODULE,
++	.open = octtx_dev_open,
++	.release = octtx_dev_release
++};
++
++static int __init octeontx_init_module(void)
++{
++	int ret;
++
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	bgx = bgx_octeontx_init();
++	if (!bgx)
++		return -ENODEV;
++	fpapf = try_then_request_module(symbol_get(fpapf_com), "fpapf");
++	if (!fpapf) {
++		symbol_put(lbk_com);
++		return -ENODEV;
++	}
++	ssopf = try_then_request_module(symbol_get(ssopf_com), "ssopf");
++	if (!ssopf) {
++		symbol_put(lbk_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++	ssowpf = try_then_request_module(symbol_get(ssowpf_com), "ssowpf");
++	if (!ssowpf) {
++		symbol_put(lbk_com);
++		symbol_put(ssopf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++	/* Register a physical link status poll fn() */
++	check_link = alloc_workqueue("octeontx_check_link_status",
++				     WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
++	if (!check_link) {
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENOMEM;
++	}
++
++	/* Register a physical link status poll fn() */
++	reset_domain = alloc_workqueue("octeontx_reset_domain",
++				       WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
++	if (!reset_domain) {
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENOMEM;
++	}
++	INIT_DELAYED_WORK(&dwork, poll_for_link);
++	INIT_DELAYED_WORK(&dwork_reset, octtx_reset_domain);
++	queue_delayed_work(check_link, &dwork, 0);
++	queue_delayed_work(reset_domain, &dwork_reset, 0);
++
++	/* create a char device */
++	ret = alloc_chrdev_region(&octtx_dev, 1, 1, DEVICE_NAME);
++	if (ret != 0) {
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++	octtx_cdev = cdev_alloc();
++	if (!octtx_cdev) {
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++	cdev_init(octtx_cdev, &fops);
++	ret = cdev_add(octtx_cdev, octtx_dev, 1);
++	if (ret < 0) {
++		cdev_del(octtx_cdev);
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++
++	/* create new class for sysfs*/
++	octtx_class = class_create(THIS_MODULE, CLASS_NAME);
++	if (IS_ERR(octtx_class)) {
++		cdev_del(octtx_cdev);
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++
++	octtx_device = device_create(octtx_class, NULL, octtx_dev, NULL,
++				     DEVICE_NAME);
++	if (IS_ERR(octtx_device)) {
++		class_unregister(octtx_class);
++		class_destroy(octtx_class);
++		cdev_del(octtx_cdev);
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++
++	octtx_sysfs_init(octtx_device);
++	/* Done */
++	return 0;
++}
++
++static void __exit octeontx_cleanup_module(void)
++{
++	octtx_sysfs_remove(octtx_device);
++	device_destroy(octtx_class, octtx_dev);
++	class_unregister(octtx_class);
++	class_destroy(octtx_class);
++	cdev_del(octtx_cdev);
++	symbol_put(ssopf_com);
++	symbol_put(ssowpf_com);
++	symbol_put(fpapf_com);
++}
++
++module_init(octeontx_init_module);
++module_exit(octeontx_cleanup_module);
+-- 
+2.14.1
+

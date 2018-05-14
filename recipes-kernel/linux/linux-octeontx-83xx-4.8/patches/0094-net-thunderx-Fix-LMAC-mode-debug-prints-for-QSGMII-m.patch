@@ -1,0 +1,34 @@
+From 5778b57399593d4fe9baa2a9bf5f5014c8415ca5 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Mon, 30 Jan 2017 13:11:28 +0530
+Subject: [PATCH 094/375] net: thunderx: Fix LMAC mode debug prints for QSGMII
+ mode
+
+When BGX/LMACs are in QSGMII mode, for some LMACs, mode info is
+not being printed. This patch will fix that.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index dcca028892b7..01e932ae8e8b 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -926,12 +926,6 @@ static void bgx_print_qlm_mode(struct bgx *bgx, u8 lmacid)
+ 			dev_info(dev, "%s: 40G_KR4\n", (char *)str);
+ 		break;
+ 	case BGX_MODE_QSGMII:
+-		if ((lmacid == 0) &&
+-		    (bgx_get_lane2sds_cfg(bgx, lmac) != lmacid))
+-			return;
+-		if ((lmacid == 2) &&
+-		    (bgx_get_lane2sds_cfg(bgx, lmac) == lmacid))
+-			return;
+ 		dev_info(dev, "%s: QSGMII\n", (char *)str);
+ 		break;
+ 	case BGX_MODE_RGMII:
+-- 
+2.14.1
+

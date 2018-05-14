@@ -1,0 +1,43 @@
+From d0e4980fa14bb8b589c38df954445d2c3f7cae25 Mon Sep 17 00:00:00 2001
+From: Peter Swain <pswain@cavium.com>
+Date: Wed, 20 Sep 2017 18:32:19 -0700
+Subject: [PATCH 301/375] mtd: nand: cavium_nand 4k page + 256 OOB support
+
+Expanding Cavium NFC controller page size to 4096,
+with 256 bytes OOB, to support Micron MT29F808GABA.
+
+Not yet tested on real nand-flash with 4k pages,
+but this change leaves behavior on
+smaller devices correct, and should work.
+
+This should probably be specified in devtree as
+         nand-ecc-mode = "soft";
+         nand-ecc-algo = "bch";
+         nand-ecc-size = "1024";
+         nand-ecc-strength = "7";
+because until Linux-4.12 brings in support for
+Micron on-die ECC, the soft BCH should be used
+
+Signed-off-by: Peter Swain <pswain@cavium.com>
+---
+ drivers/mtd/nand/cavium_nand.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mtd/nand/cavium_nand.c b/drivers/mtd/nand/cavium_nand.c
+index 27a0c127b01e..67c817f59132 100644
+--- a/drivers/mtd/nand/cavium_nand.c
++++ b/drivers/mtd/nand/cavium_nand.c
+@@ -250,8 +250,8 @@ union ndf_cmd {
+ #define NDF_ST_REG_MAIN_SM	GENMASK_ULL(2, 0) /* Main SM states */
+ 
+ #define MAX_NAND_NAME_LEN	64
+-#define NAND_MAX_PAGESIZE	2048
+-#define NAND_MAX_OOBSIZE	64
++#define NAND_MAX_PAGESIZE	4096
++#define NAND_MAX_OOBSIZE	256
+ 
+ /* NAND chip related information */
+ struct cvm_nand_chip {
+-- 
+2.14.1
+

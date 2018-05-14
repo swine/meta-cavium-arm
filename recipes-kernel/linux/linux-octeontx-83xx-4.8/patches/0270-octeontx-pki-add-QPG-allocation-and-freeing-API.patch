@@ -1,0 +1,48 @@
+From 727577a3d4c6462afcb1a5f319ff0c3d1790a0bb Mon Sep 17 00:00:00 2001
+From: Angela Czubak <aczubak@caviumnetworks.com>
+Date: Fri, 16 Mar 2018 13:05:39 +0100
+Subject: [PATCH 270/375] octeontx-pki: add QPG allocation and freeing API
+
+New MBOX messages have been added:
+- MBOX_PKI_PORT_ALLOC_QPG
+- MBOX_PKI_PORT_FREE_QPG
+Their purpose is to allocate/free QPG entries dynamically on per port
+basis. These messages use struct mbox_pki_port_qpg_attr, which field,
+qpg_base, is modified during allocation and is to be verified during
+freeing.
+
+Signed-off-by: Angela Czubak <aczubak@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index b79ee9985d27..e09f5af7247e 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -591,6 +591,8 @@ struct __attribute__((__packed__)) mbox_tim_ring_conf {
+ #define MBOX_PKI_PORT_RESET_STATS		18
+ #define MBOX_PKI_GET_PORT_CONFIG		19
+ #define MBOX_PKI_GET_PORT_QOS_CONFIG		20
++#define MBOX_PKI_PORT_ALLOC_QPG			21
++#define MBOX_PKI_PORT_FREE_QPG			22
+ 
+ /* pki pkind parse mode */
+ enum  {
+@@ -606,6 +608,13 @@ typedef struct mbox_pki_port_type {
+ 	u8 port_type;
+ } mbox_pki_port_t;
+ 
++/* pki port qpg config */
++struct mbox_pki_port_qpg_attr {
++	u8 port_type; /* [in] port type, lbk or bgx */
++	u32 qpg_base; /* [out/in] QPG base that was allocated to the port */
++	u32 qpg_num;  /* [in] number of QPG entries to allocate/free */
++};
++
+ /* pki port config */
+ typedef struct mbox_pki_port_cfg {
+ 	u8 port_type;
+-- 
+2.14.1
+

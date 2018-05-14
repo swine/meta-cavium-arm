@@ -1,0 +1,80 @@
+From 60313e399f86a0b4978e3d6c5424af1d4f1f4238 Mon Sep 17 00:00:00 2001
+From: James Morse <james.morse@arm.com>
+Date: Mon, 3 Apr 2017 11:26:06 +0900
+Subject: [PATCH 169/375] Documentation: dt: chosen properties for arm64 kdump
+
+Add documentation for DT properties:
+	linux,usable-memory-range
+	linux,elfcorehdr
+used by arm64 kdump. Those are, respectively, a usable memory range
+allocated to crash dump kernel and the elfcorehdr's location within it.
+
+Signed-off-by: James Morse <james.morse@arm.com>
+[takahiro.akashi@linaro.org: update the text due to recent changes ]
+Signed-off-by: AKASHI Takahiro <takahiro.akashi@linaro.org>
+Acked-by: Mark Rutland <mark.rutland@arm.com>
+Cc: devicetree@vger.kernel.org
+Cc: Rob Herring <robh+dt@kernel.org>
+Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+
+(cherry picked from commit fcbd4bb71e913d4be7a6d39f622479499bb73bfe)
+---
+ Documentation/devicetree/bindings/chosen.txt | 45 ++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/chosen.txt b/Documentation/devicetree/bindings/chosen.txt
+index 6ae9d82d4c37..b5e39af4ddc0 100644
+--- a/Documentation/devicetree/bindings/chosen.txt
++++ b/Documentation/devicetree/bindings/chosen.txt
+@@ -52,3 +52,48 @@ This property is set (currently only on PowerPC, and only needed on
+ book3e) by some versions of kexec-tools to tell the new kernel that it
+ is being booted by kexec, as the booting environment may differ (e.g.
+ a different secondary CPU release mechanism)
++
++linux,usable-memory-range
++-------------------------
++
++This property (arm64 only) holds a base address and size, describing a
++limited region in which memory may be considered available for use by
++the kernel. Memory outside of this range is not available for use.
++
++This property describes a limitation: memory within this range is only
++valid when also described through another mechanism that the kernel
++would otherwise use to determine available memory (e.g. memory nodes
++or the EFI memory map). Valid memory may be sparse within the range.
++e.g.
++
++/ {
++	chosen {
++		linux,usable-memory-range = <0x9 0xf0000000 0x0 0x10000000>;
++	};
++};
++
++The main usage is for crash dump kernel to identify its own usable
++memory and exclude, at its boot time, any other memory areas that are
++part of the panicked kernel's memory.
++
++While this property does not represent a real hardware, the address
++and the size are expressed in #address-cells and #size-cells,
++respectively, of the root node.
++
++linux,elfcorehdr
++----------------
++
++This property (currently used only on arm64) holds the memory range,
++the address and the size, of the elf core header which mainly describes
++the panicked kernel's memory layout as PT_LOAD segments of elf format.
++e.g.
++
++/ {
++	chosen {
++		linux,elfcorehdr = <0x9 0xfffff000 0x0 0x800>;
++	};
++};
++
++While this property does not represent a real hardware, the address
++and the size are expressed in #address-cells and #size-cells,
++respectively, of the root node.
+-- 
+2.14.1
+

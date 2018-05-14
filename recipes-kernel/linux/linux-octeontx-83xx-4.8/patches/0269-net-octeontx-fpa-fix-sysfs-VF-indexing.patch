@@ -1,0 +1,55 @@
+From 99aa6ffc8b2387d1b7f963ece9708a1d31fcf0d9 Mon Sep 17 00:00:00 2001
+From: Stanislaw Kardach <stanislaw.kardach@cavium.com>
+Date: Tue, 27 Feb 2018 13:25:10 +0100
+Subject: [PATCH 269/375] net: octeontx-fpa: fix sysfs VF indexing
+
+pdev->devfn is offset from the pci_iov_virtfn_devfn(fpa->pdev, i) so
+the indexing of VF device structures in _show() functions was offset
+by 1 which caused invalid values to be shown.
+
+Additionally there was a possibility of a NULL offset read because of
+the indexing above.
+
+This commit fixes the indexing offset to retrieve a proper device
+structure. This applies for FPA device files: pool_maxcnt, pool_curcnt
+and pool_redcnt.
+
+Signed-off-by: Stanislaw Kardach <stanislaw.kardach@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+index d2b29fe266f1..20b1d862727e 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -250,7 +250,7 @@ static ssize_t pool_maxcnt_show(struct device *dev,
+ {
+ 	struct fpapf *curr, *fpa = NULL;
+ 	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+-	int i, n, vfid = pdev->devfn;
++	int i, n, vfid = pdev->devfn - 1;
+ 	u64 cnt;
+ 	char info[512];
+ 
+@@ -282,7 +282,7 @@ static ssize_t pool_curcnt_show(struct device *dev,
+ {
+ 	struct fpapf *curr, *fpa = NULL;
+ 	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+-	int i, n, vfid = pdev->devfn;
++	int i, n, vfid = pdev->devfn - 1;
+ 	u64 cnt;
+ 	char info[512];
+ 
+@@ -314,7 +314,7 @@ static ssize_t pool_redcnt_show(struct device *dev,
+ {
+ 	struct fpapf *curr, *fpa = NULL;
+ 	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+-	int i, n, vfid = pdev->devfn;
++	int i, n, vfid = pdev->devfn - 1;
+ 	u64 reg, ena, lvl, pass, drop, aura;
+ 	char *info;
+ 
+-- 
+2.14.1
+

@@ -1,0 +1,83 @@
+From 392789bc435fda4ce15e92732796b2997f1ec327 Mon Sep 17 00:00:00 2001
+From: Pavan Nikhilesh <pbhagavatula@caviumnetworks.com>
+Date: Thu, 10 Aug 2017 16:16:56 +0530
+Subject: [PATCH 218/375] octeontx-tim: added new mbox message.
+
+- new mbox message added to get the start time stamp of a tim vf ring,
+this can be used to mathematically calculate the current bucket instead
+of reading the register TIM_VRINGX_REL.
+
+Signed-off-by: Pavan Nikhilesh <pbhagavatula@caviumnetworks.com>
+---
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  |  2 ++
+ .../net/ethernet/cavium/octeontx-83xx/timpf_main.c | 24 ++++++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index ddf3a816d904..1d7f7ce2debf 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -485,6 +485,8 @@ struct mbox_sso_get_dump {
+ #define MBOX_TIM_RING_INFO_GET   2
+ /* Write ring configuration */
+ #define MBOX_TIM_RING_CONFIG_SET 3
++/* Read ring start cycle */
++#define MBOX_TIM_RING_START_CYC_GET 4
+ 
+ /* TIM device configuration and status parameters: */
+ struct __attribute__((__packed__)) mbox_tim_dev_info {
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+index facec731ed29..376fa48e6131 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+@@ -60,6 +60,7 @@
+ struct timpf_vf {
+ 	struct octeontx_pf_vf domain;
+ 	int vf_id;
++	u64 start_cyc;
+ };
+ 
+ struct timpf {
+@@ -178,6 +179,14 @@ static struct timpf *tim_dev_from_ringid(int id, int domain_id,
+ 	return NULL;
+ }
+ 
++static inline u64 rdtsc(void)
++{
++	u64 tsc;
++
++	asm volatile("mrs %0, cntvct_el0" : "=r" (tsc));
++	return tsc;
++}
++
+ /* Main MBOX message processing function.
+  */
+ static int tim_pf_receive_message(u32 id, u16 domain_id, struct mbox_hdr *hdr,
+@@ -236,9 +245,24 @@ static int tim_pf_receive_message(u32 id, u16 domain_id, struct mbox_hdr *hdr,
+ 		tim_reg_write(tim, TIM_RING_CTL2(ring), conf->ctl2);
+ 		tim_reg_write(tim, TIM_RING_CTL0(ring), conf->ctl0);
+ 		tim_reg_write(tim, TIM_RING_CTL1(ring), conf->ctl1);
++		tim->vf[ring].start_cyc = rdtsc();
+ 		resp->data = 0;
+ 		break;
+ 	}
++	case MBOX_TIM_RING_START_CYC_GET: {
++		u64 *ret = mdata;
++
++		tim = tim_dev_from_ringid(id, domain_id, hdr->vfid, &ring);
++		if (!tim) {
++			rc = -EINVAL;
++			break;
++		}
++		*ret = tim->vf[ring].start_cyc;
++		resp->data = sizeof(uint64_t);
++		/*make sure the writes are comitted*/
++		wmb();
++		break;
++	}
+ 	default:
+ 		rc = -EINVAL;
+ 		resp->data = 0;
+-- 
+2.14.1
+

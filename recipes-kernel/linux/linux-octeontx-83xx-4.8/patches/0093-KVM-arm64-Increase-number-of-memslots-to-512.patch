@@ -1,0 +1,49 @@
+From 391377678a4f7355fb09f3326baf94c9dc14e4ee Mon Sep 17 00:00:00 2001
+From: Linu Cherian <linu.cherian@cavium.com>
+Date: Wed, 11 Jan 2017 11:47:26 +0530
+Subject: [PATCH 093/375] KVM: arm64: Increase number of memslots to 512
+
+Having only 32 memslots is a real constraint for the maximum number of
+PCI devices that can be assigned to a single guest. Assuming each PCI
+device/virtual function having two memory BAR regions, we could assign
+only 15 devices/virtual functions to a guest.
+
+So increase KVM_MEM_SLOTS_NUM to 512 as done in other archs like x86 and
+powerpc. For this, KVM_USER_MEM_SLOTS has been changed to 508.
+
+Signed-off-by: Linu Cherian <linu.cherian@cavium.com>
+---
+ arch/arm/kvm/arm.c                | 3 +++
+ arch/arm64/include/asm/kvm_host.h | 2 +-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/kvm/arm.c b/arch/arm/kvm/arm.c
+index c94b90d43772..c933f0eb533d 100644
+--- a/arch/arm/kvm/arm.c
++++ b/arch/arm/kvm/arm.c
+@@ -199,6 +199,9 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_MAX_VCPUS:
+ 		r = KVM_MAX_VCPUS;
+ 		break;
++	case KVM_CAP_NR_MEMSLOTS:
++		r = KVM_USER_MEM_SLOTS;
++		break;
+ 	default:
+ 		r = kvm_arch_dev_ioctl_check_extension(kvm, ext);
+ 		break;
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 3eda975837d0..e2451b25617b 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -30,7 +30,7 @@
+ 
+ #define __KVM_HAVE_ARCH_INTC_INITIALIZED
+ 
+-#define KVM_USER_MEM_SLOTS 32
++#define KVM_USER_MEM_SLOTS 508
+ #define KVM_PRIVATE_MEM_SLOTS 4
+ #define KVM_COALESCED_MMIO_PAGE_OFFSET 1
+ #define KVM_HALT_POLL_NS_DEFAULT 500000
+-- 
+2.14.1
+

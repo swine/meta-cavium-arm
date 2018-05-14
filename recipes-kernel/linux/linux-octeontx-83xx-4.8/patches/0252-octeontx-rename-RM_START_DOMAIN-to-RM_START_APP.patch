@@ -1,0 +1,53 @@
+From 52a9906029f299c7a997cb499a2c3a724e3c1513 Mon Sep 17 00:00:00 2001
+From: Krzysztof Kanas <kk@semihalf.com>
+Date: Fri, 15 Sep 2017 13:38:26 +0200
+Subject: [PATCH 252/375] octeontx: rename RM_START_DOMAIN to RM_START_APP
+
+Align message name with current agreement.
+The message RM_START_DOMAIN was used to notify the kernel about ODP
+application start.
+
+Signed-off-by: Krzysztof Kanas <kk@semihalf.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c | 4 ++--
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index e32d9a4694d8..be379b2c6115 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -42,7 +42,7 @@ static dev_t octtx_dev;
+ 
+ /* Number of milliseconds we wait since last domain reset before we allow
+  * domain to be destroyed, this is to account for a time between application
+- * opens devices and a time it actually sends RM_START_DOMAIN message over
++ * opens devices and a time it actually sends RM_START_APP message over
+  * mailbox
+  */
+ #define DESTROY_DELAY_IN_MS	1000
+@@ -362,7 +362,7 @@ static int octtx_master_receive_message(struct mbox_hdr *hdr,
+ 				       req, resp, add_data);
+ 		break;
+ 	case NO_COPROC:
+-		if (hdr->msg == RM_START_DOMAIN) {
++		if (hdr->msg == RM_START_APP) {
+ 			domain->in_use = true;
+ 			/* make sure it is flushed to memory because threads
+ 			 * using it might be running on different cores
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index 715e5d7d4139..385884fff6b6 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -49,7 +49,7 @@ enum coproc_t {
+ #define DPI_REG_DUMP	0x3
+ #define DPI_GET_REG_CFG 0x4
+ 
+-#define RM_START_DOMAIN		0x1
++#define RM_START_APP		0x1
+ 
+ /*resp messages*/
+ #define MBOX_RET_SUCCESS	0x0
+-- 
+2.14.1
+

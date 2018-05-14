@@ -1,0 +1,31 @@
+From 8c7bae2cb15bb27d0d3c4e39e09663a0b1330259 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Thu, 19 Oct 2017 16:16:38 -0700
+Subject: [PATCH 249/375] net: thunderx: Fix driver crash during lbk0
+ activation
+
+During lbk0 activation on 83xx, randomly, depending on the system
+configuraiton, NIC driver crashes due to it is trying to execute PTP
+setup for LBK, which is not available and not initialized.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index 156f22e2d3f2..ae904f3792bb 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -1193,7 +1193,7 @@ static void nic_config_timestamp(struct nicpf *nic, int vf, struct set_ptp *ptp)
+ 	u8 lmac, bgx_idx;
+ 	u64 pkind_val, pkind_idx;
+ 
+-	if (vf >= nic->num_vf_en)
++	if (vf >= nic->num_vf_en || nic->lbk_vf == vf)
+ 		return;
+ 	bgx_idx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+ 	lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+-- 
+2.14.1
+

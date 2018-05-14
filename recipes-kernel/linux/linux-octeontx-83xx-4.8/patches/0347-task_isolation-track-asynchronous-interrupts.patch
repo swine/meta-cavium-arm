@@ -1,0 +1,374 @@
+From b4511cd23cba29964d6f38b2792ac601ac6eaa7e Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Mon, 23 Apr 2018 09:52:01 -0700
+Subject: [PATCH 347/375] task_isolation: track asynchronous interrupts
+
+This commit adds support for tracking asynchronous interrupts
+delivered to task-isolation tasks, e.g. IPIs or IRQs.  Just
+as for exceptions and syscalls, when this occurs we arrange to
+deliver a signal to the task so that it knows it has been
+interrupted.  If the task is interrupted by an NMI, we can't
+safely deliver a signal, so we just dump out a console stack.
+
+We also support a new "task_isolation_debug" flag which forces
+the console stack to be dumped out regardless.  We try to catch
+the original source of the interrupt, e.g. if an IPI is dispatched
+to a task-isolation task, we dump the backtrace of the remote
+core that is sending the IPI, rather than just dumping out a
+trace showing the core received an IPI from somewhere.
+
+Calls to task_isolation_debug() can be placed in the
+platform-independent code when that results in fewer lines
+of code changes, as for example is true of the users of the
+arch_send_call_function_*() APIs.  Or, they can be placed in the
+per-architecture code when there are many callers, as for example
+is true of the smp_send_reschedule() call.
+
+A further cleanup might be to create an intermediate layer, so that
+for example smp_send_reschedule() is a single generic function that
+just calls arch_smp_send_reschedule(), allowing generic code to be
+called every time smp_send_reschedule() is invoked.  But for now,
+we just update either callers or callees as makes most sense.
+
+This patch is ported to kernel 4.9.x by Alex Belits.
+
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+Signed-off-by: Alex Belits <alex.belits@cavium.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ Documentation/kernel-parameters.txt    |  8 ++++
+ include/linux/context_tracking_state.h |  6 +++
+ include/linux/isolation.h              | 13 ++++++
+ kernel/irq_work.c                      |  5 ++-
+ kernel/isolation.c                     | 74 ++++++++++++++++++++++++++++++++++
+ kernel/sched/core.c                    | 14 +++++++
+ kernel/signal.c                        |  7 ++++
+ kernel/smp.c                           |  6 ++-
+ kernel/softirq.c                       | 33 +++++++++++++++
+ 9 files changed, 164 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
+index 4b98c7fd6803..c67caaffc957 100644
+--- a/Documentation/kernel-parameters.txt
++++ b/Documentation/kernel-parameters.txt
+@@ -4017,6 +4017,14 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+ 			also sets up nohz_full and isolcpus mode for the
+ 			listed set of cpus.
+ 
++	task_isolation_debug	[KNL]
++			In kernels built with CONFIG_TASK_ISOLATION
++			and booted in task_isolation= mode, this
++			setting will generate console backtraces when
++			the kernel is about to interrupt a task that
++			has requested PR_TASK_ISOLATION_ENABLE and is
++			running on a task_isolation core.
++
+ 	tcpmhash_entries= [KNL,NET]
+ 			Set the number of tcp_metrics_hash slots.
+ 			Default value is 8192 or 16384 depending on total
+diff --git a/include/linux/context_tracking_state.h b/include/linux/context_tracking_state.h
+index 1d34fe68f48a..4e2c4b900b82 100644
+--- a/include/linux/context_tracking_state.h
++++ b/include/linux/context_tracking_state.h
+@@ -39,8 +39,14 @@ static inline bool context_tracking_in_user(void)
+ {
+ 	return __this_cpu_read(context_tracking.state) == CONTEXT_USER;
+ }
++
++static inline bool context_tracking_cpu_in_user(int cpu)
++{
++	return per_cpu(context_tracking.state, cpu) == CONTEXT_USER;
++}
+ #else
+ static inline bool context_tracking_in_user(void) { return false; }
++static inline bool context_tracking_cpu_in_user(int cpu) { return false; }
+ static inline bool context_tracking_active(void) { return false; }
+ static inline bool context_tracking_is_enabled(void) { return false; }
+ static inline bool context_tracking_cpu_is_enabled(void) { return false; }
+diff --git a/include/linux/isolation.h b/include/linux/isolation.h
+index d9288b85b41f..02728b1f8775 100644
+--- a/include/linux/isolation.h
++++ b/include/linux/isolation.h
+@@ -46,6 +46,17 @@ extern void _task_isolation_quiet_exception(const char *fmt, ...);
+ 			_task_isolation_quiet_exception(fmt, ## __VA_ARGS__); \
+ 	} while (0)
+ 
++extern void _task_isolation_debug(int cpu, const char *type);
++#define task_isolation_debug(cpu, type)					\
++	do {								\
++		if (task_isolation_possible(cpu))			\
++			_task_isolation_debug(cpu, type);		\
++	} while (0)
++
++extern void task_isolation_debug_cpumask(const struct cpumask *,
++					 const char *type);
++extern void task_isolation_debug_task(int cpu, struct task_struct *p,
++				      const char *type);
+ #else
+ static inline void task_isolation_init(void) { }
+ static inline bool task_isolation_possible(int cpu) { return false; }
+@@ -55,6 +66,8 @@ extern inline void task_isolation_set_flags(struct task_struct *p,
+ 					    unsigned int flags) { }
+ static inline int task_isolation_syscall(int nr) { return 0; }
+ static inline void task_isolation_quiet_exception(const char *fmt, ...) { }
++static inline void task_isolation_debug(int cpu, const char *type) { }
++#define task_isolation_debug_cpumask(mask, type) do {} while (0)
+ #endif
+ 
+ #endif
+diff --git a/kernel/irq_work.c b/kernel/irq_work.c
+index bcf107ce0854..15f3d44acf11 100644
+--- a/kernel/irq_work.c
++++ b/kernel/irq_work.c
+@@ -17,6 +17,7 @@
+ #include <linux/cpu.h>
+ #include <linux/notifier.h>
+ #include <linux/smp.h>
++#include <linux/isolation.h>
+ #include <asm/processor.h>
+ 
+ 
+@@ -75,8 +76,10 @@ bool irq_work_queue_on(struct irq_work *work, int cpu)
+ 	if (!irq_work_claim(work))
+ 		return false;
+ 
+-	if (llist_add(&work->llnode, &per_cpu(raised_list, cpu)))
++	if (llist_add(&work->llnode, &per_cpu(raised_list, cpu))) {
++		task_isolation_debug(cpu, "irq_work");
+ 		arch_send_call_function_single_ipi(cpu);
++	}
+ 
+ 	return true;
+ }
+diff --git a/kernel/isolation.c b/kernel/isolation.c
+index 4382e2043de9..be7e95192e76 100644
+--- a/kernel/isolation.c
++++ b/kernel/isolation.c
+@@ -11,6 +11,7 @@
+ #include <linux/vmstat.h>
+ #include <linux/isolation.h>
+ #include <linux/syscalls.h>
++#include <linux/ratelimit.h>
+ #include <asm/unistd.h>
+ #include <asm/syscall.h>
+ #include "time/tick-sched.h"
+@@ -216,3 +217,76 @@ int task_isolation_syscall(int syscall)
+ 					 -ERESTARTNOINTR, -1);
+ 	return -1;
+ }
++
++/* Enable debugging of any interrupts of task_isolation cores. */
++static int task_isolation_debug_flag;
++static int __init task_isolation_debug_func(char *str)
++{
++	task_isolation_debug_flag = true;
++	return 1;
++}
++__setup("task_isolation_debug", task_isolation_debug_func);
++
++void task_isolation_debug_task(int cpu, struct task_struct *p, const char *type)
++{
++	static DEFINE_RATELIMIT_STATE(console_output, HZ, 1);
++	bool force_debug = false;
++
++	/*
++	 * Our caller made sure the task was running on a task isolation
++	 * core, but make sure the task has enabled isolation.
++	 */
++	if (!(p->task_isolation_flags & PR_TASK_ISOLATION_ENABLE))
++		return;
++
++	/*
++	 * Ensure the task is actually in userspace; if it is in kernel
++	 * mode, it is expected that it may receive interrupts, and in
++	 * any case they don't affect the isolation.  Note that there
++	 * is a race condition here as a task may have committed
++	 * to returning to user space but not yet set the context
++	 * tracking state to reflect it, and the check here is before
++	 * we trigger the interrupt, so we might fail to warn about a
++	 * legitimate interrupt.  However, the race window is narrow
++	 * and hitting it does not cause any incorrect behavior other
++	 * than failing to send the warning.
++	 */
++	if (cpu != smp_processor_id() && !context_tracking_cpu_in_user(cpu))
++		return;
++
++	/*
++	 * We disable task isolation mode when we deliver a signal
++	 * so we won't end up recursing back here again.
++	 * If we are in an NMI, we don't try delivering the signal
++	 * and instead just treat it as if "debug" mode was enabled,
++	 * since that's pretty much all we can do.
++	 */
++	if (in_nmi())
++		force_debug = true;
++	else
++		task_isolation_deliver_signal(p, type);
++
++	/*
++	 * If (for example) the timer interrupt starts ticking
++	 * unexpectedly, we will get an unmanageable flow of output,
++	 * so limit to one backtrace per second.
++	 */
++	if (force_debug ||
++	    (task_isolation_debug_flag && __ratelimit(&console_output))) {
++		pr_err("cpu %d: %s violating task isolation for %s/%d on cpu %d\n",
++		       smp_processor_id(), type, p->comm, p->pid, cpu);
++		dump_stack();
++	}
++}
++
++void task_isolation_debug_cpumask(const struct cpumask *mask, const char *type)
++{
++	int cpu, thiscpu = get_cpu();
++
++	/* No need to report on this cpu since we're already in the kernel. */
++	for_each_cpu_and(cpu, mask, task_isolation_map)
++		if (cpu != thiscpu)
++			_task_isolation_debug(cpu, type);
++
++	put_cpu();
++}
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 44817c640e99..839b1d068525 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -75,6 +75,7 @@
+ #include <linux/compiler.h>
+ #include <linux/frame.h>
+ #include <linux/prefetch.h>
++#include <linux/isolation.h>
+ 
+ #include <asm/switch_to.h>
+ #include <asm/tlb.h>
+@@ -664,6 +665,19 @@ bool sched_can_stop_tick(struct rq *rq)
+ }
+ #endif /* CONFIG_NO_HZ_FULL */
+ 
++#ifdef CONFIG_TASK_ISOLATION
++void _task_isolation_debug(int cpu, const char *type)
++{
++	struct rq *rq = cpu_rq(cpu);
++	struct task_struct *task = try_get_task_struct(&rq->curr);
++
++	if (task) {
++		task_isolation_debug_task(cpu, task, type);
++		put_task_struct(task);
++	}
++}
++#endif
++
+ void sched_avg_update(struct rq *rq)
+ {
+ 	s64 period = sched_avg_period();
+diff --git a/kernel/signal.c b/kernel/signal.c
+index 1beed659254f..627a827d623e 100644
+--- a/kernel/signal.c
++++ b/kernel/signal.c
+@@ -639,6 +639,13 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
+  */
+ void signal_wake_up_state(struct task_struct *t, unsigned int state)
+ {
++	/*
++	 * We're delivering a signal anyway, so no need for more
++	 * warnings.  This also avoids self-deadlock since an IPI to
++	 * kick the task would otherwise generate another signal.
++	 */
++	task_isolation_set_flags(t, 0);
++
+ 	set_tsk_thread_flag(t, TIF_SIGPENDING);
+ 	/*
+ 	 * TASK_WAKEKILL also means wake it up in the stopped/traced/killable
+diff --git a/kernel/smp.c b/kernel/smp.c
+index 3aa642d39c03..35ca174db581 100644
+--- a/kernel/smp.c
++++ b/kernel/smp.c
+@@ -14,6 +14,7 @@
+ #include <linux/smp.h>
+ #include <linux/cpu.h>
+ #include <linux/sched.h>
++#include <linux/isolation.h>
+ 
+ #include "smpboot.h"
+ 
+@@ -162,8 +163,10 @@ static int generic_exec_single(int cpu, struct call_single_data *csd,
+ 	 * locking and barrier primitives. Generic code isn't really
+ 	 * equipped to do the right thing...
+ 	 */
+-	if (llist_add(&csd->llist, &per_cpu(call_single_queue, cpu)))
++	if (llist_add(&csd->llist, &per_cpu(call_single_queue, cpu))) {
++		task_isolation_debug(cpu, "IPI function");
+ 		arch_send_call_function_single_ipi(cpu);
++	}
+ 
+ 	return 0;
+ }
+@@ -441,6 +444,7 @@ void smp_call_function_many(const struct cpumask *mask,
+ 	}
+ 
+ 	/* Send a message to all CPUs in the map */
++	task_isolation_debug_cpumask(cfd->cpumask, "IPI function");
+ 	arch_send_call_function_ipi_mask(cfd->cpumask);
+ 
+ 	if (wait) {
+diff --git a/kernel/softirq.c b/kernel/softirq.c
+index 17caf4b63342..2f1065795318 100644
+--- a/kernel/softirq.c
++++ b/kernel/softirq.c
+@@ -26,6 +26,7 @@
+ #include <linux/smpboot.h>
+ #include <linux/tick.h>
+ #include <linux/irq.h>
++#include <linux/isolation.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/irq.h>
+@@ -319,6 +320,37 @@ asmlinkage __visible void do_softirq(void)
+ 	local_irq_restore(flags);
+ }
+ 
++/* Determine whether this IRQ is something task isolation cares about. */
++static void task_isolation_irq(void)
++{
++#ifdef CONFIG_TASK_ISOLATION
++	struct pt_regs *regs;
++
++	if (!context_tracking_cpu_is_enabled())
++		return;
++
++	/*
++	 * We have not yet called __irq_enter() and so we haven't
++	 * adjusted the hardirq count.  This test will allow us to
++	 * avoid false positives for nested IRQs.
++	 */
++	if (in_interrupt())
++		return;
++
++	/*
++	 * If we were already in the kernel, not from an irq but from
++	 * a syscall or synchronous exception/fault, this test should
++	 * avoid a false positive as well.  Note that this requires
++	 * architecture support for calling set_irq_regs() prior to
++	 * calling irq_enter(), and if it's not done consistently, we
++	 * will not consistently avoid false positives here.
++	 */
++	regs = get_irq_regs();
++	if (regs && user_mode(regs))
++		task_isolation_debug(smp_processor_id(), "irq");
++#endif
++}
++
+ /*
+  * Enter an interrupt context.
+  */
+@@ -335,6 +367,7 @@ void irq_enter(void)
+ 		_local_bh_enable();
+ 	}
+ 
++	task_isolation_irq();
+ 	__irq_enter();
+ }
+ 
+-- 
+2.14.1
+

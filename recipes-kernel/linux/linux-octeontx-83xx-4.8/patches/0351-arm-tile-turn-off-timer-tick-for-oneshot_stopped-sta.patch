@@ -1,0 +1,56 @@
+From e12bb36b8cc4b6c18b9af9fcf8bb18a9ad412eb0 Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:33 -0400
+Subject: [PATCH 351/375] arm, tile: turn off timer tick for oneshot_stopped
+ state
+
+When the schedule tick is disabled in tick_nohz_stop_sched_tick(),
+we call hrtimer_cancel(), which eventually calls down into
+__remove_hrtimer() and thus into hrtimer_force_reprogram().
+That function's call to tick_program_event() detects that
+we are trying to set the expiration to KTIME_MAX and calls
+clockevents_switch_state() to set the state to ONESHOT_STOPPED,
+and returns.  See commit 8fff52fd5093 ("clockevents: Introduce
+CLOCK_EVT_STATE_ONESHOT_STOPPED state") for more background.
+
+However, by default the internal __clockevents_switch_state() code
+doesn't have a "set_state_oneshot_stopped" function pointer for
+the arm_arch_timer or tile clock_event_device structures, so that
+code returns -ENOSYS, and we end up not setting the state, and more
+importantly, we don't actually turn off the hardware timer.
+As a result, the timer tick we were waiting for before is still
+queued, and fires shortly afterwards, only to discover there was
+nothing for it to do, at which point it quiesces.
+
+The fix is to provide that function pointer field, and like the
+other function pointers, have it just turn off the timer interrupt.
+Any call to set a new timer interval will properly re-enable it.
+
+This fix avoids a small performance hiccup for regular applications,
+but for TASK_ISOLATION code, it fixes a potentially serious
+kernel timer interruption to the time-sensitive application.
+
+Redundant clk->set_state_oneshot_stopped update removed by Alex Belits.
+
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+Acked-by: Daniel Lezcano <daniel.lezcano@linaro.org>
+Signed-off-by: Alex Belits <alex.belits@cavium.com>
+---
+ arch/tile/kernel/time.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/tile/kernel/time.c b/arch/tile/kernel/time.c
+index ea960d660917..a9c2297e8f25 100644
+--- a/arch/tile/kernel/time.c
++++ b/arch/tile/kernel/time.c
+@@ -159,6 +159,7 @@ static DEFINE_PER_CPU(struct clock_event_device, tile_timer) = {
+ 	.set_next_event = tile_timer_set_next_event,
+ 	.set_state_shutdown = tile_timer_shutdown,
+ 	.set_state_oneshot = tile_timer_shutdown,
++	.set_state_oneshot_stopped = tile_timer_shutdown,
+ 	.tick_resume = tile_timer_shutdown,
+ };
+ 
+-- 
+2.14.1
+

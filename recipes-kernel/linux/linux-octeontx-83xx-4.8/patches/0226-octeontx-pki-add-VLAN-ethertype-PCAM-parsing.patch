@@ -1,0 +1,285 @@
+From 492b332d663cc47f840683617b3134c48e68c2c7 Mon Sep 17 00:00:00 2001
+From: Vinita Gupta <vinita.gupta@cavium.com>
+Date: Fri, 18 Aug 2017 17:48:40 +0200
+Subject: [PATCH 226/375] octeontx-pki: add VLAN ethertype PCAM parsing
+
+Add default PCAM parsing for 3 VLAN ethertypes: 0x8100, 0x88a8 and
+0x9200. This uses up 3 PCAM entries per each PCAM bank and is available
+for each PKI STYLE.
+
+Signed-off-by: Vinita Gupta <vinita.gupta@cavium.com>
+Signed-off-by: Stanislaw Kardach <kda@semihalf.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    |  71 ++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_config.c |  13 ---
+ .../net/ethernet/cavium/octeontx-83xx/pki_main.c   | 127 +++++++++++++++++++++
+ 3 files changed, 198 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+index 2fa65680d662..33932d453213 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -229,6 +229,30 @@
+ #define PKI_PCAM_TERM_STYLE0_SHIFT	0
+ #define PKI_PCAM_TERM_STYLE1_MASK	0xffULL
+ #define PKI_PCAM_TERM_STYLE1_SHIFT	32
++#define PKI_PCAM_TERM_TERM0_MASK	0xffULL
++#define PKI_PCAM_TERM_TERM0_SHIFT	8
++#define PKI_PCAM_TERM_TERM1_MASK	0xffULL
++#define PKI_PCAM_TERM_TERM1_SHIFT	40
++#define PKI_PCAM_TERM_VALID_MASK	0x1ULL
++#define PKI_PCAM_TERM_VALID_SHIFT	63
++
++#define PKI_PCAM_MATCH_DATA0_MASK	0xffffffffULL
++#define PKI_PCAM_MATCH_DATA0_SHIFT	0
++#define PKI_PCAM_MATCH_DATA1_MASK	0xffffffffULL
++#define PKI_PCAM_MATCH_DATA1_SHIFT	32
++
++#define PKI_PCAM_ACTION_ADV_MASK	0xffULL
++#define PKI_PCAM_ACTION_ADV_SHIFT	0
++#define PKI_PCAM_ACTION_SETTY_MASK	0x1fULL
++#define PKI_PCAM_ACTION_SETTY_SHIFT	8
++#define PKI_PCAM_ACTION_PF_MASK		0x7ULL
++#define PKI_PCAM_ACTION_PF_SHIFT	13
++#define PKI_PCAM_ACTION_STYLEADD_MASK	0xffULL
++#define PKI_PCAM_ACTION_STYLEADD_SHIFT	16
++#define PKI_PCAM_ACTION_ADV_MASK	0xffULL
++#define PKI_PCAM_ACTION_ADV_SHIFT	0
++#define PKI_PCAM_ACTION_PMC_MASK	0x7fULL
++#define PKI_PCAM_ACTION_PMC_SHIFT	24
+ 
+ #define PKI_STYLEX_BUF_MB_SIZE_SHIFT	0
+ #define PKI_STYLEX_BUF_MB_SIZE_MASK	0x1fff
+@@ -328,6 +352,39 @@ enum PKI_BELTYPE_E {
+ 	PKI_BLTYPE_E_SNAP	= 7
+ };
+ 
++enum PKI_PCAM_TERM_E {
++	PKI_PCAM_TERM		= 0,
++	PKI_PCAM_TERM_L2_CUSTOM	= 2,
++	PKI_PCAM_TERM_HIGIGD	= 4,
++	PKI_PCAM_TERM_HIGIG	= 5,
++	PKI_PCAM_TERM_SMACH	= 8,
++	PKI_PCAM_TERM_SMACL	= 9,
++	PKI_PCAM_TERM_DMACH	= 0xa,
++	PKI_PCAM_TERM_DMACL	= 0xb,
++	PKI_PCAM_TERM_GLORT	= 0x12,
++	PKI_PCAM_TERM_DSA	= 0x13,
++	PKI_PCAM_TERM_ETHTYPE0	= 0x18,
++	PKI_PCAM_TERM_ETHTYPE1	= 0x19,
++	PKI_PCAM_TERM_ETHTYPE2	= 0x1a,
++	PKI_PCAM_TERM_ETHTYPE3	= 0x1b,
++	PKI_PCAM_TERM_MPLS0	= 0x1e,
++	PKI_PCAM_TERM_L3_SIPHH	= 0x1f,
++	PKI_PCAM_TERM_L3_SIPMH	= 0x20,
++	PKI_PCAM_TERM_L3_SIPML	= 0x21,
++	PKI_PCAM_TERM_L3_SIPLL	= 0x22,
++	PKI_PCAM_TERM_L3_FLAGS	= 0x23,
++	PKI_PCAM_TERM_L3_DIPHH	= 0x24,
++	PKI_PCAM_TERM_L3_DIPMH	= 0x25,
++	PKI_PCAM_TERM_L3_DIPML	= 0x26,
++	PKI_PCAM_TERM_L3_DIPLL	= 0x27,
++	PKI_PCAM_TERM_LD_VNI	= 0x28,
++	PKI_PCAM_TERM_IL3_FLAGS	= 0x2b,
++	PKI_PCAM_TERM_LF_SPI	= 0x2e,
++	PKI_PCAM_TERM_L4_SPORT	= 0x2f,
++	PKI_PCAM_TERM_L4_PORT	= 0x30,
++	PKI_PCAM_TERM_LG_CUSTOM	= 0x39
++};
++
+ #define MAX_PKI_PORTS	64
+ #define NUM_FRAME_LEN_REG	2
+ 
+@@ -443,6 +500,20 @@ static inline u64 pki_reg_read(struct pki_t *pki, u64 offset)
+ 	return readq_relaxed(pki->reg_base + offset);
+ }
+ 
++static inline void set_clear_bit(u64 *value, bool flag, u64 bit_num)
++{
++	if (flag)
++		*value |= (0x1ULL << bit_num);
++	else
++		*value &= ~(0x1Ull << bit_num);
++}
++
++static inline void set_field(u64 *ptr, u64 field_mask, u8 field_shift, u64 val)
++{
++	*ptr &= ~(field_mask << field_shift);
++	*ptr |= (val & field_mask) << field_shift;
++}
++
+ int assign_pkind_bgx(struct pkipf_vf *vf, struct octtx_bgx_port *port);
+ int assign_pkind_lbk(struct pkipf_vf *vf, struct octtx_lbk_port *port);
+ void init_styles(struct pki_t *pki);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index e1129b700ba1..c953667912a6 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -25,19 +25,6 @@ enum PKI_PORT_STATE {
+ 	PKI_PORT_STOP	 = 3
+ };
+ 
+-static void set_clear_bit(u64 *value, bool flag, u64 bit_num)
+-{
+-	if (flag)
+-		*value |= (0x1ULL << bit_num);
+-	else
+-		*value &= ~(0x1Ull << bit_num);
+-}
+-
+-static inline void set_field(u64 *ptr, u64 field_mask, u8 field_shift, u64 val)
+-{
+-	*ptr &= ~(field_mask << field_shift);
+-	*ptr |= (val & field_mask) << field_shift;
+-}
+ 
+ static int pki_frmlen_reg(struct pki_t *pki, u16 maxlen, u16 minlen)
+ {
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+index d3ec24e526ea..89e0f1300cb0 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -221,6 +221,132 @@ static int load_ucode(struct pki_t *pki)
+ 	return 0;
+ }
+ 
++static inline void write_pcam(struct pki_t *pki, int bank, int index,
++			      int enable, u8 style, u8 style_mask, u8 term,
++			      u8 term_mask, u32 match, u32 match_mask,
++			      u8 advance, u8 setty, u8 pf, u8 style_add,
++			      u8 pmc)
++{
++	int i;
++	u64 term_reg = 0;
++	u64 match_reg = 0;
++	u64 action_reg = 0;
++
++	/* Format TERM */
++	set_field(&term_reg,
++		  PKI_PCAM_TERM_STYLE0_MASK, PKI_PCAM_TERM_STYLE0_SHIFT,
++		  (u8)((~style) & style_mask));
++	set_field(&term_reg,
++		  PKI_PCAM_TERM_STYLE1_MASK, PKI_PCAM_TERM_STYLE1_SHIFT,
++		  (u8)((style) & style_mask));
++	set_field(&term_reg,
++		  PKI_PCAM_TERM_TERM0_MASK, PKI_PCAM_TERM_TERM0_SHIFT,
++		  (u8)((~term) & term_mask));
++	set_field(&term_reg,
++		  PKI_PCAM_TERM_TERM1_MASK, PKI_PCAM_TERM_TERM1_SHIFT,
++		  (u8)((term) & term_mask));
++	set_field(&term_reg,
++		  PKI_PCAM_TERM_VALID_MASK, PKI_PCAM_TERM_VALID_SHIFT,
++		  enable);
++	/* Format MATCH */
++	set_field(&match_reg,
++		  PKI_PCAM_MATCH_DATA0_MASK, PKI_PCAM_MATCH_DATA0_SHIFT,
++		  (u32)((~match) & match_mask));
++	set_field(&match_reg,
++		  PKI_PCAM_MATCH_DATA1_MASK, PKI_PCAM_MATCH_DATA1_SHIFT,
++		  (u32)((match) & match_mask));
++	/* Format ACTION */
++	set_field(&action_reg,
++		  PKI_PCAM_ACTION_ADV_MASK, PKI_PCAM_ACTION_ADV_SHIFT,
++		  advance);
++	set_field(&action_reg,
++		  PKI_PCAM_ACTION_SETTY_MASK, PKI_PCAM_ACTION_SETTY_SHIFT,
++		  setty);
++	set_field(&action_reg,
++		  PKI_PCAM_ACTION_PF_MASK, PKI_PCAM_ACTION_PF_SHIFT,
++		  pf);
++	set_field(&action_reg,
++		  PKI_PCAM_ACTION_STYLEADD_MASK, PKI_PCAM_ACTION_STYLEADD_SHIFT,
++		  style_add);
++	set_field(&action_reg,
++		  PKI_PCAM_ACTION_PMC_MASK, PKI_PCAM_ACTION_PMC_SHIFT,
++		  pmc);
++
++	for (i = 0; i < pki->max_cls; i++) {
++		pki_reg_write(pki,
++			      PKI_CLX_PCAMX_ACTIONX(i, bank, index),
++			      action_reg);
++		pki_reg_write(pki,
++			      PKI_CLX_PCAMX_MATCHX(i, bank, index),
++			      match_reg);
++		pki_reg_write(pki,
++			      PKI_CLX_PCAMX_TERMX(i, bank, index),
++			      term_reg);
++	}
++}
++
++/* Hardware (PKI) is not hardwired to recognize any 802.1Q VLAN
++ * Ethertypes so add PCAM entries to detect such frames.
++ */
++static void install_default_vlan(struct pki_t *pki)
++{
++	int index;
++	int bank;
++	u8 field;
++
++	/* For each TERM_ETHTYPE configure 4 VLAN ethertype PCAM rules to
++	 * detect VLAN frames and proceed with VLAN detection.
++	 *
++	 * The code below should detect any combination of 4 consecutive
++	 * VLAN headers (as long as ethertype is as specified below).
++	 *
++	 * Each loop will setup PCAM entries for a pair of ETHTYPE TERMs:
++	 * ETHTYPE0 + ETHTYPE2, ETHTYPE1 + ETHTYPE3
++	 */
++	for (field = PKI_PCAM_TERM_ETHTYPE0; field <= PKI_PCAM_TERM_ETHTYPE1;
++	     field++) {
++		index = 0;
++		bank = field & 0x01;
++
++		/* For all styles match Ethertype 0x8100 */
++		write_pcam(pki, bank, index, 1,
++			   0, 0, /* For each style */
++			   field, 0xfd, /* Match 2 ETHERTYPE fields */
++			   0x81000000, 0xffff0000, /* with value 0x8100 */
++			   4, /* advance 4 bytes */
++			   PKI_LTYPE_E_VLAN, /* Identify VLAN presence */
++			   0, /* Don't set parse flags */
++			   0, /* Don't change style */
++			   0); /* Don't change parsing mode */
++
++		index++;
++		/* For all styles match Ethertype 0x88a8 */
++		write_pcam(pki, bank, index, 1,
++			   0, 0, /* For each style */
++			   field, 0xfd, /* Match 2 ETHERTYPE fields */
++			   0x88a80000, 0xffff0000, /* with value 0x88a8 */
++			   4, /* advance 4 bytes */
++			   PKI_LTYPE_E_VLAN, /* Identify VLAN presence */
++			   0, /* Don't set parse flags */
++			   0, /* Don't change style */
++			   0); /* Don't change parsing mode */
++
++		index++;
++		/* For all styles match Ethertype 0x9200 */
++		write_pcam(pki, bank, index, 1,
++			   0, 0, /* For each style */
++			   field, 0xfd, /* Match 2 ETHERTYPE fields */
++			   0x92000000, 0xffff0000, /* with value 0x9200 */
++			   4, /* advance 4 bytes */
++			   PKI_LTYPE_E_VLAN, /* Identify VLAN presence */
++			   0, /* Don't set parse flags */
++			   0, /* Don't change style */
++			   0); /* Don't change parsing mode */
++		index++;
++	}
++	/* In total we use 3 PCAM entries per one PCAM bank */
++}
++
+ /*locks should be used by caller
+  */
+ static struct pkipf_vf *pki_get_vf(u32 id, u16 domain_id)
+@@ -637,6 +763,7 @@ static void pki_init(struct pki_t *pki)
+ 
+ 	setup_ltype_map(pki);
+ 	init_styles(pki);
++	install_default_vlan(pki);
+ 	/*enable PKI*/
+ 	reg = pki_reg_read(pki, PKI_BUF_CTL);
+ 	reg |= 0x1;
+-- 
+2.14.1
+

@@ -1,0 +1,73 @@
+From bf3f820d540a1bb35d184a5e38c088f97c2ede64 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Sat, 1 Jul 2017 11:03:23 +0530
+Subject: [PATCH 178/375] net:thunderx: Enable independent Rx packet size limit
+ setting per LMAC
+
+As of now MTU is enforced only on the transmit side, but on Rx
+path packets of size 'NIC_HW_MAX_FRS' are allowed. This patch
+changes the behavior to restrict Rx packets also to MTU size.
+For this a separate PKIND is assigned to each LMAC and max length
+in PKIND is set to MTU.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: Maciej Czekaj <maciej.czekaj@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nic_main.c    | 8 +++++++-
+ drivers/net/ethernet/cavium/thunder/thunder_bgx.c | 7 ++++++-
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nic_main.c b/drivers/net/ethernet/cavium/thunder/nic_main.c
+index c2116705ed90..c4800a42e3c4 100644
+--- a/drivers/net/ethernet/cavium/thunder/nic_main.c
++++ b/drivers/net/ethernet/cavium/thunder/nic_main.c
+@@ -263,7 +263,7 @@ static void nic_get_bgx_stats(struct nicpf *nic, struct bgx_stats_msg *bgx)
+ static int nic_update_hw_frs(struct nicpf *nic, int new_frs, int vf)
+ {
+ 	int bgx, lmac, lmac_cnt;
+-	u64 lmac_credits;
++	u64 lmac_credits, pkind_val;
+ 
+ 	if ((new_frs > NIC_HW_MAX_FRS) || (new_frs < NIC_HW_MIN_FRS))
+ 		return 1;
+@@ -287,6 +287,12 @@ static int nic_update_hw_frs(struct nicpf *nic, int new_frs, int vf)
+ 	if (!pass1_silicon(nic->pdev))
+ 		nic_reg_write(nic,
+ 			      NIC_PF_LMAC_0_7_CFG2 + (lmac * 8), new_frs);
++
++	/* Set max receive packet size also to MTU */
++	pkind_val = nic_reg_read(nic, NIC_PF_PKIND_0_15_CFG | (lmac << 3));
++	((struct pkind_cfg *)&pkind_val)->maxlen = new_frs;
++	nic_reg_write(nic, NIC_PF_PKIND_0_15_CFG | (lmac << 3), pkind_val);
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+index ecf35bda6b2d..f589e045c00f 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_bgx.c
+@@ -1027,7 +1027,7 @@ static void bgx_lmac_disable(struct bgx *bgx, u8 lmacid)
+ 
+ static void bgx_init_hw(struct bgx *bgx)
+ {
+-	int i;
++	int i, pkind_idx;
+ 	struct lmac *lmac;
+ 
+ 	bgx_reg_modify(bgx, 0, BGX_CMR_GLOBAL_CFG, CMR_GLOBAL_CFG_FCS_STRIP);
+@@ -1039,6 +1039,11 @@ static void bgx_init_hw(struct bgx *bgx)
+ 		lmac = &bgx->lmac[i];
+ 		bgx_reg_write(bgx, i, BGX_CMRX_CFG,
+ 			      (lmac->lmac_type << 8) | lmac->lane_to_sds);
++
++		/* Set PKIND for this LMAC */
++		pkind_idx = (bgx->bgx_id * MAX_LMAC_PER_BGX) + lmac->lmacid;
++		bgx_reg_write(bgx, i, BGX_CMRX_RX_ID_MAP, pkind_idx & 0x3F);
++
+ 		bgx->lmac[i].lmacid_bd = lmac_count;
+ 		lmac_count++;
+ 	}
+-- 
+2.14.1
+

@@ -1,0 +1,48 @@
+From b7cf055a359130d56202f8a72196b1c548c1a1d8 Mon Sep 17 00:00:00 2001
+From: David Daney <david.daney@cavium.com>
+Date: Tue, 3 Jan 2017 16:35:48 -0800
+Subject: [PATCH 095/375] dt-bindings: gpio: Add binding documentation for
+ gpio-thunderx
+
+Signed-off-by: David Daney <david.daney@cavium.com>
+---
+ .../devicetree/bindings/gpio/gpio-thunderx.txt     | 27 ++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+ create mode 100644 Documentation/devicetree/bindings/gpio/gpio-thunderx.txt
+
+diff --git a/Documentation/devicetree/bindings/gpio/gpio-thunderx.txt b/Documentation/devicetree/bindings/gpio/gpio-thunderx.txt
+new file mode 100644
+index 000000000000..3f883ae29d11
+--- /dev/null
++++ b/Documentation/devicetree/bindings/gpio/gpio-thunderx.txt
+@@ -0,0 +1,27 @@
++Cavium ThunderX/OCTEON-TX GPIO controller bindings
++
++Required Properties:
++- reg: The controller bus address.
++- gpio-controller: Marks the device node as a GPIO controller.
++- #gpio-cells: Must be 2.
++  - First cell is the GPIO pin number relative to the controller.
++  - Second cell is a standard generic flag bitfield as described in gpio.txt.
++
++Optional Properties:
++- compatible: "cavium,thunder-8890-gpio", unused as PCI driver binding is used.
++- interrupt-controller: Marks the device node as an interrupt controller.
++- #interrupt-cells: Must be present and have value of 2 if
++                    "interrupt-controller" is present.
++  - First cell is the GPIO pin number relative to the controller.
++  - Second cell is triggering flags as defined in interrupts.txt.
++
++Example:
++
++gpio_6_0: gpio@6,0 {
++	compatible = "cavium,thunder-8890-gpio";
++	reg = <0x3000 0 0 0 0>; /*  DEVFN = 0x30 (6:0) */
++	gpio-controller;
++	#gpio-cells = <2>;
++	interrupt-controller;
++	#interrupt-cells = <2>;
++};
+-- 
+2.14.1
+

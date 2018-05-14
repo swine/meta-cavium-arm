@@ -1,0 +1,36 @@
+From 6483e40d257140b8107e05baa1acf569a7429f0e Mon Sep 17 00:00:00 2001
+From: Thanneeru Srinivasulu <tsrinivasulu@cavium.com>
+Date: Thu, 2 Mar 2017 16:32:24 +0530
+Subject: [PATCH 115/375] net: thunderx: Allow IPv6 frames with zero UDP
+ checksum
+
+Do not consider IPv6 frames with zero UDP checksum as frames
+with bad checksum and drop them.
+
+Signed-off-by: Thanneeru Srinivasulu <tsrinivasulu@cavium.com>
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index b1962dbd0409..f13289f0d238 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -622,9 +622,11 @@ static void nicvf_rcv_queue_config(struct nicvf *nic, struct queue_set *qs,
+ 	nicvf_send_msg_to_pf(nic, &mbx);
+ 
+ 	if (!nic->sqs_mode && (qidx == 0)) {
+-		/* Enable checking L3/L4 length and TCP/UDP checksums */
++		/* Enable checking L3/L4 length and TCP/UDP checksums
++		 * Also allow IPv6 pkts with zero UDP checksum.
++		 */
+ 		nicvf_queue_reg_write(nic, NIC_QSET_RQ_GEN_CFG, 0,
+-				      (BIT(24) | BIT(23) | BIT(21)));
++				      (BIT(24) | BIT(23) | BIT(21) | BIT(20)));
+ 		nicvf_config_vlan_stripping(nic, nic->netdev->features);
+ 	}
+ 
+-- 
+2.14.1
+

@@ -1,0 +1,40 @@
+From b1a9a28f8f1075e0531f3e7ce8802834516fd209 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Thu, 6 Apr 2017 16:14:24 -0700
+Subject: [PATCH 190/375] octeontx-lbk: Fix LBK driver startup failure.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+index e5fb2b523502..fb747fc39241 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+@@ -406,7 +406,7 @@ static int lbk_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	/* Setup LBK Port */
+ 	if (lbk->iconn == LBK_CONNECT_E_PKI &&
+-	    lbk->oconn == LBK_CONNECT_E_PKO) {
++			lbk->oconn == LBK_CONNECT_E_PKO) {
+ 		port = &octeontx_lbk_ports[0];
+ 		port->ilbk = lbk_index_from_id(lbk->id);
+ 		port->olbk = lbk_index_from_id(lbk->id);
+@@ -426,10 +426,10 @@ static int lbk_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		port->olbk = lbk_index_from_id(lbk->id);
+ 		port->olbk_base_chan = LBK_BASE_CHAN(port->olbk);
+ 		port->olbk_num_chans = LBK_NUM_CHANS;
++	} else {
++		/* LBK:NIC-to-NIC is not used.*/
++		return 0;
+ 	}
+-	if (!port)
+-		return -EINVAL;
+-
+ 	INIT_LIST_HEAD(&port->list);
+ 	port->node = lbk_node_from_id(lbk->id);
+ 	return 0;
+-- 
+2.14.1
+

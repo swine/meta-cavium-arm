@@ -1,0 +1,67 @@
+From 084762ff9778ff2ee1e665008fcb5e78c163b282 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Mon, 20 Mar 2017 17:01:06 -0700
+Subject: [PATCH 135/375] octeontx: fix create_domain
+
+fix a crash with create_domain when invalid format string is given
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 7fceef2767d0..b43b181fc789 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -143,33 +143,47 @@ static ssize_t octtx_create_domain_store(struct device *dev,
+ 
+ 		if (!strncmp(start, "ssow", sizeof("ssow") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &ssow_count))
+ 				goto error;
+ 		} else if (!strncmp(start, "fpa", sizeof("fpa") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &fpa_count))
+ 				goto error;
+ 		} else if (!strncmp(start, "sso", sizeof("sso") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &sso_count))
+ 				goto error;
+ 		} else if (!strncmp(start, "pko", sizeof("pko") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &pko_count))
+ 				goto error;
+ 		} else if (!strncmp(start, "pki", sizeof("pki") - 1)) {
+ 			continue;
+ 		} else if (!strncmp(start, "tim", sizeof("tim") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &tim_count))
+ 				goto error;
+ 		} else if (!strncmp(start, "net", sizeof("net") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &bgx_port[bgx_count]))
+ 				goto error;
+ 			bgx_count++;
+ 		} else if (!strncmp(start, "virt", sizeof("virt") - 1)) {
+ 			temp = strsep(&start, ":");
++			if (!start)
++				goto error;
+ 			if (kstrtol(start, 10, &lbk_port[lbk_count]))
+ 				goto error;
+ 			lbk_count++;
+-- 
+2.14.1
+

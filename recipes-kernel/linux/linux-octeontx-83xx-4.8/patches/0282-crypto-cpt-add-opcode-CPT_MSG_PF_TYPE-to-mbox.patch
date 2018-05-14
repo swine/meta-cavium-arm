@@ -1,0 +1,45 @@
+From 29c4ae9b8d15f45d27ddf5391990e5bcfa7cd0ab Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Tue, 9 Jan 2018 11:37:50 +0100
+Subject: [PATCH 282/375] crypto: cpt - add opcode CPT_MSG_PF_TYPE to mbox
+
+Add new opcode CPT_MSG_PF_TYPE to mbox interface.
+This opcode is used to ask for a type of a PF.
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cpt_common.h | 1 +
+ drivers/crypto/cavium/cpt/cptpf_mbox.c | 5 +++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/drivers/crypto/cavium/cpt/cpt_common.h b/drivers/crypto/cavium/cpt/cpt_common.h
+index d3faae775369..8735cd43627c 100644
+--- a/drivers/crypto/cavium/cpt/cpt_common.h
++++ b/drivers/crypto/cavium/cpt/cpt_common.h
+@@ -137,6 +137,7 @@ enum cpt_mbox_opcode {
+ 	CPT_MSG_QLEN,
+ 	CPT_MSG_QBIND_GRP,
+ 	CPT_MSG_VQ_PRIORITY,
++	CPT_MSG_PF_TYPE
+ };
+ 
+ /* CPT mailbox structure */
+diff --git a/drivers/crypto/cavium/cpt/cptpf_mbox.c b/drivers/crypto/cavium/cpt/cptpf_mbox.c
+index d9655c032705..f11f3eaf8638 100644
+--- a/drivers/crypto/cavium/cpt/cptpf_mbox.c
++++ b/drivers/crypto/cavium/cpt/cptpf_mbox.c
+@@ -129,6 +129,11 @@ static void cpt_handle_mbox_intr(struct cpt_device *cpt, int vf)
+ 			cpt_send_msg_to_vf(cpt, vf, &mbx);
+ 		}
+ 		break;
++	case CPT_MSG_PF_TYPE:
++		mbx.msg = CPT_MSG_PF_TYPE;
++		mbx.data = cpt->pf_type;
++		cpt_send_msg_to_vf(cpt, vf, &mbx);
++		break;
+ 	case CPT_MSG_VQ_PRIORITY:
+ 		cpt_cfg_vq_priority(cpt, vf, mbx.data);
+ 		cpt_mbox_send_ack(cpt, vf, &mbx);
+-- 
+2.14.1
+

@@ -1,0 +1,39 @@
+From ca54f23d957445e69bd127736638b5999aaa1c96 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Thu, 11 May 2017 12:42:10 +0200
+Subject: [PATCH 335/375] mmc: cavium: Fix probing race with regulator
+
+If the regulator probing is not yet finished this driver
+might catch a -EPROBE_DEFER. Returning after this condition
+did not remove the created platform device. On a repeated
+call to the probe function the of_platform_device_create
+fails.
+
+Calling of_platform_device_destroy after EPROBE_DEFER resolves
+this bug.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+---
+ drivers/mmc/host/cavium-thunderx.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/mmc/host/cavium-thunderx.c b/drivers/mmc/host/cavium-thunderx.c
+index 65244e8df5dd..b6bc950dbc17 100644
+--- a/drivers/mmc/host/cavium-thunderx.c
++++ b/drivers/mmc/host/cavium-thunderx.c
+@@ -146,6 +146,12 @@ static int thunder_mmc_probe(struct pci_dev *pdev,
+ 	return 0;
+ 
+ error:
++	for (i = 0; i < CAVIUM_MAX_MMC; i++) {
++		if (host->slot[i])
++			cvm_mmc_of_slot_remove(host->slot[i]);
++		if (host->slot_pdev[i])
++			of_platform_device_destroy(&host->slot_pdev[i]->dev, NULL);
++	}
+ 	clk_disable_unprepare(host->clk);
+ 	return ret;
+ }
+-- 
+2.14.1
+

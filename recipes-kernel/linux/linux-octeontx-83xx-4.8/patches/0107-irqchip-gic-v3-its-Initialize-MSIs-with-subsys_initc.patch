@@ -1,0 +1,31 @@
+From 7bcee343d525434ad8f92a3d47630205a1ffd39d Mon Sep 17 00:00:00 2001
+From: Robert Richter <rrichter@cavium.com>
+Date: Wed, 1 Feb 2017 18:38:27 +0100
+Subject: [PATCH 107/375] irqchip/gic-v3-its: Initialize MSIs with
+ subsys_initcalls
+
+This allows us to use kernel core functionality (e.g. cma) for ITS
+initialization. MSIs must be up before the device_initcalls (pci and
+platform device probe) and after arch_initcalls (dma init), so
+subsys_initcall is fine.
+
+Signed-off-by: Robert Richter <rrichter@cavium.com>
+Message-Id: <20170201173833.12630-4-rrichter@cavium.com>
+Signed-off-by: Robert Richter <rrichter@cavium.com>
+---
+ drivers/irqchip/irq-gic-v3-its-pci-msi.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/irqchip/irq-gic-v3-its-pci-msi.c b/drivers/irqchip/irq-gic-v3-its-pci-msi.c
+index aee1c60d7ab5..dace9bc4ef8d 100644
+--- a/drivers/irqchip/irq-gic-v3-its-pci-msi.c
++++ b/drivers/irqchip/irq-gic-v3-its-pci-msi.c
+@@ -194,4 +194,4 @@ static int __init its_pci_msi_init(void)
+ 
+ 	return 0;
+ }
+-early_initcall(its_pci_msi_init);
++subsys_initcall(its_pci_msi_init);
+-- 
+2.14.1
+

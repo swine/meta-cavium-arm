@@ -1,0 +1,2948 @@
+From 0a1f6a72e0a56dff23f2b755afa6a9102dc6a5cb Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Sat, 11 Mar 2017 11:35:42 -0800
+Subject: [PATCH 129/375] octeontx-pki: Add PKI driver
+
+PKI is used for packet input parsing,
+add a driver to enable packet input
+
+Signed-off-by: Vinita <vinita.gupta@caviumnetworks.com>
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/Kconfig                |   8 +
+ drivers/net/ethernet/cavium/octeontx-83xx/Makefile |   2 +
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  | 195 ++++-
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    | 452 ++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_config.c | 543 ++++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_main.c   | 714 ++++++++++++++++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_ucode.c  | 816 +++++++++++++++++++++
+ 7 files changed, 2714 insertions(+), 16 deletions(-)
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+ create mode 100644 drivers/net/ethernet/cavium/octeontx-83xx/pki_ucode.c
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index a9737f764c89..3c8fb4646474 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -136,6 +136,14 @@ config OCTEONTX_TIM_PF
+ 	help
+ 	  Select this option to enable TIM Physical function.
+ 
++config OCTEONTX_PKI
++	tristate "OcteonTX Input packet parser(PKI)"
++	depends on 64BIT
++	default y
++	help
++	  Select this option to enable PKI.
++          PKI parses input packets and create work.
++
+ config OCTEONTX
+ 	tristate "OcteonTX coprocessor maintanier"
+ 	depends on THUNDER_NIC_BGX && OCTEONTX_FPA_PF && OCTEONTX_SSO_PF
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+index ee7ed4e7d8e1..35a69d5c25da 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/Makefile
+@@ -10,6 +10,7 @@ obj-$(CONFIG_OCTEONTX_SSOW_PF) += ssowpf.o
+ obj-$(CONFIG_OCTEONTX_PKO_PF) += pkopf.o
+ obj-$(CONFIG_OCTEONTX_LBK) += lbk.o
+ obj-$(CONFIG_OCTEONTX_TIM_PF) += timpf.o
++obj-$(CONFIG_OCTEONTX_PKI) += pki.o
+ obj-$(CONFIG_OCTEONTX) += octeontx.o
+ 
+ fpapf-objs := fpapf_main.o
+@@ -21,3 +22,4 @@ pkopf-objs := pkopf_main.o
+ octeontx-objs := octeontx_main.o bgx.o
+ lbk-objs := lbk_main.o
+ timpf-objs := timpf_main.o
++pki-objs := pki_main.o pki_ucode.o pki_config.o
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 810c4647e1de..7fceef2767d0 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -22,6 +22,10 @@
+ #include "fpa.h"
+ #include "sso.h"
+ #include "bgx.h"
++#include "pko.h"
++#include "lbk.h"
++#include "tim.h"
++#include "pki.h"
+ 
+ #define DRV_NAME "octeontx"
+ #define DRV_VERSION "0.1"
+@@ -36,13 +40,13 @@ static dev_t octtx_dev;
+ static atomic_t gbl_domain_id = ATOMIC_INIT(4);
+ 
+ static struct bgx_com_s *bgx;
+-//static struct lbk_com_s *lbk;
++static struct lbk_com_s *lbk;
+ static struct fpapf_com_s *fpapf;
+ static struct ssopf_com_s *ssopf;
+-//static struct pkopf_com_s *pkopf;
+-//static struct timpf_com_s *timpf;
++static struct pkopf_com_s *pkopf;
++static struct timpf_com_s *timpf;
+ static struct ssowpf_com_s *ssowpf;
+-//static struct pki_com_s *pki;
++static struct pki_com_s *pki;
+ 
+ struct delayed_work dwork;
+ struct delayed_work dwork_reset;
+@@ -232,27 +236,27 @@ static int octtx_master_receive_message(struct mbox_hdr *hdr,
+ 
+ 	switch (hdr->coproc) {
+ 	case PKI_COPROC:
+-		//pki->receive_message(0, domain->domain_id, hdr, req,
+-		//			resp, add_data);
++		pki->receive_message(0, domain->domain_id, hdr, req,
++					resp, add_data);
+ 		break;
+ 	case FPA_COPROC:
+ 		fpapf->receive_message(0, domain->domain_id, hdr, req, resp,
+ 				       add_data);
+ 		break;
+ 	case BGX_COPROC:
+-	//	bgx->receive_message(0, domain->domain_id, hdr,
+-	//			req, resp, add_data);
++		bgx->receive_message(0, domain->domain_id, hdr,
++				req, resp, add_data);
+ 		break;
+ 	case LBK_COPROC:
+-	//	lbk->receive_message(0, domain->domain_id, hdr,
+-	//			req, resp, add_data);
++		lbk->receive_message(0, domain->domain_id, hdr,
++				req, resp, add_data);
+ 		break;
+ 	case PKO_COPROC:
+-	//	pkopf->receive_message(0, domain->domain_id, hdr, req, resp);
++		pkopf->receive_message(0, domain->domain_id, hdr, req, resp);
+ 		break;
+ 	case TIM_COPROC:
+-	//	timpf->receive_message(0, domain->domain_id, hdr,
+-	//			req, resp, add_data);
++		timpf->receive_message(0, domain->domain_id, hdr,
++				req, resp, add_data);
+ 		break;
+ 	case SSOW_COPROC:
+ 	case SSO_COPROC:
+@@ -286,9 +290,9 @@ void octeontx_remove_domain(int node, int domain_id)
+ 	spin_unlock(&octeontx_domains_lock);
+ 
+ 	bgx->free_domain(node, domain_id);
+-	//lbk->free_domain(node, domain_id);
+-	//pkopf->free_domain(node, domain_id);
+-	//pki->free_domain(node, domain_id);
++	lbk->free_domain(node, domain_id);
++	pkopf->free_domain(node, domain_id);
++	pki->free_domain(node, domain_id);
+ 	ssopf->free_domain(node, domain_id);
+ 	ssowpf->free_domain(node, domain_id);
+ 	fpapf->free_domain(node, domain_id);
+@@ -386,6 +390,33 @@ int octeontx_create_domain(const char *name, int type,
+ 		goto error;
+ 	}
+ 
++	ret = pki->create_domain(node, domain_id, &octtx_master_com, domain,
++			&octtx_device->kobj, domain->name);
++	if (ret) {
++		dev_err(octtx_device, "Failed to create PKI domain\n");
++		goto error;
++	}
++
++	/* OCTEONTX allows to create two internal duplex (from the dataplane
++	 * user point of view) ports out of four available LBK devices:
++	 * virt0: transferring packets between PKO and PKI (LBK0);
++	 * virt1: transferring packets between PKO/PKI and NIC (LBK1 + LBK2).
++	 * NOTE: The domain specification validity should be done here.
++	 */
++	domain->num_lbk_ports = lbk_count;
++	for (i = 0; i < domain->num_lbk_ports; i++) {
++		domain->lbk_port[i].domain_id = domain_id;
++		domain->lbk_port[i].dom_port_idx = i;
++		domain->lbk_port[i].glb_port_idx = lbk_port[i];
++		domain->lbk_port[i].pkind = pki->add_lbk_port(node, domain_id,
++							&domain->lbk_port[i]);
++	}
++	ret = lbk->create_domain(node, domain_id, domain->lbk_port, i,
++			&octtx_master_com, domain);
++	if (ret) {
++		dev_err(octtx_device, "Failed to create LBK domain\n");
++		goto error;
++	}
+ 	/* There is a global list of all network (BGX-based) ports
+ 	 * detected by the thunder driver and provided to this driver.
+ 	 * This list is maintained in bgx.c (octeontx_bgx_ports).
+@@ -410,6 +441,60 @@ int octeontx_create_domain(const char *name, int type,
+ 		dev_err(octtx_device, "Failed to create BGX domain\n");
+ 		goto error;
+ 	}
++	/* Now that we know which exact ports we have, set pkinds for them. */
++	for (i = 0; i < domain->num_bgx_ports; i++) {
++		ret = pki->add_bgx_port(node, domain_id, &domain->bgx_port[i]);
++		if (ret < 0) {
++			dev_err(octtx_device,
++				"Failed to allocate PKIND for port l%d(g%d)\n",
++				domain->bgx_port[i].dom_port_idx,
++				domain->bgx_port[i].glb_port_idx);
++			goto error;
++		}
++		domain->bgx_port[i].pkind = ret;
++		ret = bgx->set_pkind(node, domain_id,
++				     domain->bgx_port[i].dom_port_idx,
++				     domain->bgx_port[i].pkind);
++		if (ret < 0) {
++			dev_err(octtx_device,
++				"Failed to set PKIND for port l%d(g%d)\n",
++				domain->bgx_port[i].dom_port_idx,
++				domain->bgx_port[i].glb_port_idx);
++			goto error;
++		}
++	}
++	if (ret) {
++		dev_err(octtx_device, "Failed to create BGX domain\n");
++		goto error;
++	}
++	/* remove this once PKO init extends for LBK. */
++	lbk_count = 0;
++
++	domain->pko_vf_count = bgx_count + lbk_count;
++	if (domain->pko_vf_count != pko_count) {
++		dev_err(octtx_device,
++			"requested %d pko vfs, the proper values is: %d\n",
++			pko_count, domain->pko_vf_count);
++		dev_err(octtx_device, " proceeding with proper value..\n");
++	}
++	ret = pkopf->create_domain(node, domain_id, domain->pko_vf_count,
++				domain->bgx_port,
++				&octtx_master_com, domain,
++				&octtx_device->kobj, domain->name);
++	if (ret) {
++		dev_err(octtx_device, "Failed to create PKO domain\n");
++		goto error;
++	}
++	domain->tim_vf_count = tim_count;
++	if (domain->tim_vf_count > 0) {
++		ret = timpf->create_domain(node, domain_id,
++			domain->tim_vf_count, &octtx_master_com, domain,
++			&octtx_device->kobj, domain->name);
++		if (ret) {
++			dev_err(octtx_device, "Failed to create TIM domain\n");
++			goto error;
++		}
++	}
+ 	domain->dom_attr.show = octtx_domain_id_show;
+ 	domain->dom_attr.attr.name = "domain_id";
+ 	domain->dom_attr.attr.mode = 0444;
+@@ -445,6 +530,34 @@ static int octeontx_reset_domain(void *master_data)
+ 		       domain->domain_id, node);
+ 		return ret;
+ 	}
++	ret = lbk->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset LBK of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	ret = timpf->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset TIM of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	ret = pkopf->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset PKO of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
++	ret = pki->reset_domain(node, domain->domain_id);
++	if (ret) {
++		dev_err(octtx_device,
++			"Failed to reset PKI of domain %d on node %d.\n",
++		       domain->domain_id, node);
++		return ret;
++	}
+ 	ret = ssopf->reset_domain(node, domain->domain_id);
+ 	if (ret) {
+ 		dev_err(octtx_device,
+@@ -570,6 +683,9 @@ static int __init octeontx_init_module(void)
+ 	bgx = bgx_octeontx_init();
+ 	if (!bgx)
+ 		return -ENODEV;
++	lbk = try_then_request_module(symbol_get(lbk_com), "lbk");
++	if (!lbk)
++		return -ENODEV;
+ 	fpapf = try_then_request_module(symbol_get(fpapf_com), "fpapf");
+ 	if (!fpapf) {
+ 		symbol_put(lbk_com);
+@@ -588,13 +704,44 @@ static int __init octeontx_init_module(void)
+ 		symbol_put(fpapf_com);
+ 		return -ENODEV;
+ 	}
++	pki = try_then_request_module(symbol_get(pki_com), "pki");
++	if (!pki) {
++		symbol_put(lbk_com);
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++	pkopf = try_then_request_module(symbol_get(pkopf_com), "pkopf");
++	if (!pkopf) {
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		return -ENODEV;
++	}
++	timpf = try_then_request_module(symbol_get(timpf_com), "timpf");
++	if (!timpf) {
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
++		symbol_put(ssopf_com);
++		symbol_put(ssowpf_com);
++		symbol_put(fpapf_com);
++		symbol_put(pkopf_com);
++		return -ENODEV;
++	}
+ 	/* Register a physical link status poll fn() */
+ 	check_link = alloc_workqueue("octeontx_check_link_status",
+ 				     WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
+ 	if (!check_link) {
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
++		symbol_put(pkopf_com);
++		symbol_put(timpf_com);
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -602,6 +749,8 @@ static int __init octeontx_init_module(void)
+ 	reset_domain = alloc_workqueue("octeontx_reset_domain",
+ 				       WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
+ 	if (!reset_domain) {
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
+@@ -615,6 +764,8 @@ static int __init octeontx_init_module(void)
+ 	/* create a char device */
+ 	ret = alloc_chrdev_region(&octtx_dev, 1, 1, DEVICE_NAME);
+ 	if (ret != 0) {
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
+@@ -622,6 +773,8 @@ static int __init octeontx_init_module(void)
+ 	}
+ 	octtx_cdev = cdev_alloc();
+ 	if (!octtx_cdev) {
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
+@@ -631,6 +784,8 @@ static int __init octeontx_init_module(void)
+ 	ret = cdev_add(octtx_cdev, octtx_dev, 1);
+ 	if (ret < 0) {
+ 		cdev_del(octtx_cdev);
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
+@@ -641,6 +796,8 @@ static int __init octeontx_init_module(void)
+ 	octtx_class = class_create(THIS_MODULE, CLASS_NAME);
+ 	if (IS_ERR(octtx_class)) {
+ 		cdev_del(octtx_cdev);
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
+@@ -653,6 +810,8 @@ static int __init octeontx_init_module(void)
+ 		class_unregister(octtx_class);
+ 		class_destroy(octtx_class);
+ 		cdev_del(octtx_cdev);
++		symbol_put(lbk_com);
++		symbol_put(pki_com);
+ 		symbol_put(ssopf_com);
+ 		symbol_put(ssowpf_com);
+ 		symbol_put(fpapf_com);
+@@ -671,9 +830,13 @@ static void __exit octeontx_cleanup_module(void)
+ 	class_unregister(octtx_class);
+ 	class_destroy(octtx_class);
+ 	cdev_del(octtx_cdev);
++	symbol_put(pki_com);
+ 	symbol_put(ssopf_com);
+ 	symbol_put(ssowpf_com);
+ 	symbol_put(fpapf_com);
++	symbol_put(pkopf_com);
++	symbol_put(timpf_com);
++	symbol_put(lbk_com);
+ }
+ 
+ module_init(octeontx_init_module);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+new file mode 100644
+index 000000000000..c5e837a40e76
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -0,0 +1,452 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#ifndef PKI_H
++#define PKI_H
++
++#include <linux/pci.h>
++#include <linux/types.h>
++#include "octeontx.h"
++
++/* PCI DEV ID */
++#define PCI_DEVICE_ID_OCTEONTX_PKI	0xA047
++
++#define PCI_PKI_CFG_BAR			0
++#define PCI_PKI_MSIX_BAR		4
++
++#define PKI_MSIX_COUNT			16
++
++/*PKI Register offsets */
++#define PKI_CONST			0x0
++#define PKI_CONST1			0x8
++#define PKI_CONST2			0x10
++#define PKI_CONST3			0x18
++#define PKI_SFT_RST			0x20
++#define PKI_PKT_ERR			0x30
++#define PKI_X2P_REQ_OFL			0x38
++#define	PKI_ECC0_CTL			0x60
++#define	PKI_ECC1_CTL			0x68
++#define PKI_ECC2_CTL			0x70
++#define PKI_BIST_STATUS0		0x80
++#define PKI_BIST_STATUS1		0x88
++#define PKI_BIST_STATUS2		0x90
++#define PKI_BUF_CTL			0x100
++#define PKI_STAT_CTL			0x110
++#define PKI_REQ_WGT			0x120
++#define PKI_PTAG_AVIAL			0x130
++#define PKI_ACTIVE0			0x220
++#define PKI_ACTIVE1			0x230
++#define PKI_ACTIVE2			0x240
++#define PKI_CLKEN			0x410
++#define PKI_TAG_SECRET			0x430
++#define PKI_PCAM_LOOKUP			0x500
++#define PKI_PCAM_RESULT			0x510
++#define PKI_GEN_INT			0x800
++#define PKI_GEN_INT_W1S			0x810
++#define PKI_GEN_INT_ENA_W1C		0x820
++#define PKI_GEN_INT_ENA_W1S		0x830
++#define PKI_ECC0_INT			0x840
++#define PKI_ECC0_INT_W1S		0x850
++#define PKI_ECC0_INT_ENA_W1C		0x860
++#define PKI_ECC0_INT_ENA_W1S		0x870
++#define PKI_ECC1_INT			0x880
++#define PKI_ECC1_INT_W1S		0x890
++#define PKI_ECC1_INT_ENA_W1C		0x8A0
++#define PKI_ECC1_INT_ENA_W1S		0x8B0
++#define PKI_ECC2_INT			0x8C0
++#define PKI_ECC2_INT_W1S		0x8D0
++#define PKI_ECC2_INT_ENA_W1C		0x8E0
++#define PKI_ECC2_INT_ENA_W1S		0x8F0
++#define PKI_ALLOC_FLTX_INT(x)		(0x900 | ((x) << 3))
++#define PKI_ALLOC_FLTX_INT_W1S(x)	(0x920 | ((x) << 3))
++#define PKI_ALLOC_FLTX_INT_ENA_W1C(x)	(0x940 | ((x) << 3))
++#define PKI_ALLOC_FLTX_INT_ENA_W1S(x)	(0x960 | ((x) << 3))
++#define PKI_STRM_FLTX_INT(x)		(0x980 | ((x) << 3))
++#define PKI_STRM_FLTX_INT_W1S(x)	(0x9A0 | ((x) << 3))
++#define PKI_STRM_FLTX_INT_ENA_W1C(x)	(0x9C0 | ((x) << 3))
++#define PKI_STRM_FLTX_INT_ENA_W1S(x)	(0x9E0 | ((x) << 3))
++#define PKI_ALLOC_FLT_DEBUG		0xA00
++#define PKI_FRM_LEN_CHKX(x)		(0x4000 | ((x) << 3))
++#define PKI_LTYPEX_MAP(x)		(0x5000 | ((x) << 3))
++#define PKI_REASM_SOPX(x)		(0x6000 | ((x) << 3))
++#define PKI_TAG_INCX_CTL(x)		(0x7000 | ((x) << 3))
++#define PKI_TAG_INCX_MASK(x)		(0x8000 | ((x) << 3))
++#define PKI_ICGX_CFG(x)			(0xA000 | ((x) << 3))
++#define PKI_CLX_ECC_CTL(x)		(0xC020 | ((x) << 16))
++#define PKI_CLX_START(x)		(0xC030 | ((x) << 16))
++#define PKI_CLX_INT(x)			(0xC100 | ((x) << 16))
++#define PKI_CLX_INT_W1S(x)		(0xC110 | ((x) << 16))
++#define PKI_CLX_INT_ENA_W1C(x)		(0xC120 | ((x) << 16))
++#define PKI_CLX_INT_ENA_W1S(x)		(0xC130 | ((x) << 16))
++#define PKI_CLX_ECC_INT(x)		(0xC200 | ((x) << 16))
++#define PKI_CLX_ECC_INT_W1S(x)		(0xC210 | ((x) << 16))
++#define PKI_CLX_ECC_INT_ENA_W1C(x)	(0xC220 | ((x) << 16))
++#define PKI_CLX_ECC_INT_ENA_W1S(x)	(0xC230 | ((x) << 16))
++#define PKI_PKINDX_ICGSEL(x)		(0x10000 | ((x) << 3))
++#define PKI_STYLEX_TAG_SEL(x)		(0x20000 | ((x) << 3))
++#define PKI_STYLEX_TAG_MASK(x)		(0x21000 | ((x) << 3))
++#define PKI_STYLEX_WQ2(x)		(0x22000 | ((x) << 3))
++#define PKI_STYLEX_WQ4(x)		(0x23000 | ((x) << 3))
++#define PKI_STYLEX_BUF(x)		(0x24000 | ((x) << 3))
++#define PKI_IMEM(x)			(0x100000 | ((x) << 3))
++#define PKI_CLX_PKINDX_KMEMX(x, y, z)	(0x200000 | ((x) << 16) | ((y) << 8) | \
++		((z) << 3))
++#define PKI_CLX_PKINDX_CFG(x, y)	(0x300040 | ((x) << 16) | ((y) << 8))
++#define PKI_CLX_PKINDX_STYLE(x, y)	(0x300048 | ((x) << 16) | ((y) << 8))
++#define PKI_CLX_PKINDX_SKIP(x, y)	(0x300050 | ((x) << 16) | ((y) << 8))
++#define PKI_CLX_PKINDX_L2_CUSTOM(x, y)	(0x300058 | ((x) << 16) | ((y) << 8))
++#define PKI_CLX_PKINDX_LG_CUSTOM(x, y)	(0x300060 | ((x) << 16) | ((y) << 8))
++#define PKI_CLX_SMEMX(x, y)		(0x400000 | ((x) << 16) | ((y) << 3))
++#define PKI_CLX_STYLEX_CFG(x, y)	(0x500000 | ((x) << 16) | ((y) << 3))
++#define PKI_CLX_STYLEX_CFG2(x, y)	(0x500800 | ((x) << 16) | ((y) << 3))
++#define PKI_CLX_STYLEX_ALG(x, y)	(0x501000 | ((x) << 16) | ((y) << 3))
++#define PKI_CLX_PCAMX_TERMX(x, y, z)	(0x700000 | ((x) << 16) | ((y) << 12) |\
++		       ((z) << 3))
++#define PKI_CLX_PCAMX_MATCHX(x, y, z)	(0x704000 | ((x) << 16) | ((y) << 12) |\
++		       ((z) << 3))
++#define PKI_CLX_PCAMX_ACTIONX(x, y, z)	(0x708000 | ((x) << 16) | ((y) << 12) |\
++		       ((z) << 3))
++#define PKI_QPG_TBLX(x)			(0x800000 | ((x) << 3))
++#define PKI_QPG_TBLBX(x)		(0x820000 | ((x) << 3))
++#define PKI_STRMX_CFG(x)		(0x840000 | ((x) << 3))
++#define PKI_AURAX_CFG(x)		(0x900000 | ((x) << 3))
++#define PKI_CHANX_CFG(x)		(0xA00000 | ((x) << 3))
++#define PKI_BPIDX_STATE(x)		(0xB00000 | ((x) << 3))
++#define PKI_DSTATX_STAT0(x)		(0xC00000 | ((x) << 6))
++#define PKI_DSTATX_STAT1(x)		(0xC00008 | ((x) << 6))
++#define PKI_DSTATX_STAT2(x)		(0xC00010 | ((x) << 6))
++#define PKI_DSTATX_STAT3(x)		(0xC00018 | ((x) << 6))
++#define PKI_DSTATX_STAT4(x)		(0xC00020 | ((x) << 6))
++#define PKI_STATX_HIST0(x)		(0xE00000 | ((x) << 8))
++#define PKI_STATX_HIST1(x)		(0xE00008 | ((x) << 8))
++#define PKI_STATX_HIST2(x)		(0xE00010 | ((x) << 8))
++#define PKI_STATX_HIST3(x)		(0xE00018 | ((x) << 8))
++#define PKI_STATX_HIST4(x)		(0xE00020 | ((x) << 8))
++#define PKI_STATX_HIST5(x)		(0xE00028 | ((x) << 8))
++#define PKI_STATX_HIST6(x)		(0xE00030 | ((x) << 8))
++#define PKI_STATX_STAT0(x)		(0xE00038 | ((x) << 8))
++#define PKI_STATX_STAT1(x)		(0xE00040 | ((x) << 8))
++#define PKI_STATX_STAT2(x)		(0xE00048 | ((x) << 8))
++#define PKI_STATX_STAT3(x)		(0xE00050 | ((x) << 8))
++#define PKI_STATX_STAT4(x)		(0xE00058 | ((x) << 8))
++#define PKI_STATX_STAT5(x)		(0xE00060 | ((x) << 8))
++#define PKI_STATX_STAT6(x)		(0xE00068 | ((x) << 8))
++#define PKI_STATX_STAT7(x)		(0xE00070 | ((x) << 8))
++#define PKI_STATX_STAT8(x)		(0xE00078 | ((x) << 8))
++#define PKI_STATX_STAT9(x)		(0xE00080 | ((x) << 8))
++#define PKI_STATX_STAT10(x)		(0xE00088 | ((x) << 8))
++#define PKI_STATX_STAT11(x)		(0xE00090 | ((x) << 8))
++#define PKI_STATX_STAT12(x)		(0xE00098 | ((x) << 8))
++#define PKI_STATX_STAT13(x)		(0xE000A0 | ((x) << 8))
++#define PKI_STATX_STAT14(x)		(0xE000A8 | ((x) << 8))
++#define PKI_STATX_STAT15(x)		(0xE000B0 | ((x) << 8))
++#define PKI_STATX_STAT16(x)		(0xE000B8 | ((x) << 8))
++#define PKI_STATX_STAT17(x)		(0xE000C0 | ((x) << 8))
++#define PKI_STATX_STAT18(x)		(0xE000C8 | ((x) << 8))
++#define PKI_PKINDX_INB_STAT0(x)		(0xF00000 | ((x) << 8))
++#define PKI_PKINDX_INB_STAT1(x)		(0xF00008 | ((x) << 8))
++#define PKI_PKINDX_INB_STAT2(x)		(0xF00010 | ((x) << 8))
++#define PKI_PBE_PCE_FLUSH_DETECT	0xFFF080
++
++#define PKI_CONST_AURAS_MASK		0xffff
++#define PKI_CONST_AURAS_SHIFT		0
++#define PKI_CONST_BPID_MASK		0xffff
++#define PKI_CONST_BPID_SHIFT		16
++#define PKI_CONST_PKNDS_MASK		0xffff
++#define PKI_CONST_PKNDS_SHIFT		32
++#define PKI_CONST_FSTYLES_MASK		0xffff
++#define PKI_CONST_FSTYLES_SHIFT		48
++
++#define PKI_CONST1_CLS_MASK		0xff
++#define PKI_CONST1_CLS_SHIFT		0
++#define PKI_CONST1_IPES_MASK		0xff
++#define PKI_CONST1_IPES_SHIFT		8
++#define PKI_CONST1_PCAMS_MASK		0xff
++#define PKI_CONST1_PCAMS_SHIFT		16
++
++#define PKI_CONST2_PCAM_ENTS_MASK	0xffff
++#define PKI_CONST2_PCAM_ENTS_SHIFT	0
++#define PKI_CONST2_QPGS_MASK		0xffff
++#define PKI_CONST2_QPGS_SHIFT		16
++#define PKI_CONST2_DSTATS_MASK		0xffff
++#define PKI_CONST2_DSTATS_SHIFT		32
++#define PKI_CONST2_STATS_MASK		0xffff
++#define PKI_CONST2_STATS_SHIFT		48
++
++#define PKI_PKIND_STYLE_MASK		0xffULL
++#define PKI_PKIND_STYLE_SHIFT		0
++#define PKI_PKIND_CFG_FCS_SHIFT		7
++
++#define PKI_STYLE_ALG_TT_MASK			0x3
++#define PKI_STLYE_ALG_TT_SHIFT			30
++#define PKI_STYLE_ALG_QPG_QOS_MASK		0x7
++#define PKI_STYLE_ALG_QPG_QOS_SHIFT		24
++#define PKI_STYLE_ALG_TAG_VNI_SHIFT		10
++#define PKI_STYLE_ALG_TAG_GTP_SHIFT		9
++#define PKI_STYLE_ALG_TAG_SPI_SHIFT		8
++#define PKI_STYLE_ALG_TAG_SYN_SHIFT		7
++#define PKI_STYLE_ALG_TAG_PCTL_SHIFT	6
++#define PKI_STYLE_ALG_TAG_VS1_SHIFT		5
++#define PKI_STYLE_ALG_TAG_VS0_SHIFT		4
++#define PKI_STYLE_ALG_TAG_PRT_SHIFT		1
++
++#define PKI_STYLE_CFG_QPG_BASE_MASK	0x7ffULL
++#define PKI_STYLE_CFG_DROP_MASK		0x1
++#define PKI_STYLE_CFG_QPG_DIS_PADD_SHIFT	18
++#define PKI_STYLE_CFG_DROP_SHIFT	20
++#define PKI_STYLE_CFG_FCS_CHK_SHIFT	22
++#define PKI_STYLE_CFG_FCS_STRIP_SHIFT	23
++#define PKI_STYLE_CFG_QPG_DIS_GRPTAG_SHIFT	24
++#define PKI_STYLE_CFG_MINERR_EN_SHIFT	25
++#define PKI_STYLE_CFG_MAXERR_EN_SHIFT	26
++#define PKI_STYLE_CFG_MINMAX_SEL_SHIFT	27
++#define PKI_STYLE_CFG_LENERR_EN_SHIFT	29
++#define PKI_STYLE_CFG_IP6UDP_SHIFT		30
++
++#define PKI_STYLE_CFG2_CSUM_LC_SHIFT	1
++#define PKI_STYLE_CFG2_CSUM_LD_SHIFT	2
++#define PKI_STYLE_CFG2_CSUM_LE_SHIFT	3
++#define PKI_STYLE_CFG2_CSUM_LF_SHIFT	4
++#define PKI_STYLE_CFG2_LEN_LC_SHIFT		7
++#define PKI_STYLE_CFG2_LEN_LD_SHIFT		8
++#define PKI_STYLE_CFG2_LEN_LE_SHIFT		9
++#define PKI_STYLE_CFG2_LEN_LF_SHIFT		10
++#define PKI_STYLE_CFG2_TAG_DLC_SHIFT	13
++#define PKI_STYLE_CFG2_TAG_DLD_SHIFT	14
++#define PKI_STYLE_CFG2_TAG_DLE_SHIFT	15
++#define PKI_STYLE_CFG2_TAG_DLF_SHIFT	16
++#define PKI_STYLE_CFG2_TAG_SLC_SHIFT	19
++#define PKI_STYLE_CFG2_TAG_SLD_SHIFT	20
++#define PKI_STYLE_CFG2_TAG_SLE_SHIFT	21
++#define PKI_STYLE_CFG2_TAG_SLF_SHIFT	22
++
++#define PKI_PCAM_TERM_STYLE0_MASK	0xffULL
++#define PKI_PCAM_TERM_STYLE0_SHIFT	0
++#define PKI_PCAM_TERM_STYLE1_MASK	0xffULL
++#define PKI_PCAM_TERM_STYLE1_SHIFT	32
++
++#define PKI_STYLEX_BUF_MB_SIZE_SHIFT	0
++#define PKI_STYLEX_BUF_MB_SIZE_MASK	0x1fff
++#define PKI_STYLEX_BUF_DIS_WQ_DAT_SHIFT	13
++#define PKI_STYLEX_BUF_DIS_WQ_DAT_MASK	0x1
++#define PKI_STYLEX_BUF_OPC_MODE_SHIFT	14
++#define PKI_STYLEX_BUF_OPC_MODE_MASK	0x3
++#define PKI_STYLEX_BUF_LATER_SKIP_SHIFT	16
++#define PKI_STYLEX_BUF_LATER_SKIP_MASK	0x3f
++#define PKI_STYLEX_BUF_FIRST_SKIP_SHIFT	22
++#define PKI_STYLEX_BUF_FIRST_SKIP_MASK	0x3f
++#define PKI_STYLEX_BUF_WQE_SKIP_SHIFT	28
++#define PKI_STYLEX_BUF_WQE_SKIP_MASK	0x3
++#define PKI_STYLEX_BUF_WQE_HSZ_SHIFT	30
++#define PKI_STYLEX_BUF_WQE_HSZ_MASK	0x3
++#define PKI_STYLEX_BUF_WQE_BEND_SHIFT	32
++#define PKI_STYLEX_BUF_WQE_BEND_MASK	0x1
++
++#define PKI_FRM_MINLEN(x)		(0ull | ((x) & 0xffff))
++#define PKI_FRM_MAXLEN(x)		(0ull | (((x) & 0xffff) << 16))
++#define PKI_BELTYPE(x)			(0ull | ((x) & 0x7))
++#define PKI_LTYPE(x)			((x) & 0xffffffff)
++
++#define PKI_SRAM_SZIE			2048
++
++#define PKI_AURA_CFG_BPID_SHIFT		0
++#define PKI_AURA_CFG_BPID_MASK		0x3FFULL
++
++#define PKI_ICG_CFG_MAXIPE_USE(x)	((0ull | ((x) & 0x1f)) << 48)
++#define PKI_ICG_CFG_CLUSTERS(x)		((0ull | ((x) & 0xf)) << 32)
++#define PKI_ICG_CFG_PENA(x)		((0ull | ((x) & 0x1)) << 24)
++#define PKI_ICG_CFG_DELAY(x)		((0ull | ((x) & 0xfff)) << 0)
++
++#define PKI_QPG_TBLB_DSTAT_ID_MASK	0x3FFULL
++#define PKI_QPG_TBLB_DSTAT_ID_SHIFT	0
++#define PKI_QPG_TBLB_STRM_MASK		0xFFULL
++#define PKI_QPG_TBLB_STRM_SHIFT		16
++
++#define PKI_QPG_TBL_GAURA_MASK		0xFFFULL
++#define PKI_QPG_TBL_GAURA_SHIFT		0
++#define PKI_QPG_TBL_GRP_BAD_MASK	0x3FFULL
++#define PKI_QPG_TBL_GRP_BAD_SHIFT	16
++#define PKI_QPG_TBL_GRP_OK_MASK		0x3FFULL
++#define PKI_QPG_TBL_GRP_OK_SHIFT	32
++#define PKI_QPG_TBL_PORT_ADD_MASK	0xFFULL
++#define PKI_QPG_TBL_PORT_ADD_SHIFT	48
++
++#define PKI_STRM_CFG_GMID_MASK		0xFFFFULL
++
++enum PKI_LTYPE_E {
++	PKI_LTYPE_E_NONE	= 0,
++	PKI_LTYPE_E_ENET	= 1,
++	PKI_LTYPE_E_VLAN	= 2,
++	PKI_LTYPE_E_SNAP_PAYLD	= 5,
++	PKI_LTYPE_E_ARP		= 6,
++	PKI_LTYPE_E_RARP	= 7,
++	PKI_LTYPE_E_IP4		= 8,
++	PKI_LTYPE_E_IP4_OPT	= 9,
++	PKI_LTYPE_E_IP6		= 0xa,
++	PKI_LTYPE_E_IP6_OPT	= 0xb,
++	PKI_LTYPE_E_IPSEC_ESP	= 0xc,
++	PKI_LTYPE_E_IPFRAG	= 0xd,
++	PKI_LTYPE_E_IPCOMP	= 0xe,
++	PKI_LTYPE_E_TCP		= 0x10,
++	PKI_LTYPE_E_UDP		= 0x11,
++	PKI_LTYPE_E_SCTP	= 0x12,
++	PKI_LTYPE_E_UDP_VXLAN	= 0x13,
++	PKI_LTYPE_E_GRE		= 0x14,
++	PKI_LTYPE_E_NVGRE	= 0x15,
++	PKI_LTYPE_E_GTP		= 0x16,
++	PKI_LTYPE_E_UDP_GENEVE	= 0x17,
++	PKI_LTYPE_E_SW28	= 0x1c,
++	PKI_LTYPE_E_SW29	= 0x1d,
++	PKI_LTYPE_E_SW30	= 0x1e,
++	PKI_LTYPE_E_SW31	= 0x1f
++};
++
++enum PKI_BELTYPE_E {
++	PKI_BLTYPE_E_NONE	= 0,
++	PKI_BLTYPE_E_MISC	= 1,
++	PKI_BLTYPE_E_IP4	= 2,
++	PKI_BLTYPE_E_IP6	= 3,
++	PKI_BLTYPE_E_TCP	= 4,
++	PKI_BLTYPE_E_UDP	= 5,
++	PKI_BLTYPE_E_SCTP	= 6,
++	PKI_BLTYPE_E_SNAP	= 7
++};
++
++#define MAX_PKI_PORTS	64
++#define NUM_FRAME_LEN_REG	2
++
++struct pki_port {
++	bool	valid;
++	bool	has_fcs;
++	u32	state;
++	u32	pkind;
++	u32	init_style;
++	u32	qpg_base;
++	u32	num_entry;
++	u64	shared_mask;
++	u16 max_frame_len;
++	u16 min_frame_len;
++};
++
++struct pkipf_vf {
++	struct	octeontx_pf_vf	domain;
++	u8	stream_id;
++	struct	pki_t	*pki;
++
++	struct	pki_port	bgx_port[MAX_PKI_PORTS];
++	struct	pki_port	lbk_port[MAX_PKI_PORTS];
++
++	/* In future if resources are allocated per domain */
++	int	max_fstyles;
++	int	max_pkinds;
++	int	max_bpid;
++	int	max_auras;
++	int	max_pcams;
++	int	max_ipes;
++	int	max_cls;
++	int	max_stats;
++	int	max_dstats;
++	int	max_qpgs;
++	int	max_pcam_ents;
++
++	int	bpid_base;
++	int	fstyle_base;
++	int	pknds_base;
++	int	stats_base;
++	int	dstats_base;
++	int	qpg_base;
++	int	pcam_ent_base;
++};
++
++#define PKI_MAX_VF			32
++struct pki_t {
++	struct pci_dev		*pdev;
++	void __iomem		*reg_base;
++	int			id;
++	struct msix_entry	*msix_entries;
++	struct list_head	list;
++
++	int			max_fstyles;
++	int			max_pkinds;
++	int			max_bpid;
++	int			max_auras;
++	int			max_pcams;
++	int			max_ipes;
++	int			max_cls;
++	int			max_stats;
++	int			max_dstats;
++	int			max_qpgs;
++	int			max_pcam_ents;
++
++	int			bpid_base;
++	int			fstyle_base;
++	int			pknds_base;
++	int			stats_base;
++	int			dstats_base;
++	int			qpg_base;
++	int			pcam_ent_base;
++
++	int			total_vfs;
++	int			vfs_in_use;
++#define PKI_SRIOV_ENABLED	0x1
++	u32			flags;
++	struct pkipf_vf		vf[PKI_MAX_VF];
++};
++
++struct pki_com_s {
++	int (*create_domain)(u32, u16, struct octeontx_master_com_t *, void *,
++			     struct kobject *kobj, char *g_name);
++	int (*free_domain)(u32, u16);
++	int (*reset_domain)(u32, u16);
++	int (*receive_message)(u32, u16 domain_id,
++			       struct mbox_hdr *hdr,
++			       union mbox_data *req,
++			       union mbox_data *resp, void *mdata);
++	int (*add_bgx_port)(u32 node, u16 domain_id,
++			    struct octtx_bgx_port *port);
++	int (*add_lbk_port)(u32 node, u16 domain_id,
++			    struct octtx_lbk_port *port);
++};
++
++extern struct pki_com_s pki_com;
++
++/* In Cavium OcteonTX SoCs, all accesses to the device registers are
++ * implicitly strongly ordered.
++ * So writeq_relaxed() and readq_relaxed() are safe to use
++ * with out any memory barriers.
++ */
++
++/* Register read/write APIs */
++static inline void pki_reg_write(struct pki_t *pki, u64 offset, u64 val)
++{
++	writeq_relaxed(val, pki->reg_base + offset);
++}
++
++static inline u64 pki_reg_read(struct pki_t *pki, u64 offset)
++{
++	return readq_relaxed(pki->reg_base + offset);
++}
++
++int assign_pkind_bgx(struct pkipf_vf *vf, struct octtx_bgx_port *port);
++int assign_pkind_lbk(struct pkipf_vf *vf, struct octtx_lbk_port *port);
++void init_styles(struct pki_t *pki);
++
++int pki_port_open(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
++int pki_port_create_qos(struct pkipf_vf *vf, u16 vf_id,
++			mbox_pki_qos_cfg_t *qcfg);
++int pki_port_start(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
++int pki_port_stop(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
++int pki_port_close(struct pkipf_vf *vf, u16 vf_id, mbox_pki_port_t *port_data);
++int pki_port_pktbuf_cfg(struct pkipf_vf *vf, u16 vf_id,
++			mbox_pki_pktbuf_cfg_t *pcfg);
++int pki_port_errchk(struct pkipf_vf *vf, u16 vf_id,
++		    mbox_pki_errcheck_cfg_t *cfg);
++int pki_port_hashcfg(struct pkipf_vf *vf, u16 vf_id,
++		     mbox_pki_hash_cfg_t *cfg);
++
++#endif
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+new file mode 100644
+index 000000000000..d62dc5e60ca4
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -0,0 +1,543 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include "pki.h"
++
++#define MAX_BGX_PKIND	16
++#define MAX_LBK_PKIND	16
++#define MAX_SDP_PKIND	16
++
++#define BGX_PKIND_BASE	1
++#define LBK_PKIND_BASE	20
++#define SDP_PKIND_BASE	40
++#define PKI_DROP_STYLE	0
++#define QPG_NOT_INIT	((uint32_t)-88)
++
++enum PKI_PORT_STATE {
++	PKI_PORT_CLOSE	 = 0,
++	PKI_PORT_OPEN	 = 1,
++	PKI_PORT_START	 = 2,
++	PKI_PORT_STOP	 = 3
++};
++
++static void set_clear_bit(u64 *value, bool flag, u64 bit_num)
++{
++	if (flag)
++		*value |= (0x1ULL << bit_num);
++	else
++		*value &= ~(0x1Ull << bit_num);
++}
++
++static int pki_frmlen_reg(struct pki_t *pki, u16 maxlen, u16 minlen)
++{
++	u64 cfg;
++	int i;
++
++	for (i = 0; i < NUM_FRAME_LEN_REG; i++) {
++		cfg = pki_reg_read(pki, PKI_FRM_LEN_CHKX(i));
++		if (((cfg & 0xff) == minlen) &&
++		    (((cfg >> 15) & 0xff) == maxlen))
++		return i;
++	}
++	return -1;
++}
++
++static void reset_port_reg(struct pki_t *pki, struct pki_port *port)
++{
++	u32 style = port->init_style;
++	u32 qpg_base = port->qpg_base;
++	int i;
++	u64 cfg;
++
++	for (i = 0; i < pki->max_cls; i++) {
++		/*TO_DO read and then write */
++		cfg = PKI_DROP_STYLE;
++		pki_reg_write(pki, PKI_CLX_PKINDX_STYLE(i, port->pkind), cfg);
++		cfg = 0x0;
++		pki_reg_write(pki, PKI_CLX_PKINDX_CFG(i, port->pkind), cfg);
++		pki_reg_write(pki, PKI_CLX_PKINDX_SKIP(i, port->pkind), cfg);
++		pki_reg_write(pki, PKI_CLX_PKINDX_L2_CUSTOM(i, port->pkind),
++			      cfg);
++		pki_reg_write(pki, PKI_CLX_PKINDX_LG_CUSTOM(i, port->pkind),
++			      cfg);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, style), cfg);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG2(i, style), cfg);
++		pki_reg_write(pki, PKI_CLX_STYLEX_ALG(i, style), cfg);
++	}
++	cfg = 0x0;
++	pki_reg_write(pki, PKI_STYLEX_TAG_MASK(style), cfg);
++	pki_reg_write(pki, PKI_STYLEX_TAG_SEL(style), cfg);
++	pki_reg_write(pki, PKI_STYLEX_WQ2(style), cfg);
++	pki_reg_write(pki, PKI_STYLEX_WQ4(style), cfg);
++	cfg = 0x1800020;
++	pki_reg_write(pki, PKI_STYLEX_BUF(style), cfg);
++	cfg = 0;
++	for (i = 0; i < port->num_entry; i++) {
++		pki_reg_write(pki, PKI_QPG_TBLX(qpg_base + i), cfg);
++		pki_reg_write(pki, PKI_QPG_TBLBX(qpg_base + i), cfg);
++	}
++}
++
++int assign_pkind_bgx(struct pkipf_vf *vf, struct octtx_bgx_port *port)
++{
++	int pkind;
++
++	if (vf->bgx_port[port->dom_port_idx].valid)
++		return -EEXIST;
++
++	/* TO_DO use alloc/free resource */
++	pkind = BGX_PKIND_BASE + (port->bgx * 4) + port->lmac;
++
++	if (pkind > (BGX_PKIND_BASE + MAX_BGX_PKIND))
++		return -EINVAL;
++	vf->bgx_port[port->dom_port_idx].valid = true;
++	vf->bgx_port[port->dom_port_idx].pkind = pkind;
++	/* by default disable fcs for bgx port as BGX is stripping it,
++	 * should be controllabe by app
++	 */
++	vf->bgx_port[port->dom_port_idx].has_fcs = false;
++	vf->bgx_port[port->dom_port_idx].state = PKI_PORT_CLOSE;
++
++	return pkind;
++}
++
++int assign_pkind_lbk(struct pkipf_vf *vf, struct octtx_lbk_port *port)
++{
++	int pkind;
++
++	if (vf->lbk_port[port->dom_port_idx].valid)
++		return -EEXIST;
++
++	pkind = LBK_PKIND_BASE + port->glb_port_idx;
++
++	if (pkind > (LBK_PKIND_BASE + MAX_LBK_PKIND))
++		return -EINVAL;
++
++	vf->lbk_port[port->dom_port_idx].valid = true;
++	vf->lbk_port[port->dom_port_idx].pkind = pkind;
++	/* by default disable fcs for lbk port,
++	 * should be controllable by app
++	 */
++	vf->lbk_port[port->dom_port_idx].has_fcs = false;
++	vf->lbk_port[port->dom_port_idx].state = PKI_PORT_CLOSE;
++
++	return pkind;
++}
++
++void init_styles(struct pki_t *pki)
++
++{
++	u32 i, j;
++	u64 cfg = 0;
++
++	cfg |= (0x1ULL << PKI_STYLE_CFG_DROP_SHIFT);
++
++	for (i = 0; i < pki->max_fstyles; i++) {
++		for (j = 0; j < pki->max_cls; j++)
++			pki_reg_write(pki, PKI_CLX_STYLEX_CFG(j, i), cfg);
++	}
++}
++
++int pki_port_open(struct pkipf_vf *vf, u16 vf_id,
++		  mbox_pki_port_t *port_data)
++{
++	struct pki_port *port;
++	struct pki_t *pki = vf->pki;
++	u64 cfg;
++	int i;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_CLOSE && port->valid != true)
++		return MBOX_RET_INVALID; /* modify fro virtual ports later*/
++	/* Release 1.0 assign style = pkind
++	 * later modify it to alloc from max_style
++	 * for this vf
++	 */
++	port->init_style = port->pkind;
++	cfg = port->init_style & PKI_PKIND_STYLE_MASK;
++	for (i = 0; i < pki->max_cls; i++)
++		pki_reg_write(pki, PKI_CLX_PKINDX_STYLE(i, port->pkind), cfg);
++	cfg = port->has_fcs ? (0x1ULL << PKI_PKIND_CFG_FCS_SHIFT) : 0;
++	for (i = 0; i < pki->max_cls; i++)
++		pki_reg_write(pki, PKI_CLX_PKINDX_CFG(i, port->pkind), cfg);
++	/* Initialize style typical values*/
++	cfg = 0;
++	if (port->has_fcs) {
++		cfg |= (0x1ULL << PKI_STYLE_CFG_FCS_CHK_SHIFT);
++		cfg |= (0x1ULL << PKI_STYLE_CFG_FCS_STRIP_SHIFT);
++	}
++	cfg |= (0x1ULL << PKI_STYLE_CFG_MAXERR_EN_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG_LENERR_EN_SHIFT);
++	for (i = 0; i < pki->max_cls; i++)
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, port->init_style),
++			      cfg);
++
++	cfg = 0;
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_CSUM_LC_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_CSUM_LD_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_CSUM_LE_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_CSUM_LF_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_LEN_LC_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_LEN_LD_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_LEN_LE_SHIFT);
++	cfg |= (0x1ULL << PKI_STYLE_CFG2_LEN_LF_SHIFT);
++	for (i = 0; i < pki->max_cls; i++)
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG2(i, port->init_style),
++			      cfg);
++
++	port->state = PKI_PORT_OPEN;
++	port->qpg_base = QPG_NOT_INIT;
++	cfg = pki_reg_read(pki, PKI_FRM_LEN_CHKX(0));
++	port->min_frame_len = cfg & 0xff;
++	port->max_frame_len = (cfg >> 15) & 0xff;
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_create_qos(struct pkipf_vf *vf, u16 vf_id,
++			mbox_pki_qos_cfg_t *qcfg)
++{
++	struct pki_port *port;
++	struct mbox_pki_qos_entry *qpg;
++	struct pki_t	*pki = vf->pki;
++	int qpg_base;
++	u64 cfg;
++	int i;
++	int style;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_OPEN || port->qpg_base != QPG_NOT_INIT)
++		return MBOX_RET_INVALID;
++	style = port->init_style;
++	/* TO_DO add support for alloc qpg, for now use pkind*64 */
++	qpg_base = port->pkind * 64;
++	if ((qpg_base + qcfg->num_entry) >= vf->max_qpgs)
++		return MBOX_RET_INTERNAL_ERR; /*TO_DO send errcode out of rsrc*/
++	port->qpg_base = qpg_base;
++	port->num_entry = qcfg->num_entry;
++	for (i = 0; i < pki->max_cls; i++) {
++		cfg = pki_reg_read(pki, PKI_CLX_STYLEX_ALG(i, style));
++		cfg |= (qcfg->qpg_qos & PKI_STYLE_ALG_QPG_QOS_MASK) <<
++			PKI_STYLE_ALG_QPG_QOS_SHIFT;
++		cfg |= (qcfg->tag_type & PKI_STYLE_ALG_TT_MASK) <<
++			PKI_STLYE_ALG_TT_SHIFT;
++		pki_reg_write(pki, PKI_CLX_STYLEX_ALG(i, style), cfg);
++	}
++	for (i = 0; i < qcfg->num_entry; i++) {
++		qpg = &qcfg->qos_entry[i];
++		cfg = pki_reg_read(pki, PKI_QPG_TBLX(qpg_base + i));
++		cfg |= (qpg->gaura & PKI_QPG_TBL_GAURA_MASK) <<
++			PKI_QPG_TBL_GAURA_SHIFT;
++		cfg |= (qpg->ggrp_ok & PKI_QPG_TBL_GRP_OK_MASK) <<
++			PKI_QPG_TBL_GRP_OK_SHIFT;
++		cfg |= (qpg->ggrp_bad & PKI_QPG_TBL_GRP_BAD_MASK) <<
++			PKI_QPG_TBL_GRP_BAD_SHIFT;
++		cfg |= (qpg->port_add & PKI_QPG_TBL_PORT_ADD_MASK) <<
++			PKI_QPG_TBL_PORT_ADD_SHIFT;
++		pki_reg_write(pki, PKI_QPG_TBLX(qpg_base + i), cfg);
++		cfg = pki_reg_read(pki, PKI_QPG_TBLBX(qpg_base + i));
++		cfg |= (vf->stream_id & PKI_QPG_TBLB_STRM_MASK) <<
++			PKI_QPG_TBLB_STRM_SHIFT;
++		pki_reg_write(pki, PKI_QPG_TBLBX(qpg_base + i), cfg);
++	}
++	for (i = 0; i < pki->max_cls; i++) {
++		cfg = pki_reg_read(pki, PKI_CLX_STYLEX_CFG(i, style));
++		cfg |= (port->qpg_base & PKI_STYLE_CFG_QPG_BASE_MASK);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, style), cfg);
++	}
++	port->state = PKI_PORT_STOP;
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_start(struct pkipf_vf *vf, u16 vf_id,
++		   mbox_pki_port_t *port_data)
++{
++	struct pki_port *port;
++	struct pki_t	*pki = vf->pki;
++	u64 cfg;
++	int i;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_STOP || port->qpg_base == QPG_NOT_INIT)
++		return MBOX_RET_INVALID;
++	for (i = 0; i < pki->max_cls; i++) {
++		cfg = pki_reg_read(pki, PKI_CLX_STYLEX_CFG(i,
++							   port->init_style));
++		cfg &= ~(0x1ULL << PKI_STYLE_CFG_DROP_SHIFT);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i,
++						      port->init_style), cfg);
++	}
++	port->state = PKI_PORT_START;
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_stop(struct pkipf_vf *vf, u16 vf_id,
++		  mbox_pki_port_t *port_data)
++{
++	struct pki_port *port;
++	u64 cfg;
++	int i;
++	struct pki_t *pki = vf->pki;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_START)
++		return MBOX_RET_INVALID;
++	for (i = 0; i < pki->max_cls; i++) {
++		cfg = pki_reg_read(pki, PKI_CLX_STYLEX_CFG(i,
++							   port->init_style));
++		cfg |= (0x1ULL << PKI_STYLE_CFG_DROP_SHIFT);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i,
++						      port->init_style), cfg);
++	}
++	port->state = PKI_PORT_STOP;
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_close(struct pkipf_vf *vf, u16 vf_id,
++		   mbox_pki_port_t *port_data)
++{
++	struct pki_port *port;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	/*TO_DO free up all the resources*/
++	/* TO_DO should we write all the register with reset
++	 * values at this point?
++	 */
++	reset_port_reg(vf->pki, port);
++	port->init_style = PKI_DROP_STYLE;
++	port->qpg_base = QPG_NOT_INIT;
++	port->num_entry = 0;
++	port->shared_mask = 0;
++	port->state = PKI_PORT_CLOSE;
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_pktbuf_cfg(struct pkipf_vf *vf, u16 vf_id,
++			mbox_pki_pktbuf_cfg_t *pcfg)
++{
++	struct pki_port *port;
++	struct pki_t *pki = vf->pki;
++	u64 reg;
++	u8 pkt_outside_wqe, wqe_endian, cache_mode, wqe_hsz;
++	u16 mbuff_size, wqe_skip, first_skip, later_skip;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_OPEN)
++		return MBOX_RET_INVALID;
++
++	reg = pki_reg_read(pki, PKI_STYLEX_BUF(port->init_style));
++	/* Read current values */
++	wqe_hsz = (reg >> PKI_STYLEX_BUF_WQE_HSZ_SHIFT)
++			  & PKI_STYLEX_BUF_WQE_HSZ_MASK;
++	pkt_outside_wqe = (reg >> PKI_STYLEX_BUF_DIS_WQ_DAT_SHIFT)
++			  & PKI_STYLEX_BUF_DIS_WQ_DAT_MASK;
++	wqe_endian = (reg >> PKI_STYLEX_BUF_WQE_BEND_SHIFT)
++			  & PKI_STYLEX_BUF_WQE_BEND_MASK;
++	cache_mode = (reg >> PKI_STYLEX_BUF_OPC_MODE_SHIFT)
++			  & PKI_STYLEX_BUF_OPC_MODE_MASK;
++	mbuff_size = (reg >> PKI_STYLEX_BUF_MB_SIZE_SHIFT)
++			  & PKI_STYLEX_BUF_MB_SIZE_MASK;
++	wqe_skip = (reg >> PKI_STYLEX_BUF_WQE_SKIP_SHIFT)
++			  & PKI_STYLEX_BUF_WQE_SKIP_MASK;
++	first_skip = (reg >> PKI_STYLEX_BUF_FIRST_SKIP_SHIFT)
++			  & PKI_STYLEX_BUF_FIRST_SKIP_MASK;
++	later_skip = (reg >> PKI_STYLEX_BUF_LATER_SKIP_SHIFT)
++			  & PKI_STYLEX_BUF_LATER_SKIP_MASK;
++
++	/* Update with values from request */
++	if (pcfg->mmask.f_mbuff_size) {
++		if (pcfg->mbuff_size & 0xf)
++			return MBOX_RET_INVALID;
++		mbuff_size = (pcfg->mbuff_size >> 3)
++			     & PKI_STYLEX_BUF_MB_SIZE_MASK;
++	}
++	if (pcfg->mmask.f_wqe_skip)
++		wqe_skip = (pcfg->wqe_skip >> 7)
++			     & PKI_STYLEX_BUF_WQE_SKIP_MASK;
++	if (pcfg->mmask.f_first_skip) {
++		if (pcfg->first_skip & 0xf)
++			return MBOX_RET_INVALID;
++		first_skip = (pcfg->first_skip >> 3)
++			      & PKI_STYLEX_BUF_FIRST_SKIP_MASK;
++	}
++	if (pcfg->mmask.f_later_skip) {
++		if (pcfg->later_skip & 0xf)
++			return MBOX_RET_INVALID;
++		later_skip = (pcfg->later_skip >> 3)
++			      & PKI_STYLEX_BUF_LATER_SKIP_MASK;
++	}
++	if (pcfg->mmask.f_pkt_outside_wqe)
++		pkt_outside_wqe = pcfg->pkt_outside_wqe
++				  & PKI_STYLEX_BUF_DIS_WQ_DAT_MASK;
++	if (pcfg->mmask.f_wqe_endian)
++		wqe_endian = pcfg->wqe_endian & PKI_STYLEX_BUF_WQE_BEND_MASK;
++	if (pcfg->mmask.f_cache_mode)
++		cache_mode = pcfg->cache_mode & PKI_STYLEX_BUF_OPC_MODE_MASK;
++
++	/* Validate new configuration */
++	if (later_skip > (mbuff_size - 18))
++		return MBOX_RET_INVALID;
++	if (pkt_outside_wqe) {
++		if ((((wqe_skip * 16) + 18) > mbuff_size) ||
++		    (first_skip > (mbuff_size - 18)))
++			return MBOX_RET_INVALID;
++	} else {
++		if ((first_skip < ((wqe_skip * 16) + 6)) ||
++		    (first_skip > (mbuff_size - 18)))
++			return MBOX_RET_INVALID;
++	}
++
++	/* Write the register */
++	reg = ((u64)wqe_endian << PKI_STYLEX_BUF_WQE_BEND_SHIFT)
++	      | ((u64)wqe_hsz << PKI_STYLEX_BUF_WQE_HSZ_SHIFT)
++	      | ((u64)wqe_skip << PKI_STYLEX_BUF_WQE_SKIP_SHIFT)
++	      | ((u64)first_skip << PKI_STYLEX_BUF_FIRST_SKIP_SHIFT)
++	      | ((u64)later_skip << PKI_STYLEX_BUF_LATER_SKIP_SHIFT)
++	      | ((u64)cache_mode << PKI_STYLEX_BUF_OPC_MODE_SHIFT)
++	      | ((u64)pkt_outside_wqe << PKI_STYLEX_BUF_DIS_WQ_DAT_SHIFT)
++	      | ((u64)mbuff_size << PKI_STYLEX_BUF_MB_SIZE_SHIFT);
++
++	pki_reg_write(pki, PKI_STYLEX_BUF(port->init_style), reg);
++
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_errchk(struct pkipf_vf *vf, u16 vf_id,
++		    mbox_pki_errcheck_cfg_t *cfg)
++{
++	struct pki_port *port;
++	int style;
++	u64 scfg;
++	u64 scfg2;
++	u8 val = 0;
++	int i;
++	struct pki_t *pki = vf->pki;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_OPEN)
++		return MBOX_RET_INVALID;
++
++	style = port->init_style;
++	/*All cluster have same values in 83xx so just read the cluster 0 */
++	scfg = pki_reg_read(pki, PKI_CLX_STYLEX_CFG(0, style));
++	scfg2 = pki_reg_read(pki, PKI_CLX_STYLEX_CFG2(0, style));
++
++	if (cfg->mmask.f_csum_lc)
++		set_clear_bit(&scfg2, cfg->csum_lc,
++			      PKI_STYLE_CFG2_CSUM_LC_SHIFT);
++	if (cfg->mmask.f_csum_ld)
++		set_clear_bit(&scfg2, cfg->csum_ld,
++			      PKI_STYLE_CFG2_CSUM_LD_SHIFT);
++	if (cfg->mmask.f_csum_le)
++		set_clear_bit(&scfg2, cfg->csum_le,
++			      PKI_STYLE_CFG2_CSUM_LE_SHIFT);
++	if (cfg->mmask.f_csum_lf)
++		set_clear_bit(&scfg2, cfg->csum_lf,
++			      PKI_STYLE_CFG2_CSUM_LF_SHIFT);
++	if (cfg->mmask.f_len_lc)
++		set_clear_bit(&scfg2, cfg->len_lc, PKI_STYLE_CFG2_LEN_LC_SHIFT);
++	if (cfg->mmask.f_len_ld)
++		set_clear_bit(&scfg2, cfg->len_ld, PKI_STYLE_CFG2_LEN_LD_SHIFT);
++	if (cfg->mmask.f_len_le)
++		set_clear_bit(&scfg2, cfg->len_le, PKI_STYLE_CFG2_LEN_LE_SHIFT);
++	if (cfg->mmask.f_len_lf)
++		set_clear_bit(&scfg2, cfg->len_lf, PKI_STYLE_CFG2_LEN_LF_SHIFT);
++
++	if (cfg->mmask.f_fcs_chk)
++		set_clear_bit(&scfg, cfg->fcs_chk, PKI_STYLE_CFG_FCS_CHK_SHIFT);
++	if (cfg->mmask.f_fcs_strip)
++		set_clear_bit(&scfg, cfg->fcs_strip,
++			      PKI_STYLE_CFG_FCS_STRIP_SHIFT);
++	if (cfg->mmask.f_ip6_udp_opt)
++		set_clear_bit(&scfg, cfg->ip6_udp_opt,
++			      PKI_STYLE_CFG_IP6UDP_SHIFT);
++	if (cfg->mmask.f_lenerr_en)
++		set_clear_bit(&scfg, cfg->lenerr_en,
++			      PKI_STYLE_CFG_LENERR_EN_SHIFT);
++	if (cfg->mmask.f_maxerr_en)
++		set_clear_bit(&scfg, cfg->maxerr_en,
++			      PKI_STYLE_CFG_MAXERR_EN_SHIFT);
++	if (cfg->mmask.f_minerr_en)
++		set_clear_bit(&scfg, cfg->maxerr_en,
++			      PKI_STYLE_CFG_MINERR_EN_SHIFT);
++	if (cfg->mmask.f_min_frame_len && cfg->mmask.f_max_frame_len) {
++		val = pki_frmlen_reg(pki, cfg->max_frame_len,
++				     cfg->min_frame_len);
++		if (val >= 0) {
++			port->max_frame_len = cfg->max_frame_len;
++			port->min_frame_len = cfg->min_frame_len;
++		}
++	} else if (cfg->mmask.f_max_frame_len) {
++		val = pki_frmlen_reg(pki, cfg->max_frame_len,
++				     port->min_frame_len);
++		if (val >= 0)
++			port->max_frame_len = cfg->max_frame_len;
++	} else if (cfg->mmask.f_min_frame_len) {
++		val = pki_frmlen_reg(pki, port->max_frame_len,
++				     cfg->min_frame_len);
++		if (val >= 0)
++			port->min_frame_len = cfg->min_frame_len;
++	}
++	if (val >= 0)
++		set_clear_bit(&scfg, val, PKI_STYLE_CFG_MINMAX_SEL_SHIFT);
++
++	for (i = 0; i < pki->max_cls; i++) {
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, style), scfg);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG2(i, style), scfg2);
++	}
++	return MBOX_RET_SUCCESS;
++}
++
++int pki_port_hashcfg(struct pkipf_vf *vf, u16 vf_id,
++		     mbox_pki_hash_cfg_t *cfg)
++{
++	struct pki_port *port;
++	int style;
++	u64 salg;
++	u64 scfg2;
++	int i;
++	struct pki_t *pki = vf->pki;
++
++	/* TO_DO add support for loopback ports later*/
++	port = &vf->bgx_port[vf_id];
++	if (port->state != PKI_PORT_OPEN)
++		return MBOX_RET_INVALID;
++
++	style = port->init_style;
++	salg = pki_reg_read(pki, PKI_CLX_STYLEX_ALG(0, style));
++	scfg2 = pki_reg_read(pki, PKI_CLX_STYLEX_CFG2(0, style));
++
++	set_clear_bit(&salg, cfg->tag_vni, PKI_STYLE_ALG_TAG_VNI_SHIFT);
++	set_clear_bit(&salg, cfg->tag_gtp, PKI_STYLE_ALG_TAG_GTP_SHIFT);
++	set_clear_bit(&salg, cfg->tag_spi, PKI_STYLE_ALG_TAG_SPI_SHIFT);
++	set_clear_bit(&salg, cfg->tag_sync, PKI_STYLE_ALG_TAG_SYN_SHIFT);
++	set_clear_bit(&salg, cfg->tag_ip_pctl, PKI_STYLE_ALG_TAG_PCTL_SHIFT);
++	set_clear_bit(&salg, cfg->tag_vlan1, PKI_STYLE_ALG_TAG_VS1_SHIFT);
++	set_clear_bit(&salg, cfg->tag_vlan0, PKI_STYLE_ALG_TAG_VS0_SHIFT);
++	set_clear_bit(&salg, cfg->tag_prt, PKI_STYLE_ALG_TAG_PRT_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_slc, PKI_STYLE_CFG2_TAG_SLC_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_sld, PKI_STYLE_CFG2_TAG_SLD_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_sle, PKI_STYLE_CFG2_TAG_SLE_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_slf, PKI_STYLE_CFG2_TAG_SLF_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_dlc, PKI_STYLE_CFG2_TAG_DLC_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_dld, PKI_STYLE_CFG2_TAG_DLD_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_dle, PKI_STYLE_CFG2_TAG_DLE_SHIFT);
++	set_clear_bit(&scfg2, cfg->tag_dlf, PKI_STYLE_CFG2_TAG_DLF_SHIFT);
++
++	for (i = 0; i < pki->max_cls; i++) {
++		pki_reg_write(pki, PKI_CLX_STYLEX_ALG(i, style), salg);
++		pki_reg_write(pki, PKI_CLX_STYLEX_CFG2(i, style), scfg2);
++	}
++	return MBOX_RET_SUCCESS;
++}
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+new file mode 100644
+index 000000000000..f95304391ec9
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -0,0 +1,714 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/random.h>
++
++#include "pki.h"
++
++#define DRV_NAME "octeontx-pki"
++#define DRV_VERSION "0.1"
++
++static atomic_t pki_count = ATOMIC_INIT(0);
++
++static DEFINE_SPINLOCK(octeontx_pki_devices_lock);
++static LIST_HEAD(octeontx_pki_devices);
++
++static irqreturn_t pki_gen_intr_handler(int irq, void *pki_irq)
++{
++	struct pki_t *pki = (struct pki_t *)pki_irq;
++	u64 gen_int = pki_reg_read(pki, PKI_GEN_INT);
++
++	printk_once("Received GEN INT(%llx)", gen_int);
++
++	pki_reg_write(pki, PKI_GEN_INT, gen_int);
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t pki_ecc_intr_handler(int irq, void *pki_irq)
++{
++	struct pki_t *pki = (struct pki_t *)pki;
++	u64 reg;
++
++	dev_err(&pki->pdev->dev, "Received ECC INT\n");
++	reg = pki_reg_read(pki, PKI_ECC0_INT);
++	dev_err(&pki->pdev->dev, "ecc0:%llx \t", reg);
++	pki_reg_write(pki, PKI_ECC0_INT, reg);
++	reg = pki_reg_read(pki, PKI_ECC1_INT);
++	dev_err(&pki->pdev->dev, "ecc1:%llx \t", reg);
++	pki_reg_write(pki, PKI_ECC1_INT, reg);
++	reg = pki_reg_read(pki, PKI_ECC2_INT);
++	dev_err(&pki->pdev->dev, "ecc2:%llx\n", reg);
++	pki_reg_write(pki, PKI_ECC2_INT, reg);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t pki_cl_intr_handler(int irq, void *pki_irq)
++{
++	struct pki_t *pki = (struct pki_t *)pki_irq;
++	u64 reg;
++
++	dev_err(&pki->pdev->dev, "Cluster INT received\n");
++	reg = pki_reg_read(pki, PKI_CLX_INT(0));
++	dev_err(&pki->pdev->dev, "cl0_int: %llx \t", reg);
++	pki_reg_write(pki, PKI_CLX_INT(0), reg);
++	reg = pki_reg_read(pki, PKI_CLX_INT(1));
++	dev_err(&pki->pdev->dev, "cl1_int: %llx\n", reg);
++	pki_reg_write(pki, PKI_CLX_INT(1), reg);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t pki_cl_ecc_intr_handler(int irq, void *pki_irq)
++{
++	struct pki_t *pki = (struct pki_t *)pki_irq;
++	u64 reg;
++
++	dev_err(&pki->pdev->dev, "Cluster ECC INT received\n");
++	reg = pki_reg_read(pki, PKI_CLX_ECC_INT(0));
++	dev_err(&pki->pdev->dev, "cl0_ecc0_int: %llx \t", reg);
++	pki_reg_write(pki, PKI_CLX_ECC_INT(0), reg);
++	reg = pki_reg_read(pki, PKI_CLX_ECC_INT(1));
++	dev_err(&pki->pdev->dev, "cl1_ecc1_int: %llx\n", reg);
++	pki_reg_write(pki, PKI_CLX_ECC_INT(1), reg);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t pki_alloc_flt_intr_handler(int irq, void *pki_irq)
++{
++	struct pki_t *pki = (struct pki_t *)pki_irq;
++	u64 reg;
++
++	dev_err(&pki->pdev->dev, "FPA alloc failed\n");
++	reg = pki_reg_read(pki, PKI_ALLOC_FLTX_INT(0));
++	dev_err(&pki->pdev->dev, "flt0: %llx \t", reg);
++	pki_reg_write(pki, PKI_ALLOC_FLTX_INT(0), reg);
++	reg = pki_reg_read(pki, PKI_ALLOC_FLTX_INT(1));
++	dev_err(&pki->pdev->dev, "flt1: %llx \t", reg);
++	pki_reg_write(pki, PKI_ALLOC_FLTX_INT(1), reg);
++	reg = pki_reg_read(pki, PKI_ALLOC_FLTX_INT(2));
++	dev_err(&pki->pdev->dev, "flt2: %llx \t", reg);
++	pki_reg_write(pki, PKI_ALLOC_FLTX_INT(2), reg);
++	reg = pki_reg_read(pki, PKI_ALLOC_FLTX_INT(3));
++	dev_err(&pki->pdev->dev, "flt3: %llx\n", reg);
++	pki_reg_write(pki, PKI_ALLOC_FLTX_INT(3), reg);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t pki_store_flt_intr_handler(int irq, void *pki_irq)
++{
++	struct pki_t *pki = (struct pki_t *)pki_irq;
++	u64 reg;
++
++	dev_err(&pki->pdev->dev, "NCB store fualt\n");
++	reg = pki_reg_read(pki, PKI_STRM_FLTX_INT(0));
++	dev_err(&pki->pdev->dev, "strm0: %llx \t", reg);
++	pki_reg_write(pki, PKI_STRM_FLTX_INT(0), reg);
++	reg = pki_reg_read(pki, PKI_STRM_FLTX_INT(1));
++	dev_err(&pki->pdev->dev, "strm1: %llx \t", reg);
++	pki_reg_write(pki, PKI_STRM_FLTX_INT(1), reg);
++	reg = pki_reg_read(pki, PKI_STRM_FLTX_INT(2));
++	dev_err(&pki->pdev->dev, "strm2: %llx \t", reg);
++	pki_reg_write(pki, PKI_STRM_FLTX_INT(2), reg);
++	reg = pki_reg_read(pki, PKI_STRM_FLTX_INT(3));
++	dev_err(&pki->pdev->dev, "strm3: %llx \t", reg);
++	pki_reg_write(pki, PKI_STRM_FLTX_INT(3), reg);
++
++	return IRQ_HANDLED;
++}
++
++static struct intr_hand intr[] = {
++	{0x2, "pki gen intr", PKI_GEN_INT_ENA_W1C,
++		PKI_GEN_INT_ENA_W1S, pki_gen_intr_handler},
++	{0xffff, "pki ecc0 intr", PKI_ECC0_INT_ENA_W1C,
++		PKI_ECC0_INT_ENA_W1S, pki_ecc_intr_handler},
++	{0x3ffc0f3cff, "pki ecc1 intr", PKI_ECC1_INT_ENA_W1C,
++		PKI_ECC1_INT_ENA_W1S, pki_ecc_intr_handler},
++	{0x3, "pki ecc2 intr", PKI_ECC2_INT_ENA_W1C,
++		PKI_ECC2_INT_ENA_W1S, pki_ecc_intr_handler},
++	{0xf, "pki cluster0 intr", PKI_CLX_INT_ENA_W1C(0),
++		PKI_CLX_INT_ENA_W1S(0), pki_cl_intr_handler},
++	{0xf, "pki cluster1 intr", PKI_CLX_INT_ENA_W1C(1),
++		PKI_CLX_INT_ENA_W1S(1), pki_cl_intr_handler},
++	{0xff, "pki cluster0 ecc intr", PKI_CLX_ECC_INT_ENA_W1C(0),
++		PKI_CLX_ECC_INT_ENA_W1S(0), pki_cl_ecc_intr_handler},
++	{0xff, "pki cluster1 ecc intr", PKI_CLX_ECC_INT_ENA_W1C(1),
++		PKI_CLX_ECC_INT_ENA_W1S(1), pki_cl_ecc_intr_handler},
++	{0xffffffffffffffff, "pki NCB store intr(0)",
++		PKI_STRM_FLTX_INT_ENA_W1C(0),
++		PKI_STRM_FLTX_INT_ENA_W1S(0), pki_store_flt_intr_handler},
++	{0xffffffffffffffff, "pki NCB store intr(1)",
++		PKI_STRM_FLTX_INT_ENA_W1C(1),
++		PKI_STRM_FLTX_INT_ENA_W1S(1), pki_store_flt_intr_handler},
++	{0xffffffffffffffff, "pki NCB store intr(2)",
++		PKI_STRM_FLTX_INT_ENA_W1C(2),
++		PKI_STRM_FLTX_INT_ENA_W1S(2), pki_store_flt_intr_handler},
++	{0xffffffffffffffff, "pki NCB store intr(3)",
++		PKI_STRM_FLTX_INT_ENA_W1C(3),
++		PKI_STRM_FLTX_INT_ENA_W1S(3), pki_store_flt_intr_handler},
++	{0xffffffffffffffff, "pki Alloc fualt intr(0)",
++		PKI_ALLOC_FLTX_INT_ENA_W1C(0),
++		PKI_ALLOC_FLTX_INT_ENA_W1S(0), pki_alloc_flt_intr_handler},
++	{0xffffffffffffffff, "pki Alloc fualt intr(1)",
++		PKI_ALLOC_FLTX_INT_ENA_W1C(1),
++		PKI_ALLOC_FLTX_INT_ENA_W1S(1), pki_alloc_flt_intr_handler},
++	{0xffffffffffffffff, "pki Alloc fualt intr(2)",
++		PKI_ALLOC_FLTX_INT_ENA_W1C(2),
++		PKI_ALLOC_FLTX_INT_ENA_W1S(2), pki_alloc_flt_intr_handler},
++	{0xffffffffffffffff, "pki Alloc fualt intr(3)",
++		PKI_ALLOC_FLTX_INT_ENA_W1C(3),
++		PKI_ALLOC_FLTX_INT_ENA_W1S(3), pki_alloc_flt_intr_handler}
++};
++
++static inline void write_ltype(struct pki_t *pki, u64 ltype, u64 beltype)
++{
++	u64 reg = PKI_BELTYPE(beltype);
++
++	pki_reg_write(pki, PKI_LTYPEX_MAP(PKI_LTYPE(ltype)), reg);
++}
++
++static inline void setup_ltype_map(struct pki_t *pki)
++{
++	write_ltype(pki, PKI_LTYPE_E_NONE, PKI_BLTYPE_E_NONE);
++	write_ltype(pki, PKI_LTYPE_E_ENET, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_VLAN, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_SNAP_PAYLD, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_ARP, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_RARP, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_IP4, PKI_BLTYPE_E_IP4);
++	write_ltype(pki, PKI_LTYPE_E_IP4_OPT, PKI_BLTYPE_E_IP4);
++	write_ltype(pki, PKI_LTYPE_E_IP6, PKI_BLTYPE_E_IP6);
++	write_ltype(pki, PKI_LTYPE_E_IP6_OPT, PKI_BLTYPE_E_IP6);
++	write_ltype(pki, PKI_LTYPE_E_IPSEC_ESP, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_IPFRAG, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_IPCOMP, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_TCP, PKI_BLTYPE_E_TCP);
++	write_ltype(pki, PKI_LTYPE_E_UDP, PKI_BLTYPE_E_UDP);
++	write_ltype(pki, PKI_LTYPE_E_SCTP, PKI_BLTYPE_E_SCTP);
++	write_ltype(pki, PKI_LTYPE_E_UDP_VXLAN, PKI_BLTYPE_E_UDP);
++	write_ltype(pki, PKI_LTYPE_E_GRE, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_NVGRE, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_GTP, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_UDP_GENEVE, PKI_BLTYPE_E_UDP);
++	write_ltype(pki, PKI_LTYPE_E_SW28, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_SW29, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_SW30, PKI_BLTYPE_E_MISC);
++	write_ltype(pki, PKI_LTYPE_E_SW31, PKI_BLTYPE_E_MISC);
++}
++
++static int load_ucode(struct pki_t *pki)
++{
++	extern const u64 PKI_MICROCODE_CN83XX_LENGTH;
++	extern const u64 PKI_MICROCODE_CN83XX[];
++	unsigned int i;
++
++	if (PKI_MICROCODE_CN83XX_LENGTH > PKI_SRAM_SZIE)
++		return -1;
++
++	for (i = 0; i < PKI_MICROCODE_CN83XX_LENGTH; i++)
++		pki_reg_write(pki, PKI_IMEM(i), PKI_MICROCODE_CN83XX[i]);
++
++	return 0;
++}
++
++/*locks should be used by caller
++ */
++static struct pkipf_vf *pki_get_vf(u32 id, u16 domain_id)
++{
++	struct pki_t *pki = NULL;
++	struct pki_t *curr;
++	int i;
++	int vf_idx = -1;
++
++	list_for_each_entry(curr, &octeontx_pki_devices, list) {
++		if (curr->id == id) {
++			pki = curr;
++			break;
++		}
++	}
++
++	if (!pki)
++		return NULL;
++
++	for (i = 0; i < PKI_MAX_VF; i++) {
++		if (pki->vf[i].domain.domain_id == domain_id) {
++			vf_idx = i;
++			break;
++		}
++	}
++	if (vf_idx >= 0)
++		return &pki->vf[vf_idx];
++	else
++		return NULL;
++}
++
++static int pki_remove_domain(u32 id, u16 domain_id)
++{
++	struct pki_t *pki = NULL;
++	struct pki_t *curr;
++	int i;
++
++	spin_lock(&octeontx_pki_devices_lock);
++	list_for_each_entry(curr, &octeontx_pki_devices, list) {
++		if (curr->id == id) {
++			pki = curr;
++			break;
++		}
++	}
++	if (!pki) {
++		spin_unlock(&octeontx_pki_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < PKI_MAX_VF; i++) {
++		if (pki->vf[i].domain.in_use &&
++		    pki->vf[i].domain.domain_id == domain_id)
++			pki->vf[i].domain.in_use = false;
++	}
++	spin_unlock(&octeontx_pki_devices_lock);
++	return 0;
++}
++
++static int pki_create_domain(u32 id, u16 domain_id,
++			     struct octeontx_master_com_t *master_com,
++			     void *data,
++		struct kobject *kobj, char *g_name)
++{
++	struct pki_t *pki = NULL;
++	struct pki_t *curr;
++	int i;
++	u8 stream;
++	u64 cfg;
++	bool found = false;
++	struct pci_dev *virtfn;
++
++	spin_lock(&octeontx_pki_devices_lock);
++	list_for_each_entry(curr, &octeontx_pki_devices, list) {
++		if (curr->id == id) {
++			pki = curr;
++			break;
++		}
++	}
++	if (!pki) {
++		spin_unlock(&octeontx_pki_devices_lock);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < PKI_MAX_VF; i++) {
++		if (pki->vf[i].domain.in_use) {/* pki port config */
++
++			continue;
++		} else {
++			pki->vf[i].domain.domain_id = domain_id;
++			pki->vf[i].domain.subdomain_id = 0;
++			pki->vf[i].domain.gmid = get_gmid(domain_id);
++
++			if (kobj && g_name) {
++				virtfn = pci_get_domain_bus_and_slot(
++						pci_domain_nr(pki->pdev->bus),
++						pci_iov_virtfn_bus(pki->pdev,
++								   i),
++						pci_iov_virtfn_devfn(pki->pdev,
++								     i));
++				if (!virtfn)
++					break;
++				sysfs_add_link_to_group(kobj, g_name,
++							&virtfn->dev.kobj,
++					virtfn->dev.kobj.name);
++			}
++
++			pki->vf[i].domain.in_use = true;
++			stream = i + 1;
++			pki->vf[i].stream_id = stream;
++			pki->vf[i].pki = pki;
++			/* TO_DO if pki resource virtualization implemented*/
++			pki->vf[i].max_fstyles = pki->max_fstyles;
++			pki->vf[i].max_auras = pki->max_auras;
++			pki->vf[i].max_qpgs = pki->max_qpgs;
++			pki->vf[i].max_pcam_ents = pki->max_pcam_ents;
++			cfg = pki_reg_read(pki, PKI_STRMX_CFG(stream));
++			cfg |= (pki->vf[i].domain.gmid) &
++				PKI_STRM_CFG_GMID_MASK;
++			pki_reg_write(pki, PKI_STRMX_CFG(stream), cfg);
++			found = true;
++			break;
++		}
++	}
++	spin_unlock(&octeontx_pki_devices_lock);
++
++	if (!found)
++		return -ENODEV;
++
++	return 0;
++}
++
++static int pki_receive_message(u32 id, u16 domain_id,
++			       struct mbox_hdr *hdr,
++			       union mbox_data *req,
++			       union mbox_data *resp, void *mdata)
++{
++	struct pkipf_vf *vf = NULL;
++
++	if (!mdata)
++		return -ENOMEM;
++
++	hdr->res_code = MBOX_RET_SUCCESS;
++	resp->data = 0;
++	spin_lock(&octeontx_pki_devices_lock);
++
++	vf = pki_get_vf(id, domain_id);
++
++	if (!vf) {
++		hdr->res_code = MBOX_RET_INVALID;
++		spin_unlock(&octeontx_pki_devices_lock);
++		return -ENODEV;
++	}
++	spin_unlock(&octeontx_pki_devices_lock);
++
++	switch (hdr->msg) {
++	case MBOX_PKI_PORT_OPEN:
++		hdr->res_code = pki_port_open(vf, hdr->vfid, mdata);
++		break;
++	case MBOX_PKI_PORT_CREATE_QOS:
++		hdr->res_code = pki_port_create_qos(vf, hdr->vfid,
++						    mdata);
++		break;
++	case MBOX_PKI_PORT_START:
++		hdr->res_code = pki_port_start(vf, hdr->vfid, mdata);
++		break;
++	case MBOX_PKI_PORT_STOP:
++		hdr->res_code = pki_port_stop(vf, hdr->vfid, mdata);
++		break;
++	case MBOX_PKI_PORT_CLOSE:
++		hdr->res_code = pki_port_close(vf, hdr->vfid, mdata);
++		break;
++	case MBOX_PKI_PORT_PKTBUF_CONFIG:
++		hdr->res_code = pki_port_pktbuf_cfg(vf, hdr->vfid,
++						    mdata);
++		break;
++	case MBOX_PKI_PORT_ERRCHK_CONFIG:
++		hdr->res_code = pki_port_errchk(vf, hdr->vfid,
++						mdata);
++		break;
++	case MBOX_PKI_PORT_HASH_CONFIG:
++		hdr->res_code = pki_port_hashcfg(vf, hdr->vfid, mdata);
++		break;
++	}
++	return 0;
++}
++
++int pki_reset_domain(u32 id, u16 domain_id)
++{
++	/* TO_DO*/
++	return 0;
++}
++
++/* Add a new port to PKI
++ * return PKIND on success, -ERR on failure
++ */
++int pki_add_bgx_port(u32 id, u16 domain_id, struct octtx_bgx_port *port)
++{
++	struct pkipf_vf *vf = NULL;
++	int pkind;
++
++	spin_lock(&octeontx_pki_devices_lock);
++
++	vf = pki_get_vf(id, domain_id);
++	if (!vf) {
++		spin_unlock(&octeontx_pki_devices_lock);
++		return -ENODEV;
++	}
++
++	pkind = assign_pkind_bgx(vf, port);
++
++	spin_unlock(&octeontx_pki_devices_lock);
++	return pkind;
++}
++
++int pki_add_lbk_port(u32 id, u16 domain_id, struct octtx_lbk_port *port)
++{
++	struct pkipf_vf *vf = NULL;
++	int pkind;
++
++	spin_lock(&octeontx_pki_devices_lock);
++
++	vf = pki_get_vf(id, domain_id);
++	if (!vf) {
++		spin_unlock(&octeontx_pki_devices_lock);
++		return -ENODEV;
++	}
++
++	/*TO_DO it needs channel number too*/
++	pkind = assign_pkind_lbk(vf, port);
++
++	spin_unlock(&octeontx_pki_devices_lock);
++	return pkind;
++}
++
++struct pki_com_s pki_com  = {
++	.create_domain = pki_create_domain,
++	.free_domain = pki_remove_domain,
++	.reset_domain = pki_reset_domain,
++	.receive_message = pki_receive_message,
++	.add_bgx_port = pki_add_bgx_port,
++	.add_lbk_port = pki_add_lbk_port
++};
++EXPORT_SYMBOL(pki_com);
++
++static void pki_irq_free(struct pki_t *pki)
++{
++	int i;
++
++	/*clear intr */
++	for (i = 0; i < PKI_MSIX_COUNT; i++) {
++		pki_reg_write(pki, intr[i].coffset, intr[i].mask);
++		if (pki->msix_entries[i].vector)
++			free_irq(pki->msix_entries[i].vector, pki);
++	}
++	pci_disable_msix(pki->pdev);
++}
++
++static int pki_irq_init(struct pki_t *pki)
++{
++	int i;
++	int ret = 0;
++
++	/*clear intr */
++	for (i = 0; i < PKI_MSIX_COUNT; i++)
++		pki_reg_write(pki, intr[i].coffset, intr[i].mask);
++
++	pki->msix_entries = devm_kzalloc(&pki->pdev->dev,
++			PKI_MSIX_COUNT * sizeof(struct msix_entry), GFP_KERNEL);
++
++	if (!pki->msix_entries)
++		return -ENOMEM;
++
++	for (i = 0; i < PKI_MSIX_COUNT; i++)
++		pki->msix_entries[i].entry = i;
++
++	ret = pci_enable_msix(pki->pdev, pki->msix_entries, PKI_MSIX_COUNT);
++	if (ret) {
++		dev_err(&pki->pdev->dev, "Enabling msix failed\n");
++		return ret;
++	}
++
++	for (i = 0; i < PKI_MSIX_COUNT; i++) {
++		ret = request_irq(pki->msix_entries[i].vector, intr[i].handler,
++				  0, intr[i].name, pki);
++		if (ret)
++			goto free_irq;
++	}
++
++	/*enable intr */
++	for (i = 0; i < PKI_MSIX_COUNT; i++)
++		pki_reg_write(pki, intr[i].soffset, intr[i].mask);
++
++	return 0;
++free_irq:
++	for ( ; i < PKI_MSIX_COUNT; i++)
++		pki->msix_entries[i].vector = 0;
++	pki_irq_free(pki);
++	return ret;
++}
++
++static void pki_init(struct pki_t *pki)
++{
++	u64 reg;
++	u32 delay;
++
++	/* wait till SFT rest is feasable*/
++	while (true) {
++		if (!pki_reg_read(pki, PKI_SFT_RST))
++			break;
++	}
++	pki_reg_write(pki, PKI_SFT_RST, 0x1);
++	/* wait till RST complete */
++	while (true) {
++		if (!pki_reg_read(pki, PKI_SFT_RST))
++			break;
++	}
++
++	reg = pki_reg_read(pki, PKI_CONST);
++	pki->max_auras = (reg >> PKI_CONST_AURAS_SHIFT) & PKI_CONST_AURAS_MASK;
++	pki->max_bpid = (reg >> PKI_CONST_BPID_SHIFT) & PKI_CONST_BPID_MASK;
++	pki->max_pkinds = (reg >> PKI_CONST_PKNDS_SHIFT) & PKI_CONST_PKNDS_MASK;
++	pki->max_fstyles = (reg >> PKI_CONST_FSTYLES_SHIFT) &
++			PKI_CONST_FSTYLES_MASK;
++
++	reg = pki_reg_read(pki, PKI_CONST1);
++	pki->max_cls = (reg >> PKI_CONST1_CLS_SHIFT) & PKI_CONST1_CLS_MASK;
++	pki->max_ipes = (reg >> PKI_CONST1_IPES_SHIFT) & PKI_CONST1_IPES_MASK;
++	pki->max_pcams = (reg >> PKI_CONST1_PCAMS_SHIFT) &
++			PKI_CONST1_PCAMS_MASK;
++
++	reg = pki_reg_read(pki, PKI_CONST2);
++	pki->max_pcam_ents = (reg >> PKI_CONST2_PCAM_ENTS_SHIFT) &
++			PKI_CONST2_PCAM_ENTS_MASK;
++	pki->max_qpgs = (reg >> PKI_CONST2_QPGS_SHIFT) & PKI_CONST2_QPGS_MASK;
++	pki->max_dstats = (reg >> PKI_CONST2_DSTATS_SHIFT) &
++			PKI_CONST2_DSTATS_MASK;
++	pki->max_stats = (reg >> PKI_CONST2_STATS_SHIFT) &
++			PKI_CONST2_STATS_MASK;
++
++	load_ucode(pki);
++	delay = max(0xa0, (800 / pki->max_cls));
++	reg = PKI_ICG_CFG_MAXIPE_USE(0x14) | PKI_ICG_CFG_CLUSTERS(0x3) |
++	       PKI_ICG_CFG_PENA(1) | PKI_ICG_CFG_DELAY(delay);
++	pki_reg_write(pki, PKI_ICGX_CFG(0), reg);
++
++	setup_ltype_map(pki);
++	init_styles(pki);
++	/*enable PKI*/
++	reg = pki_reg_read(pki, PKI_BUF_CTL);
++	reg |= 0x1;
++	pki_reg_write(pki, PKI_BUF_CTL, reg);
++}
++
++static int pki_sriov_configure(struct pci_dev *pdev, int numvfs)
++{
++	struct pki_t *pki = pci_get_drvdata(pdev);
++	int ret = -EBUSY;
++	int disable = 0;
++
++	if (pki->vfs_in_use != 0)
++		return ret;
++
++	ret = 0;
++	if (pki->flags & PKI_SRIOV_ENABLED)
++		disable = 1;
++
++	if (disable) {
++		pci_disable_sriov(pdev);
++		pki->flags &= ~PKI_SRIOV_ENABLED;
++		pki->total_vfs = 0;
++	}
++
++	if (numvfs > 0) {
++		ret = pci_enable_sriov(pdev, numvfs);
++		if (ret == 0) {
++			pki->flags |= PKI_SRIOV_ENABLED;
++			pki->total_vfs = numvfs;
++			ret = numvfs;
++		}
++	}
++	return ret;
++}
++
++static int pki_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
++{
++	struct device *dev = &pdev->dev;
++	struct pki_t *pki;
++	int err = -ENOMEM;
++
++	pki = devm_kzalloc(dev, sizeof(*pki), GFP_KERNEL);
++	if (!pki)
++		return err;
++
++	pci_set_drvdata(pdev, pki);
++	pki->pdev = pdev;
++
++	err = pcim_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed\n");
++		return err;
++	}
++
++	/*Map CFG registers */
++	pki->reg_base = pcim_iomap(pdev, PCI_PKI_CFG_BAR, 0);
++	if (!pki->reg_base) {
++		dev_err(dev, "Can't map CFG space\n");
++		err = -ENOMEM;
++		return err;
++	}
++
++	/*set PKI ID */
++	pki->id = atomic_add_return(1, &pki_count);
++	pki->id -= 1;
++
++	pki_init(pki);
++
++	err = pki_irq_init(pki);
++	if (err) {
++		dev_err(dev, "failed init irqs\n");
++		err = -EINVAL;
++		return err;
++	}
++
++	INIT_LIST_HEAD(&pki->list);
++	spin_lock(&octeontx_pki_devices_lock);
++	list_add(&pki->list, &octeontx_pki_devices);
++	spin_unlock(&octeontx_pki_devices_lock);
++
++	return 0;
++}
++
++static void pki_remove(struct pci_dev *pdev)
++{
++	struct pki_t *pki = pci_get_drvdata(pdev);
++	struct pki_t *curr;
++
++	if (!pki)
++		return;
++
++	spin_lock(&octeontx_pki_devices_lock);
++	list_for_each_entry(curr, &octeontx_pki_devices, list) {
++		if (curr == pki) {
++			list_del(&pki->list);
++			break;
++		}
++	}
++	spin_unlock(&octeontx_pki_devices_lock);
++
++	pki_irq_free(pki);
++}
++
++/* devices supported */
++static const struct pci_device_id pki_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_OCTEONTX_PKI) },
++	{ 0, }  /* end of table */
++};
++
++static struct pci_driver pki_driver = {
++	.name = DRV_NAME,
++	.id_table = pki_id_table,
++	.probe = pki_probe,
++	.remove = pki_remove,
++	.sriov_configure = pki_sriov_configure,
++};
++
++MODULE_AUTHOR("Tirumalesh Chalamarla");
++MODULE_DESCRIPTION("Cavium OCTEONTX input packet parser(PKI) Driver");
++MODULE_LICENSE("GPL v2");
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, pki_id_table);
++
++static int __init pki_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return pci_register_driver(&pki_driver);
++}
++
++static void __exit pki_cleanup_module(void)
++{
++	pci_unregister_driver(&pki_driver);
++}
++
++module_init(pki_init_module);
++module_exit(pki_cleanup_module);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_ucode.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_ucode.c
+new file mode 100644
+index 000000000000..7468b7e0079c
+--- /dev/null
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_ucode.c
+@@ -0,0 +1,816 @@
++/*
++ * Copyright (C) 2016 Cavium, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License
++ * as published by the Free Software Foundation.
++ */
++#include <linux/types.h>
++
++/* This file is autogenerated from ipemainc.elf */
++const u64 PKI_MICROCODE_CN83XX_LENGTH = 803;
++const u64 PKI_MICROCODE_CN83XX[] = {
++	0x000000000a000000ull,
++	0x0000413a68024070ull,
++	0x0000813800200020ull,
++	0x900081b800200020ull,
++	0x0004da00ffff0001ull,
++	0x000455ab68010b0eull,
++	0x00045fba46010000ull,
++	0x9046898120002000ull,
++	0x0004418068010028ull,
++	0x90665300680100f0ull,
++	0x0004413f68004070ull,
++	0x00065380680100f0ull,
++	0x00045a346803a0f0ull,
++	0x000401b448000001ull,
++	0x00045cb968030870ull,
++	0x0007debd00100010ull,
++	0x0000813b80008000ull,
++	0x0004413b68004070ull,
++	0x9001c00000000000ull,
++	0x9021c00000000000ull,
++	0x00044180680100f0ull,
++	0x0004c639ff000200ull,
++	0x0004400372010000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000041ba68034078ull,
++	0x0000512268030870ull,
++	0x000041bc68034070ull,
++	0x00005d3a68030870ull,
++	0x00045cb942080000ull,
++	0x0004552a4e09312dull,
++	0x00045cb968082868ull,
++	0x0004410246090000ull,
++	0x0000813800800080ull,
++	0x000401a486000005ull,
++	0x000615ab74000123ull,
++	0x0007122448000004ull,
++	0x0000813901000000ull,
++	0x000481b800010001ull,
++	0x000685b800020002ull,
++	0xa006823800010001ull,
++	0x0006c639ff000400ull,
++	0x00085f3e68010a00ull,
++	0xa0885f3e68010f01ull,
++	0x00085f3e68010405ull,
++	0x00085f3e68010906ull,
++	0xa0485f3e68010e07ull,
++	0xa061c00000000000ull,
++	0xa4085f3e68010b28ull,
++	0xa421c00000000000ull,
++	0x00095f3e68010940ull,
++	0xa066403e72010000ull,
++	0x000941be68034039ull,
++	0x00085f3e68010305ull,
++	0xa4685f3e68010028ull,
++	0x00095f3e68030030ull,
++	0x00095f3e68010416ull,
++	0x0001c00000000000ull,
++	0x00065cb942080000ull,
++	0xa046552a4e09312dull,
++	0xa446c639ff000500ull,
++	0x0006debd00010001ull,
++	0x0006403e72010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x9060813901000000ull,
++	0x0004c639ff000800ull,
++	0x0004400072010000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00045cb942080000ull,
++	0x9084552a4e09312dull,
++	0x90a4c639ff000900ull,
++	0x00045f80680100f0ull,
++	0x0004403f72010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00045cb942080000ull,
++	0x9004552a4e09312dull,
++	0x0004c639ff000a00ull,
++	0x0004400072010000ull,
++	0x00048181ff00ff00ull,
++	0x0007820101000100ull,
++	0x0006898100ff00ffull,
++	0x00048301ffff0180ull,
++	0x0008d5ab10001000ull,
++	0x0004d4a900010001ull,
++	0x0001c00000000000ull,
++	0x00045cb942080000ull,
++	0x9024552a4e09312dull,
++	0x0004c639ff000b00ull,
++	0x90445f80680100f0ull,
++	0x000459b368020070ull,
++	0x000401024000000cull,
++	0x0006823fffffffffull,
++	0x00088281ffffffffull,
++	0x000ad5ab20002000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0004403f72010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000c8b3fffffc200ull,
++	0x000c8b01ffff0001ull,
++	0x000ddebd00020002ull,
++	0x00045cb942080000ull,
++	0x0004552a4e09312dull,
++	0x00045cb968082868ull,
++	0x0004410246090000ull,
++	0x0000813901000000ull,
++	0x000481b800080008ull,
++	0x9846c639ff001200ull,
++	0x9861c00000000000ull,
++	0x00064180680100f0ull,
++	0x0006400372010000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000683891f000200ull,
++	0x000ed52a00800080ull,
++	0x000e5e3c68020070ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x0000813d00020002ull,
++	0x0004893901000000ull,
++	0x9004893800040004ull,
++	0x9024c639ff001300ull,
++	0x00044180680100f0ull,
++	0x9044400372010001ull,
++	0x0001c00000000000ull,
++	0x00045f3e68010044ull,
++	0x0004debd00040004ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000483891f000200ull,
++	0x000ed52a00800080ull,
++	0x000e5e3c68020070ull,
++	0x00045cb942080000ull,
++	0x0004552a4e09312dull,
++	0x00045cb968082868ull,
++	0x0004410246090000ull,
++	0x000581b902000000ull,
++	0x9826c639ff001800ull,
++	0x9801c00000000000ull,
++	0x00064180680100f0ull,
++	0x0006400172030000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000682091f000200ull,
++	0x000883aa00800080ull,
++	0x000ed52a00400040ull,
++	0x000e5e3c68020870ull,
++	0x000fd52a00800080ull,
++	0x000f5e3c68020070ull,
++	0x000983891f000000ull,
++	0x000f54a968090148ull,
++	0x000f59b368020870ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x000081b902000000ull,
++	0x9826c639ff001900ull,
++	0x9801c00000000000ull,
++	0x00064180680100f0ull,
++	0x0006400172030001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000682091f000200ull,
++	0x000883aa00800080ull,
++	0x000ed52a00400040ull,
++	0x000e5e3c68020870ull,
++	0x000fd52a00800080ull,
++	0x000f5e3c68020070ull,
++	0x000983891f000000ull,
++	0x000f54a968090148ull,
++	0x000f59b368020870ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x000081b902000000ull,
++	0x9826c639ff001a00ull,
++	0x9801c00000000000ull,
++	0x00064180680100f0ull,
++	0x0006400172030000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000682091f000200ull,
++	0x000883aa00800080ull,
++	0x000ed52a00400040ull,
++	0x000e5e3c68020870ull,
++	0x000fd52a00800080ull,
++	0x000f5e3c68020070ull,
++	0x000983891f000000ull,
++	0x000f54a968090148ull,
++	0x000f59b368020870ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x000081b902000000ull,
++	0x9826c639ff001b00ull,
++	0x9801c00000000000ull,
++	0x00064180680100f0ull,
++	0x0006400172030001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000682091f000200ull,
++	0x000883aa00800080ull,
++	0x000ed52a00400040ull,
++	0x000e5e3c68020870ull,
++	0x000fd52a00800080ull,
++	0x000f5e3c68020070ull,
++	0x000983891f000000ull,
++	0x000f54a968090148ull,
++	0x000f59b368020870ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x9000813902000000ull,
++	0x000481b800400040ull,
++	0x00068981ffff8847ull,
++	0x00068581ffff8848ull,
++	0x0006debd00080008ull,
++	0x0006c639ff001e00ull,
++	0x0006010240000002ull,
++	0x9801c00000000000ull,
++	0x9821c00000000000ull,
++	0x00065f80680100f0ull,
++	0x0006403f72010000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006010240000004ull,
++	0x0006823902000000ull,
++	0x00065f3e68010629ull,
++	0xac28828101000100ull,
++	0x000b010240000004ull,
++	0xa42b820101000100ull,
++	0x0009010240000004ull,
++	0xac29828101000100ull,
++	0x000b010240000004ull,
++	0xa42b820101000100ull,
++	0x0009010240000004ull,
++	0xac29828101000100ull,
++	0x000b010240000004ull,
++	0x0006823904000000ull,
++	0x0008d4a907c00200ull,
++	0x0008593268020070ull,
++	0x0008dcb902000200ull,
++	0x9000813902000000ull,
++	0x0001c00000000000ull,
++	0x00040181840005ffull,
++	0x0006010240000008ull,
++	0x9801c00000000000ull,
++	0x0006debd00200020ull,
++	0x00048181ffff0806ull,
++	0x0006d4a907c00180ull,
++	0x00048201ffff8035ull,
++	0x00068581ffff8035ull,
++	0x0008d4a907c001c0ull,
++	0x0006dcb97c007c00ull,
++	0x00048201ffff0800ull,
++	0x00088601ffff86ddull,
++	0x00068581ffff0800ull,
++	0x00068581ffff86ddull,
++	0x0008d4a907c00200ull,
++	0x0009dcb97c007c00ull,
++	0x0007823d00200020ull,
++	0x000685bd00200020ull,
++	0x0008d4a907c00140ull,
++	0x0004010240000002ull,
++	0x0006593268020070ull,
++	0x000042a486020000ull,
++	0x000a15ab74000124ull,
++	0x9000813904000000ull,
++	0x0001c00000000000ull,
++	0x00048181f0004000ull,
++	0x9886593268020070ull,
++	0x0006d4a907c00200ull,
++	0x00068201ff000000ull,
++	0xa40815ab74000345ull,
++	0x0009debd01000100ull,
++	0xa429418068010038ull,
++	0x00095a3468010870ull,
++	0x0009028386000005ull,
++	0xac8a068186000014ull,
++	0x000a15ab74000343ull,
++	0x000b5a3468010070ull,
++	0xac6b8203000f0005ull,
++	0x0009d4a907c00240ull,
++	0x000b82013fff0000ull,
++	0x0009d52a00010001ull,
++	0x0009d4a9f8006800ull,
++	0x0009593268020870ull,
++	0x0006418068030230ull,
++	0x0006410240030000ull,
++	0x9c01c00000000000ull,
++	0x0001c00000000000ull,
++	0x00078201f0006000ull,
++	0x0008593268020070ull,
++	0xa068d4a907c00280ull,
++	0x00085a3468010874ull,
++	0x0008818100ff0000ull,
++	0x000615ab74000345ull,
++	0x00075a3468010078ull,
++	0x0007010240000028ull,
++	0xa80782b400ff0000ull,
++	0x000ad4a907c002c0ull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0xa80782b400ff003cull,
++	0x000ad4a907c002c0ull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0xa80782b400ff002bull,
++	0x000ad4a907c002c0ull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0xa80782b400ff002cull,
++	0x000ad4a9ffc06ac0ull,
++	0x000a593268020870ull,
++	0x000ad52a00010001ull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0x0007debd01000100ull,
++	0x000481bd01000100ull,
++	0x0006c639ff002300ull,
++	0x000641aa68034000ull,
++	0x000641a968034846ull,
++	0x0006403472030001ull,
++	0x0004822907000200ull,
++	0x000915ab74000341ull,
++	0x000082aa00010001ull,
++	0x000a86ab00ff0045ull,
++	0x000adcb978007800ull,
++	0x0000822907000200ull,
++	0x00088a3908000000ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x000042a486020000ull,
++	0x000a15ab74000343ull,
++	0x000081b940004000ull,
++	0x000685a907c00000ull,
++	0x000782b807000100ull,
++	0x000a41b268004070ull,
++	0x000a410040030000ull,
++	0x000a41ba68004078ull,
++	0x000a410240030000ull,
++	0xa801c00000000000ull,
++	0xa821c00000000000ull,
++	0x000a4180680100f0ull,
++	0x000ac639ff003900ull,
++	0x000a400372010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000a83891f000000ull,
++	0x000f542868090a48ull,
++	0x000f583068020070ull,
++	0x000a5cb942080000ull,
++	0x000a552a4e09312dull,
++	0x000a5cb968082868ull,
++	0x000a410246090000ull,
++	0xa021c00000000000ull,
++	0x000881b400ff0011ull,
++	0x00068981ffff2118ull,
++	0x0006593268020870ull,
++	0x0006d4a9f8009800ull,
++	0xa026debd02000200ull,
++	0x0008813400ff002full,
++	0x00048901ffff6558ull,
++	0x0004593268020870ull,
++	0x0004d4a9f800a800ull,
++	0x0004debd02000200ull,
++	0x000882bd02000200ull,
++	0xa86ac639ff002800ull,
++	0xa841c00000000000ull,
++	0x000a418368010878ull,
++	0x000a400172030000ull,
++	0x000a5bb768030078ull,
++	0x000a5b00680100f0ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000041b468034878ull,
++	0x00005fbf68030878ull,
++	0x000a5cb942080000ull,
++	0x000a552a4e09312dull,
++	0x000a5cb968082868ull,
++	0x000a410246090000ull,
++	0x000081b940004000ull,
++	0x000685a9f8000000ull,
++	0x000782b807000200ull,
++	0x000a41b268004078ull,
++	0x000a410040030000ull,
++	0x000a41ba68004078ull,
++	0x000a410240030000ull,
++	0xa801c00000000000ull,
++	0xa821c00000000000ull,
++	0x000a4180680100f0ull,
++	0x000ac639ff003900ull,
++	0x000a400372010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000a83891f000000ull,
++	0x000f542868090a48ull,
++	0x000f583068020070ull,
++	0x000a5cb942080000ull,
++	0x000a552a4e09312dull,
++	0x000a5cb968082868ull,
++	0x000a410246090000ull,
++	0x00008129f8009800ull,
++	0x00048529f800a800ull,
++	0x9004893910000000ull,
++	0x0001c00000000000ull,
++	0x00048181f0004000ull,
++	0x988658b168020070ull,
++	0x0006d428001f0008ull,
++	0x00068201ff000000ull,
++	0xa40815ab74000545ull,
++	0x0009debd04000400ull,
++	0xa429418068010038ull,
++	0x00095a3468010870ull,
++	0x0009028386000005ull,
++	0xac8a068186000014ull,
++	0x000a15ab74000543ull,
++	0x000b5a3468010070ull,
++	0xac6b8303000f0005ull,
++	0x000dd428001f0009ull,
++	0x000b83013fff0000ull,
++	0x000dd42803e001a0ull,
++	0x000d58b168020870ull,
++	0x000ddcb960006000ull,
++	0x0006418068030230ull,
++	0x0006410240030000ull,
++	0x9c01c00000000000ull,
++	0x0001c00000000000ull,
++	0x00078201f0006000ull,
++	0x000858b168020070ull,
++	0xa068d428001f000aull,
++	0x00085a3468010874ull,
++	0x0008818100ff0000ull,
++	0x000615ab74000545ull,
++	0x00075a3468010078ull,
++	0x0007010240000028ull,
++	0xa80782b400ff0000ull,
++	0x000ad428001f000bull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0xa80782b400ff003cull,
++	0x000ad428001f000bull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0xa80782b400ff002bull,
++	0x000ad428001f000bull,
++	0x000a5a3468010078ull,
++	0x000a410244010000ull,
++	0xa80782b400ff002cull,
++	0x000ad42803ff01abull,
++	0x000adcb960006000ull,
++	0x000a58b168020870ull,
++	0x000a5a3468010078ull,
++	0x0007debd04000400ull,
++	0x000481bd04000400ull,
++	0x0006c639ff002b00ull,
++	0x0006832803e001a0ull,
++	0x000dc18300010001ull,
++	0x000cc18300010000ull,
++	0x000641a868034840ull,
++	0x0006403472030001ull,
++	0x00048228001c0008ull,
++	0x000915ab74000541ull,
++	0x000082ab00ff0045ull,
++	0x000adcb960006000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00065cb942080000ull,
++	0x0006552a4e09312dull,
++	0x00065cb968082868ull,
++	0x0006410246090000ull,
++	0x000042a486020000ull,
++	0x000a15ab74000543ull,
++	0x000081b940004000ull,
++	0x000685a8001f0000ull,
++	0x000782b807000300ull,
++	0x000a41b168004070ull,
++	0x000a410040030000ull,
++	0x000a41ba68004078ull,
++	0x000a410240030000ull,
++	0xa801c00000000000ull,
++	0xa821c00000000000ull,
++	0x000a4180680100f0ull,
++	0x000ac639ff003900ull,
++	0x000a400372010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000a83891f000000ull,
++	0x000f542868090a48ull,
++	0x000f583068020070ull,
++	0x000a5cb942080000ull,
++	0x000a552a4e09312dull,
++	0x000a5cb968082868ull,
++	0x000a410246090000ull,
++	0x0000813920000000ull,
++	0x000481b400ff006cull,
++	0x0006d42803e001c0ull,
++	0x000658b168020870ull,
++	0x0007823400ff0032ull,
++	0xa048863400ff0033ull,
++	0x0008d42803e00180ull,
++	0xa0685a80680100f0ull,
++	0x000858b168020870ull,
++	0x00085d80680100f0ull,
++	0x986981b400ff002full,
++	0x0006d42803e00280ull,
++	0x00065a80680100f0ull,
++	0x000658b168020870ull,
++	0x000481b400ff0084ull,
++	0x0006d42803e00240ull,
++	0x0004823400ff0011ull,
++	0x0008d42803e00220ull,
++	0x98c481b400ff0006ull,
++	0x0006d42803e00200ull,
++	0x00065ebd68010b31ull,
++	0x000641806801003cull,
++	0x0006028386000005ull,
++	0x000a15ab74000661ull,
++	0x0006418068030230ull,
++	0x0008c180ffff0008ull,
++	0x0008863400ff0006ull,
++	0x0008418240030000ull,
++	0x000842a486030000ull,
++	0x000a15ab74000661ull,
++	0x9008863400ff0084ull,
++	0x0004c639ff002f00ull,
++	0x0004400072010001ull,
++	0x000858b168020870ull,
++	0x00088281ffff0000ull,
++	0x000a15ab74000664ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00085cb942080000ull,
++	0x9028552a4e09312dull,
++	0x0004c639ff003000ull,
++	0x0004403472010000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x00088181ffff0000ull,
++	0x000615ab74000664ull,
++	0x000081b940004000ull,
++	0x00045cb942080000ull,
++	0x0004552a4e09312dull,
++	0x00045cb968082868ull,
++	0x0004410246090000ull,
++	0x000483891f000000ull,
++	0x000f542868090a48ull,
++	0x000f583068020070ull,
++	0x000042a486020000ull,
++	0x000a15ab74000661ull,
++	0x000685a803e00000ull,
++	0x000782b807000400ull,
++	0x000a41b168004078ull,
++	0x000a410040030000ull,
++	0x000a41ba68004078ull,
++	0x000a410240030000ull,
++	0xa801c00000000000ull,
++	0xa821c00000000000ull,
++	0x000a4180680100f0ull,
++	0x000ac639ff003900ull,
++	0x000a400372010001ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x000041bf68034878ull,
++	0x00005a3468030878ull,
++	0x000a83891f000000ull,
++	0x000f542868090a48ull,
++	0x000f583068020070ull,
++	0x000a5cb942080000ull,
++	0x000a552a4e09312dull,
++	0x000a5cb968082868ull,
++	0x000a410246090000ull,
++	0x00005fb968004250ull,
++	0x0000003f70000000ull,
++	0x000041b968034070ull,
++	0x0000512268030070ull,
++	0x0000813800200020ull,
++	0x0004413a68024070ull,
++	0x9001c00000000000ull,
++	0x000081b800200020ull,
++	0x9026898180008000ull,
++	0x0004890110001000ull,
++	0x000456ad680100a0ull,
++	0x0006898180008000ull,
++	0x000652a56801001dull,
++	0x000456ad68090b5bull,
++	0x00055680680900f0ull,
++	0x0005debd00400040ull,
++	0x00005600680800f0ull,
++	0x0000833d00200020ull,
++	0x000c872907c00000ull,
++	0x000dd62c20000000ull,
++	0x0000822902800280ull,
++	0x000841b268034070ull,
++	0x000982a8000a000aull,
++	0x000a41b168034070ull,
++	0x000b822907c00000ull,
++	0x0000003f70000800ull,
++	0x000941b268034070ull,
++	0x0000418048030000ull,
++	0x0000018340000008ull,
++	0x0009018348000004ull,
++	0x000050a168030c20ull,
++	0x000082aa00800080ull,
++	0x000850a168080c2bull,
++	0x000752a56808001eull,
++	0x000a822a00400040ull,
++	0x00088a0900010001ull,
++	0x000841bc68034078ull,
++	0x000941bc68034070ull,
++	0x000a583068030870ull,
++	0x0000813d00400000ull,
++	0x0005c180ffff0000ull,
++	0x00058288001e0000ull,
++	0x000b8208001e0008ull,
++	0x00085d2168004030ull,
++	0x00098308001e0010ull,
++	0x00088608001e0010ull,
++	0x000c5d2168004070ull,
++	0x0008418068080025ull,
++	0x000841ba6803a0f0ull,
++	0x000856ad40030000ull,
++	0x0008c180ffff0000ull,
++	0x0005820807000500ull,
++	0x00088a3d00010001ull,
++	0x000841be68004050ull,
++	0x0005828807000300ull,
++	0x000a8abd00040004ull,
++	0x000a41be68004040ull,
++	0x0005820807000100ull,
++	0x00088a2a00800080ull,
++	0x0008413068004078ull,
++	0xa021c00000000000ull,
++	0x0005828807000200ull,
++	0x000841806801002dull,
++	0x000a8abd00080008ull,
++	0x000a41be68004026ull,
++	0x0005820807000400ull,
++	0x00088a2907000200ull,
++	0x000841b46800405aull,
++	0x000556ad40030000ull,
++	0x000081bd00100010ull,
++	0x0006c180ffff0000ull,
++	0x0006822a00800080ull,
++	0x00088a0900100010ull,
++	0x0008413c68024070ull,
++	0xa021c00000000000ull,
++	0x0006832907000200ull,
++	0x0008c181f0008000ull,
++	0x000841834c00ffffull,
++	0x0006822a00400040ull,
++	0x00088a0900200020ull,
++	0x0008413c68024078ull,
++	0xa021c00000000000ull,
++	0x000c8b0900400040ull,
++	0x0008dc01f0008000ull,
++	0x000841b84c03ffffull,
++	0x000c8b2a00010000ull,
++	0x000c41b44c0300ffull,
++	0x000682a9f800a800ull,
++	0x000a86a9f8009800ull,
++	0x000a8a8904000400ull,
++	0x000a41b64c03ffffull,
++	0x000a41b74c0300ffull,
++	0x0000828901000100ull,
++	0x000a822803e00180ull,
++	0x00088a3400ff0033ull,
++	0x000841bb4c03ffffull,
++	0x0008862803e00280ull,
++	0x000841b54c03ffffull,
++	0x000682287c005800ull,
++	0x00088a0902000200ull,
++	0x0008413068024070ull,
++	0xa001c00000000000ull,
++	0x0006830900020002ull,
++	0x00088281e0002000ull,
++	0xa84a868108000800ull,
++	0xa861c00000000000ull,
++	0x000a41814c03ffffull,
++	0x000a41814c03ffffull,
++	0x00065380680300f0ull,
++	0x000c5321680040b0ull,
++	0x000dd3260fff0fffull,
++	0x0006810900800080ull,
++	0x0000003f70000400ull,
++	0x000082a907000200ull,
++	0x000a413268024070ull,
++	0xa50a822902800280ull,
++	0x0004893d08000800ull,
++	0x00098301ffffffffull,
++	0xa4c98381f000e000ull,
++	0x00095f00680100f0ull,
++	0xa5295f3e64010000ull,
++	0x0001c00000000000ull,
++	0xa4ec8b01ffffffffull,
++	0x00095d00680100f0ull,
++	0xa1895d3a64010000ull,
++	0x000cd5ab80008000ull,
++	0x00088a01ff00ff00ull,
++	0x0008d5ab40004000ull,
++	0x000ed5ab40004000ull,
++	0x0004893d40000000ull,
++	0x00005700680800f0ull,
++	0x00005780680900f0ull,
++	0x0007d72ef1ff0000ull,
++	0x0007d7aff0000000ull,
++	0x0004d72e00fc0000ull,
++	0x0000812c00020002ull,
++	0x0004892907c00200ull,
++	0x000441a7680040f0ull,
++	0x000441be4c03ffffull,
++	0x000441ba4c03ffffull,
++	0x000481a803c00200ull,
++	0x0006413168024078ull,
++	0x9801c00000000000ull,
++	0x9821c00000000000ull,
++	0x00065f80680100f0ull,
++	0x00065fbf64010000ull,
++	0x000641bf4c03ffffull,
++	0x000452a568030250ull,
++	0x0000000008000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull,
++	0x0001c00000000000ull
++};
+-- 
+2.14.1
+

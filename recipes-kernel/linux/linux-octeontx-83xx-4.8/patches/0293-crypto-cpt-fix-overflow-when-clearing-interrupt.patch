@@ -1,0 +1,26 @@
+From 346d36fb204aa291aa258008cda4bcfae0f75817 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Mon, 12 Feb 2018 10:55:15 +0100
+Subject: [PATCH 293/375] crypto: cpt - fix overflow when clearing interrupt
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cptpf_mbox.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/crypto/cavium/cpt/cptpf_mbox.c b/drivers/crypto/cavium/cpt/cptpf_mbox.c
+index f11f3eaf8638..d824a44013ad 100644
+--- a/drivers/crypto/cavium/cpt/cptpf_mbox.c
++++ b/drivers/crypto/cavium/cpt/cptpf_mbox.c
+@@ -30,7 +30,7 @@ static void cpt_mbox_send_ack(struct cpt_device *cpt, int vf,
+ static void cpt_clear_mbox_intr(struct cpt_device *cpt, u32 vf)
+ {
+ 	/* W1C for the VF */
+-	writeq(1 << vf, cpt->reg_base + CPTX_PF_MBOX_INTX(0, 0));
++	writeq(1ull << vf, cpt->reg_base + CPTX_PF_MBOX_INTX(0, 0));
+ }
+ 
+ /*
+-- 
+2.14.1
+

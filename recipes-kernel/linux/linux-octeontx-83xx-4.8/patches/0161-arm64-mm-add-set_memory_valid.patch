@@ -1,0 +1,103 @@
+From fdd78cfe9a64d6a14e683eda4a2482b6013a8ab1 Mon Sep 17 00:00:00 2001
+From: AKASHI Takahiro <takahiro.akashi@linaro.org>
+Date: Mon, 3 Apr 2017 11:24:33 +0900
+Subject: [PATCH 161/375] arm64: mm: add set_memory_valid()
+
+This function validates and invalidates PTE entries, and will be utilized
+in kdump to protect loaded crash dump kernel image.
+
+Signed-off-by: AKASHI Takahiro <takahiro.akashi@linaro.org>
+Reviewed-by: Ard Biesheuvel <ard.biesheuvel@linaro.org>
+Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ arch/arm64/include/asm/cacheflush.h |  1 +
+ arch/arm64/mm/pageattr.c            | 56 ++++++++++++++++++++++++++++++++-----
+ 2 files changed, 50 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm64/include/asm/cacheflush.h b/arch/arm64/include/asm/cacheflush.h
+index c64268dbff64..4082a8d49ae5 100644
+--- a/arch/arm64/include/asm/cacheflush.h
++++ b/arch/arm64/include/asm/cacheflush.h
+@@ -148,5 +148,6 @@ int set_memory_ro(unsigned long addr, int numpages);
+ int set_memory_rw(unsigned long addr, int numpages);
+ int set_memory_x(unsigned long addr, int numpages);
+ int set_memory_nx(unsigned long addr, int numpages);
++int set_memory_valid(unsigned long addr, unsigned long size, int enable);
+ 
+ #endif
+diff --git a/arch/arm64/mm/pageattr.c b/arch/arm64/mm/pageattr.c
+index ca6d268e3313..3212ee0558f6 100644
+--- a/arch/arm64/mm/pageattr.c
++++ b/arch/arm64/mm/pageattr.c
+@@ -125,18 +125,60 @@ int set_memory_x(unsigned long addr, int numpages)
+ }
+ EXPORT_SYMBOL_GPL(set_memory_x);
+ 
+-#ifdef CONFIG_DEBUG_PAGEALLOC
+-void __kernel_map_pages(struct page *page, int numpages, int enable)
++int set_memory_valid(unsigned long addr, int numpages, int enable)
+ {
+-	unsigned long addr = (unsigned long) page_address(page);
+-
+ 	if (enable)
+-		__change_memory_common(addr, PAGE_SIZE * numpages,
++		return __change_memory_common(addr, PAGE_SIZE * numpages,
+ 					__pgprot(PTE_VALID),
+ 					__pgprot(0));
+ 	else
+-		__change_memory_common(addr, PAGE_SIZE * numpages,
++		return __change_memory_common(addr, PAGE_SIZE * numpages,
+ 					__pgprot(0),
+ 					__pgprot(PTE_VALID));
+ }
+-#endif
++
++#ifdef CONFIG_DEBUG_PAGEALLOC
++void __kernel_map_pages(struct page *page, int numpages, int enable)
++{
++	set_memory_valid((unsigned long)page_address(page), numpages, enable);
++}
++#ifdef CONFIG_HIBERNATION
++/*
++ * When built with CONFIG_DEBUG_PAGEALLOC and CONFIG_HIBERNATION, this function
++ * is used to determine if a linear map page has been marked as not-valid by
++ * CONFIG_DEBUG_PAGEALLOC. Walk the page table and check the PTE_VALID bit.
++ * This is based on kern_addr_valid(), which almost does what we need.
++ *
++ * Because this is only called on the kernel linear map,  p?d_sect() implies
++ * p?d_present(). When debug_pagealloc is enabled, sections mappings are
++ * disabled.
++ */
++bool kernel_page_present(struct page *page)
++{
++	pgd_t *pgd;
++	pud_t *pud;
++	pmd_t *pmd;
++	pte_t *pte;
++	unsigned long addr = (unsigned long)page_address(page);
++
++	pgd = pgd_offset_k(addr);
++	if (pgd_none(*pgd))
++		return false;
++
++	pud = pud_offset(pgd, addr);
++	if (pud_none(*pud))
++		return false;
++	if (pud_sect(*pud))
++		return true;
++
++	pmd = pmd_offset(pud, addr);
++	if (pmd_none(*pmd))
++		return false;
++	if (pmd_sect(*pmd))
++		return true;
++
++	pte = pte_offset_kernel(pmd, addr);
++	return pte_valid(*pte);
++}
++#endif /* CONFIG_HIBERNATION */
++#endif /* CONFIG_DEBUG_PAGEALLOC */
+-- 
+2.14.1
+

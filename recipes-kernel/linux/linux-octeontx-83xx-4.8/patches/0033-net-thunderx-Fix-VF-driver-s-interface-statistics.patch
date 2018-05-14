@@ -1,0 +1,57 @@
+From 629cb85229506379bc7460982db7a85f044b1889 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 15 Nov 2016 17:38:16 +0530
+Subject: [PATCH 033/375] net: thunderx: Fix VF driver's interface statistics
+
+This patch fixes multiple issues
+1. Convert all driver statistics to percpu counters for accuracy.
+2. To avoid multiple CQEs posted by a TSO packet appended to HW,
+   TSO pkt's SQE has 'post_cqe' not set but a dummy SQE is added
+   for getting HW transmit completion notification. This dummy
+   SQE has 'dont_send' set and HW drops the pkt pointed to in this
+   thus Tx drop counter increases. This patch fixes this by subtracting
+   SW tx tso counter from HW Tx drop counter for actual packet drop counter.
+3. Reset all individual queue's and VNIC HW stats when interface is going down.
+4. Getrid off unnecessary counters in hot path.
+5. Bringout all CQE error stats i.e both Rx and Tx.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.h | 20 --------------------
+ 1 file changed, 20 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.h b/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
+index 9fd56a31e817..2e3c940c1093 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.h
+@@ -172,26 +172,6 @@ enum CQ_TX_ERROP_E {
+ 	CQ_TX_ERROP_ENUM_LAST = 0x8a,
+ };
+ 
+-struct cmp_queue_stats {
+-	struct tx_stats {
+-		u64 good;
+-		u64 desc_fault;
+-		u64 hdr_cons_err;
+-		u64 subdesc_err;
+-		u64 max_size_exceeded;
+-		u64 imm_size_oflow;
+-		u64 data_seq_err;
+-		u64 mem_seq_err;
+-		u64 lock_viol;
+-		u64 data_fault;
+-		u64 tstmp_conflict;
+-		u64 tstmp_timeout;
+-		u64 mem_fault;
+-		u64 csum_overlap;
+-		u64 csum_overflow;
+-	} tx;
+-} ____cacheline_aligned_in_smp;
+-
+ enum RQ_SQ_STATS {
+ 	RQ_SQ_STATS_OCTS,
+ 	RQ_SQ_STATS_PKTS,
+-- 
+2.14.1
+

@@ -1,0 +1,33 @@
+From bf4f7a54a25118749bd67f2910d542f98c497cf4 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Thu, 2 Nov 2017 14:19:01 -0700
+Subject: [PATCH 254/375] octeontx-bgx: Reduce BGX TX FIFO threashold for 10GE
+ interfaces
+
+The threashold value size should not be bigger then either BGX TX FIFO
+or PKO TX FIFO sizes. For XFI mode they are 12KB and 2.5KB accordingly.
+The previous threashold value 0x100 was equvalent to 4KB, which was
+causing PKO to freeze, when passing big packets. New value is setup to
+0x80 (2KB).
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+index 26b3625e161a..478a7997eae0 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -219,7 +219,7 @@ static int bgx_port_initial_config(struct octtx_bgx_port *port)
+ 	case OCTTX_BGX_LMAC_TYPE_RXAUI:
+ 	case OCTTX_BGX_LMAC_TYPE_10GR:
+ 		reg = 0x100;
+-		thr = 0x100;
++		thr = 0x80;
+ 		break;
+ 	default:
+ 		reg = 0x100;
+-- 
+2.14.1
+

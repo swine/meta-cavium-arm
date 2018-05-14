@@ -1,0 +1,164 @@
+From 083c49f9721f0b4acec3acd0d5985236c25d2b47 Mon Sep 17 00:00:00 2001
+From: Stanislaw Kardach <kda@semihalf.com>
+Date: Wed, 22 Mar 2017 14:39:04 +0100
+Subject: [PATCH 193/375] octeontx-pki: add grptag_ok/bad config
+
+Allow setting the number of tag value bits to use in calculating the
+target SSO GGRP for a given packet.
+Remove MBOX_PKI_PORT_ENABLE_RSS which becomes unnecessary.
+
+Signed-off-by: Stanislaw Kardach <kda@semihalf.com>
+---
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  | 32 ++++++-----------
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    |  4 +++
+ .../net/ethernet/cavium/octeontx-83xx/pki_config.c | 40 ++++++++++++++--------
+ 3 files changed, 40 insertions(+), 36 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index 0a88643e6008..aa605fbe75f9 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -542,15 +542,13 @@ struct __attribute__((__packed__)) mbox_tim_ring_conf {
+ #define MBOX_PKI_PORT_MODIFY_QOS		12
+ /* Delet the complete qpg entries attached to this port */
+ #define MBOX_PKI_PORT_DELETE_QOS		13
+-/* Enable/disable RSS by setting qpg_grptag in all the qpg entries */
+-#define MBOX_PKI_PORT_ENABLE_RSS		14
+-#define MBOX_PKI_PORT_PKTDROP_CONFIG		15
+-#define MBOX_PKI_PORT_WQE_GEN_CONFIG		16
+-#define MBOX_PKI_BACKPRESSURE_CONFIG		17
+-#define MBOX_PKI_PORT_GET_STATS			18
+-#define MBOX_PKI_PORT_RESET_STATS		19
+-#define MBOX_PKI_GET_PORT_CONFIG		20
+-#define MBOX_PKI_GET_PORT_QOS_CONFIG		22
++#define MBOX_PKI_PORT_PKTDROP_CONFIG		14
++#define MBOX_PKI_PORT_WQE_GEN_CONFIG		15
++#define MBOX_PKI_BACKPRESSURE_CONFIG		16
++#define MBOX_PKI_PORT_GET_STATS			17
++#define MBOX_PKI_PORT_RESET_STATS		18
++#define MBOX_PKI_GET_PORT_CONFIG		19
++#define MBOX_PKI_GET_PORT_QOS_CONFIG		20
+ 
+ /* pki pkind parse mode */
+ enum  {
+@@ -712,6 +710,8 @@ struct mbox_pki_qos_entry {
+ 	u16 ggrp_ok;
+ 	u16 ggrp_bad;
+ 	u16 gaura;
++	u8 grptag_ok;
++	u8 grptag_bad;
+ };
+ 
+ /* hardcoded TODO */
+@@ -740,20 +740,10 @@ typedef struct mbox_pki_port_modify_qos_entry {
+ 		u8 f_grp_ok:1;
+ 		u8 f_grp_bad:1;
+ 		u8 f_gaura:1;
++		u8 f_grptag_ok:1;
++		u8 f_grptag_bad:1;
+ 	} mmask;
+ 	struct mbox_pki_qos_entry qos_entry;
+ } mbox_pki_mod_qos_t;
+ 
+-/* pki flow/style enable rss
+- * If this message is received before create_qos, store the number of queues in
+- * the database and when enable_qos received, program it same for all the
+- * entries in first release.
+- */
+-typedef struct mbox_pki_port_enable_rss {
+-	u8 port_type;
+-	/* 1=enable 0=disable*/
+-	u8 en_dis;
+-	u8 num_queues;
+-} mbox_pki_rss_cfg_t;
+-
+ #endif
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+index c5e837a40e76..e6b5e20771ba 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -271,8 +271,12 @@
+ #define PKI_QPG_TBL_GAURA_SHIFT		0
+ #define PKI_QPG_TBL_GRP_BAD_MASK	0x3FFULL
+ #define PKI_QPG_TBL_GRP_BAD_SHIFT	16
++#define PKI_QPG_TBL_GRPTAG_BAD_MASK	0x7ULL
++#define PKI_QPG_TBL_GRPTAG_BAD_SHIFT	29
+ #define PKI_QPG_TBL_GRP_OK_MASK		0x3FFULL
+ #define PKI_QPG_TBL_GRP_OK_SHIFT	32
++#define PKI_QPG_TBL_GRPTAG_OK_MASK	0x7ULL
++#define PKI_QPG_TBL_GRPTAG_OK_SHIFT	45
+ #define PKI_QPG_TBL_PORT_ADD_MASK	0xFFULL
+ #define PKI_QPG_TBL_PORT_ADD_SHIFT	48
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index 13cc8d898e46..a8a1000747fc 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -33,6 +33,12 @@ static void set_clear_bit(u64 *value, bool flag, u64 bit_num)
+ 		*value &= ~(0x1Ull << bit_num);
+ }
+ 
++static inline void set_field(u64 *ptr, u64 field_mask, u8 field_shift, u64 val)
++{
++	*ptr &= ~(field_mask << field_shift);
++	*ptr |= (val & field_mask) << field_shift;
++}
++
+ static int pki_frmlen_reg(struct pki_t *pki, u16 maxlen, u16 minlen)
+ {
+ 	u64 cfg;
+@@ -239,32 +245,36 @@ int pki_port_create_qos(struct pkipf_vf *vf, u16 vf_id,
+ 	port->num_entry = qcfg->num_entry;
+ 	for (i = 0; i < pki->max_cls; i++) {
+ 		cfg = pki_reg_read(pki, PKI_CLX_STYLEX_ALG(i, style));
+-		cfg |= (qcfg->qpg_qos & PKI_STYLE_ALG_QPG_QOS_MASK) <<
+-			PKI_STYLE_ALG_QPG_QOS_SHIFT;
+-		cfg |= (qcfg->tag_type & PKI_STYLE_ALG_TT_MASK) <<
+-			PKI_STLYE_ALG_TT_SHIFT;
++		set_field(&cfg, PKI_STYLE_ALG_QPG_QOS_MASK,
++			  PKI_STYLE_ALG_QPG_QOS_SHIFT, qcfg->qpg_qos);
++		set_field(&cfg, PKI_STYLE_ALG_TT_MASK,
++			  PKI_STLYE_ALG_TT_SHIFT, qcfg->tag_type);
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_ALG(i, style), cfg);
+ 	}
+ 	for (i = 0; i < qcfg->num_entry; i++) {
+ 		qpg = &qcfg->qos_entry[i];
+ 		cfg = pki_reg_read(pki, PKI_QPG_TBLX(qpg_base + i));
+-		cfg |= (qpg->gaura & PKI_QPG_TBL_GAURA_MASK) <<
+-			PKI_QPG_TBL_GAURA_SHIFT;
+-		cfg |= (qpg->ggrp_ok & PKI_QPG_TBL_GRP_OK_MASK) <<
+-			PKI_QPG_TBL_GRP_OK_SHIFT;
+-		cfg |= (qpg->ggrp_bad & PKI_QPG_TBL_GRP_BAD_MASK) <<
+-			PKI_QPG_TBL_GRP_BAD_SHIFT;
+-		cfg |= (qpg->port_add & PKI_QPG_TBL_PORT_ADD_MASK) <<
+-			PKI_QPG_TBL_PORT_ADD_SHIFT;
++		set_field(&cfg, PKI_QPG_TBL_GAURA_MASK,
++			  PKI_QPG_TBL_GAURA_SHIFT, qpg->gaura);
++		set_field(&cfg, PKI_QPG_TBL_GRP_OK_MASK,
++			  PKI_QPG_TBL_GRP_OK_SHIFT, qpg->ggrp_ok);
++		set_field(&cfg, PKI_QPG_TBL_GRP_BAD_MASK,
++			  PKI_QPG_TBL_GRP_BAD_SHIFT, qpg->ggrp_bad);
++		set_field(&cfg, PKI_QPG_TBL_PORT_ADD_MASK,
++			  PKI_QPG_TBL_PORT_ADD_SHIFT, qpg->port_add);
++		set_field(&cfg, PKI_QPG_TBL_GRPTAG_BAD_MASK,
++			  PKI_QPG_TBL_GRPTAG_BAD_SHIFT, qpg->grptag_bad);
++		set_field(&cfg, PKI_QPG_TBL_GRPTAG_OK_MASK,
++			  PKI_QPG_TBL_GRPTAG_OK_SHIFT, qpg->grptag_ok);
+ 		pki_reg_write(pki, PKI_QPG_TBLX(qpg_base + i), cfg);
+ 		cfg = pki_reg_read(pki, PKI_QPG_TBLBX(qpg_base + i));
+-		cfg |= (vf->stream_id & PKI_QPG_TBLB_STRM_MASK) <<
+-			PKI_QPG_TBLB_STRM_SHIFT;
++		set_field(&cfg, PKI_QPG_TBLB_STRM_MASK,
++			  PKI_QPG_TBLB_STRM_SHIFT, vf->stream_id);
+ 		pki_reg_write(pki, PKI_QPG_TBLBX(qpg_base + i), cfg);
+ 	}
+ 	for (i = 0; i < pki->max_cls; i++) {
+ 		cfg = pki_reg_read(pki, PKI_CLX_STYLEX_CFG(i, style));
+-		cfg |= (port->qpg_base & PKI_STYLE_CFG_QPG_BASE_MASK);
++		set_field(&cfg, PKI_STYLE_CFG_QPG_BASE_MASK, 0, port->qpg_base);
+ 		pki_reg_write(pki, PKI_CLX_STYLEX_CFG(i, style), cfg);
+ 	}
+ 	port->state = PKI_PORT_STOP;
+-- 
+2.14.1
+

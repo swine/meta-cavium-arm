@@ -1,0 +1,947 @@
+From 0ecfa22f703e68a3a9053201cdcd83fd37f2135c Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Fri, 15 Sep 2017 10:12:37 -0700
+Subject: [PATCH 236/375] octeontx: Add sysfs based interface for domain
+ statistics
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c    |  74 +++++---------
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.h    |   1 +
+ .../net/ethernet/cavium/octeontx-83xx/fpapf_main.c | 113 +++++++++++++++------
+ .../net/ethernet/cavium/octeontx-83xx/octeontx.h   |  20 ++++
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  |  73 +++++++++++--
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    |   1 +
+ .../net/ethernet/cavium/octeontx-83xx/pki_main.c   |  32 +++++-
+ .../net/ethernet/cavium/octeontx-83xx/ssopf_main.c |  89 +++++++++++++---
+ .../ethernet/cavium/octeontx-83xx/ssowpf_main.c    |  58 ++++-------
+ 9 files changed, 322 insertions(+), 139 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+index c2410d2cc59a..173e21ab4e15 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -747,40 +747,37 @@ int bgx_port_mtu_set(struct octtx_bgx_port *port, u16 mtu)
+ 	return 0;
+ }
+ 
+-static ssize_t bgx_port_stats_show(struct kobject *kobj,
+-				   struct kobj_attribute *attr, char *buf)
++int bgx_get_port_stats(struct octtx_bgx_port *port)
+ {
+-	struct octtx_bgx_port *port;
+ 	struct bgxpf *bgx;
+-	u64 rxpkts, rxbytes, rxdrop, rxerr;
+-	u64 txpkts, txbytes, txdrop, txerr;
+-
+-	port = container_of(kobj, struct octtx_bgx_port, kobj);
++	u64 reg;
+ 
+ 	bgx = get_bgx_dev(port->node, port->bgx);
+ 	if (!bgx)
+-		return 0;
+-	rxpkts = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT0);
+-	rxbytes = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT1);
+-	rxdrop = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT6);
+-	rxerr = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT8);
+-
+-	txpkts = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT5);
+-	txbytes = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT4);
+-	txdrop = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT0);
+-	txerr = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT16);
+-	return snprintf(buf, PAGE_SIZE,
+-			"%lld %lld %lld %lld\n"
+-			"%lld %lld %lld %lld\n",
+-			rxpkts, rxbytes, rxdrop, rxerr,
+-			txpkts, txbytes, txdrop, txerr);
+-}
+-
+-static struct kobj_attribute bgx_port_stats_attr = {
+-	.attr = {.name = "stats",  .mode = 0444},
+-	.show = bgx_port_stats_show,
+-	.store = NULL
+-};
++		return -EINVAL;
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT0);
++	port->stats.rxpkts = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT1);
++	port->stats.rxbytes = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT6);
++	port->stats.rxdrop = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_RX_STAT8);
++	port->stats.rxerr = reg & ((1ull << 47) - 1);
++
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT5);
++	port->stats.txpkts = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT4);
++	port->stats.txbytes = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT0);
++	port->stats.txdrop = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT16);
++	port->stats.txerr = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT14);
++	port->stats.txbcast = reg & ((1ull << 47) - 1);
++	reg = bgx_reg_read(bgx, port->lmac, BGX_CMRX_TX_STAT15);
++	port->stats.txmcast = reg & ((1ull << 47) - 1);
++	return 0;
++}
+ 
+ /* Domain destroy function.
+  */
+@@ -796,12 +793,6 @@ static int bgx_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ 			thbgx->switch_ctx(port->node, port->bgx, port->lmac,
+ 					  NIC_PORT_CTX_LINUX, 0);
+ 
+-			/* sysfs entry: */
+-			if (port->kobj.state_initialized) {
+-				sysfs_remove_file(&port->kobj,
+-						  &bgx_port_stats_attr.attr);
+-				kobject_put(&port->kobj);
+-			}
+ 			port->domain_id = BGX_INVALID_ID;
+ 			port->dom_port_idx = BGX_INVALID_ID;
+ 		}
+@@ -860,16 +851,6 @@ static int bgx_create_domain(u32 id, u16 domain_id,
+ 			ret = bgx_port_initial_config(port);
+ 			if (ret)
+ 				goto err_unlock;
+-
+-			/* sysfs entry: */
+-			ret = kobject_init_and_add(&port->kobj, get_ktype(kobj),
+-						   kobj, "net%d", port_idx);
+-			if (ret)
+-				goto err_unlock;
+-			ret = sysfs_create_file(&port->kobj,
+-						&bgx_port_stats_attr.attr);
+-			if (ret < 0)
+-				goto err_unlock;
+ 		}
+ 	}
+ 	spin_unlock(&octeontx_bgx_lock);
+@@ -919,7 +900,8 @@ struct bgx_com_s bgx_com  = {
+ 	.get_num_ports = bgx_get_num_ports,
+ 	.get_link_status = bgx_get_link_status,
+ 	.get_port_by_chan = bgx_get_port_by_chan,
+-	.set_pkind = bgx_set_pkind
++	.set_pkind = bgx_set_pkind,
++	.get_port_stats = bgx_get_port_stats,
+ };
+ EXPORT_SYMBOL(bgx_com);
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h
+index 96fd5766ac55..b07acb666e31 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.h
+@@ -28,6 +28,7 @@ struct bgx_com_s {
+ 	struct octtx_bgx_port* (*get_port_by_chan)(int node, u16 domain_id,
+ 						   int chan);
+ 	int (*set_pkind)(u32 id, u16 domain_id, int port, int pkind);
++	int (*get_port_stats)(struct octtx_bgx_port *port);
+ };
+ 
+ struct bgx_com_s *bgx_octeontx_init(void);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+index 4321575b7ae5..da0cd3a85005 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -250,8 +250,9 @@ static ssize_t pool_maxcnt_show(struct device *dev,
+ {
+ 	struct fpapf *curr, *fpa = NULL;
+ 	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+-	int vfid = pdev->devfn;
++	int i, n, vfid = pdev->devfn;
+ 	u64 cnt;
++	char info[512];
+ 
+ 	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
+ 		if (curr->pdev == pdev->physfn) {
+@@ -261,9 +262,13 @@ static ssize_t pool_maxcnt_show(struct device *dev,
+ 	}
+ 	if (!fpa)
+ 		return 0;
+-	cnt = readq_relaxed(fpa->vf[vfid].domain.reg_base +
+-			    FPA_VF_VHAURA_CNT_LIMIT(0));
+-	return snprintf(buf, PAGE_SIZE, "%lld\n", cnt);
++
++	for (i = 0, n = 0; i < FPA_AURA_SET_SIZE; i++) {
++		cnt = readq_relaxed(fpa->vf[vfid].domain.reg_base +
++				    FPA_VF_VHAURA_CNT_LIMIT(i));
++		n += sprintf(&info[n], "%lld\n", cnt);
++	}
++	return snprintf(buf, PAGE_SIZE, "%s", info);
+ }
+ 
+ static struct device_attribute pool_maxcnt_attr = {
+@@ -277,8 +282,9 @@ static ssize_t pool_curcnt_show(struct device *dev,
+ {
+ 	struct fpapf *curr, *fpa = NULL;
+ 	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+-	int vfid = pdev->devfn;
++	int i, n, vfid = pdev->devfn;
+ 	u64 cnt;
++	char info[512];
+ 
+ 	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
+ 		if (curr->pdev == pdev->physfn) {
+@@ -289,9 +295,12 @@ static ssize_t pool_curcnt_show(struct device *dev,
+ 	if (!fpa)
+ 		return 0;
+ 
+-	cnt = readq_relaxed(fpa->vf[vfid].domain.reg_base +
+-			    FPA_VF_VHAURA_CNT(0));
+-	return snprintf(buf, PAGE_SIZE, "%lld\n", cnt);
++	for (i = 0, n = 0; i < FPA_AURA_SET_SIZE; i++) {
++		cnt = readq_relaxed(fpa->vf[vfid].domain.reg_base +
++				    FPA_VF_VHAURA_CNT(i));
++		n += sprintf(&info[n], "%lld\n", cnt);
++	}
++	return snprintf(buf, PAGE_SIZE, "%s", info);
+ }
+ 
+ static struct device_attribute pool_curcnt_attr = {
+@@ -300,6 +309,49 @@ static struct device_attribute pool_curcnt_attr = {
+ 	.store = NULL
+ };
+ 
++static ssize_t pool_redcnt_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	struct fpapf *curr, *fpa = NULL;
++	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
++	int i, n, vfid = pdev->devfn;
++	u64 reg, ena, lvl, pass, drop, aura;
++	char *info;
++
++	list_for_each_entry(curr, &octeontx_fpa_devices, list) {
++		if (curr->pdev == pdev->physfn) {
++			fpa = curr;
++			break;
++		}
++	}
++	if (!fpa)
++		return 0;
++
++	info = kzalloc(PAGE_SIZE, GFP_KERNEL);
++	if (!info)
++		return 0;
++
++	aura = vfid * FPA_AURA_SET_SIZE;
++	for (i = 0, n = 0; i < FPA_AURA_SET_SIZE; i++, aura++) {
++		reg = fpa_reg_read(fpa, FPA_PF_AURAX_CNT_LEVELS(aura));
++		ena = reg & (1ull << 39);
++		lvl = reg & 0xFFull;
++		pass = (reg >> 8) & 0xFFull;
++		drop = (reg >> 16) & 0xFFull;
++		n += sprintf(&info[n], "%lld %lld %lld %lld\n",
++			     ena, lvl, pass, drop);
++	}
++	n = snprintf(buf, PAGE_SIZE, "%s", info);
++	kfree(info);
++	return n;
++}
++
++static struct device_attribute pool_redcnt_attr = {
++	.attr = {.name = "pool_redcnt",  .mode = 0444},
++	.show = pool_redcnt_show,
++	.store = NULL
++};
++
+ static int fpa_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ {
+ 	struct fpapf *fpa = NULL;
+@@ -352,6 +404,8 @@ static int fpa_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ 						  &pool_maxcnt_attr.attr);
+ 				sysfs_remove_file(&virtfn->dev.kobj,
+ 						  &pool_curcnt_attr.attr);
++				sysfs_remove_file(&virtfn->dev.kobj,
++						  &pool_redcnt_attr.attr);
+ 				sysfs_remove_link(kobj, virtfn->dev.kobj.name);
+ 			}
+ 			dev_info(&fpa->pdev->dev,
+@@ -385,11 +439,11 @@ static int fpa_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 				u32 num_vfs, struct kobject *kobj)
+ {
+-	int i, j, aura, vf_idx = 0;
++	int i, j, ret, aura, vf_idx = 0;
+ 	struct fpapf *fpa = NULL;
+ 	resource_size_t vf_start;
+ 	struct pci_dev *virtfn;
+-	unsigned long ret = 0;
++	unsigned long aura_set = 0;
+ 	struct fpapf *curr;
+ 	u64 reg;
+ 
+@@ -401,13 +455,14 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 			break;
+ 		}
+ 	}
+-
+-	if (!fpa)
+-		goto err_unlock;
+-
+-	if ((fpa->total_vfs - fpa->vfs_in_use) < num_vfs)
+-		goto err_unlock;
+-
++	if (!fpa) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return 0;
++	}
++	if ((fpa->total_vfs - fpa->vfs_in_use) < num_vfs) {
++		spin_unlock(&octeontx_fpa_devices_lock);
++		return 0;
++	}
+ 	for (i = 0; i < fpa->total_vfs; i++) {
+ 		if (fpa->vf[i].domain.in_use) {
+ 			continue;
+@@ -418,7 +473,7 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 					   pci_iov_virtfn_bus(fpa->pdev, i),
+ 					   pci_iov_virtfn_devfn(fpa->pdev, i));
+ 				if (!virtfn)
+-					break;
++					goto err_unlock;
+ 				ret = sysfs_create_link(kobj, &virtfn->dev.kobj,
+ 							virtfn->dev.kobj.name);
+ 				if (ret < 0)
+@@ -431,8 +486,11 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 							&pool_curcnt_attr.attr);
+ 				if (ret < 0)
+ 					goto err_unlock;
++				ret = sysfs_create_file(&virtfn->dev.kobj,
++							&pool_redcnt_attr.attr);
++				if (ret < 0)
++					goto err_unlock;
+ 			}
+-
+ 			fpa->vf[i].domain.domain_id = domain_id;
+ 			fpa->vf[i].domain.subdomain_id = vf_idx;
+ 			fpa->vf[i].domain.gmid = get_gmid(domain_id);
+@@ -448,7 +506,7 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 				ioremap(vf_start, FPA_VF_CFG_SIZE);
+ 
+ 			if (!fpa->vf[i].domain.reg_base)
+-				break;
++				goto err_unlock;
+ 
+ 			for (j = 0; j < FPA_AURA_SET_SIZE; j++) {
+ 				aura = (i * FPA_AURA_SET_SIZE) + j;
+@@ -470,10 +528,11 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 				      (0xff & (i + 1)) << 16;
+ 			else
+ 				reg = 0;
++
+ 			fpa_reg_write(fpa, FPA_PF_VFX_GMCTL(i), reg);
+ 
+ 			fpa->vf[i].domain.in_use = true;
+-			set_bit(i, &ret);
++			set_bit(i, &aura_set);
+ 			identify(&fpa->vf[i], domain_id, vf_idx,
+ 				 fpa->stack_ln_ptrs);
+ 			vf_idx++;
+@@ -483,19 +542,16 @@ static u64 fpa_pf_create_domain(u32 id, u16 domain_id,
+ 			}
+ 		}
+ 	}
+-
+-	if (vf_idx != num_vfs) {
+-		ret = 0;
++	if (vf_idx != num_vfs)
+ 		goto err_unlock;
+-	}
+ 
+ 	spin_unlock(&octeontx_fpa_devices_lock);
+-	return ret;
++	return aura_set;
+ 
+ err_unlock:
+ 	spin_unlock(&octeontx_fpa_devices_lock);
+ 	fpa_pf_destroy_domain(id, domain_id, kobj);
+-	return ret;
++	return 0;
+ }
+ 
+ static int fpa_pf_get_vf_count(u32 id)
+@@ -510,12 +566,10 @@ static int fpa_pf_get_vf_count(u32 id)
+ 			break;
+ 		}
+ 	}
+-
+ 	if (!fpa) {
+ 		spin_unlock(&octeontx_fpa_devices_lock);
+ 		return 0;
+ 	}
+-
+ 	spin_unlock(&octeontx_fpa_devices_lock);
+ 	return fpa->total_vfs;
+ }
+@@ -536,7 +590,6 @@ int fpa_reset_domain(u32 id, u16 domain_id)
+ 			break;
+ 		}
+ 	}
+-
+ 	if (!fpa) {
+ 		spin_unlock(&octeontx_fpa_devices_lock);
+ 		return 0;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+index aac11fc3c48e..e20185ac2e2d 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+@@ -91,6 +91,24 @@ enum domain_type {
+ 	HOST_NET
+ };
+ 
++/* Port statistics */
++struct octtx_port_stats {
++	u64	rxpkts;
++	u64	rxbytes;
++	u64	rxdrop;
++	u64	rxerr;
++	u64	rxucast;
++	u64	rxbcast;
++	u64	rxmcast;
++	u64	txpkts;
++	u64	txbytes;
++	u64	txdrop;
++	u64	txerr;
++	u64	txucast;
++	u64	txbcast;
++	u64	txmcast;
++};
++
+ /* Domain network (BGX) port */
+ #define OCTTX_MAX_BGX_PORTS 16 /* Maximum BGX ports per System */
+ 
+@@ -116,6 +134,8 @@ struct octtx_bgx_port {
+ 	int	num_chans;
+ 	int	pkind; /* PKI port number */
+ 	int	link_up; /* Last retrieved link status */
++	struct octtx_port_stats stats;
++	struct kobj_attribute sysfs_stats;
+ };
+ 
+ /* Domain internal (LBK) port */
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index 6d59191d29e7..59c34f32ff49 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -418,8 +418,9 @@ err_unlock:
+ 
+ static void do_destroy_domain(struct octtx_domain *domain)
+ {
+-	u32 ret, node;
++	u32 ret, node, i;
+ 	u16 domain_id;
++	struct octtx_bgx_port *bgx_port;
+ 
+ 	if (!domain)
+ 		return;
+@@ -428,6 +429,11 @@ static void do_destroy_domain(struct octtx_domain *domain)
+ 	domain_id = domain->domain_id;
+ 
+ 	if (domain->bgx_domain_created) {
++		for (i = 0; i < domain->bgx_count; i++) {
++			bgx_port = &domain->bgx_port[i];
++			sysfs_remove_file(&bgx_port->kobj,
++					  &bgx_port->sysfs_stats.attr);
++		}
+ 		ret = bgx->destroy_domain(node, domain_id, domain->ports_kobj);
+ 		if (ret) {
+ 			dev_err(octtx_device,
+@@ -508,15 +514,16 @@ static void do_destroy_domain(struct octtx_domain *domain)
+ 		}
+ 	}
+ 
+-	if (domain->ports_kobj)
+-		kobject_del(domain->ports_kobj);
++	if (domain->sysfs_domain_in_use_created)
++		sysfs_remove_file(domain->kobj,
++				  &domain->sysfs_domain_in_use.attr);
+ 
+ 	if (domain->sysfs_domain_id_created)
+ 		sysfs_remove_file(domain->kobj, &domain->sysfs_domain_id.attr);
+ 
+-	if (domain->sysfs_domain_in_use_created)
+-		sysfs_remove_file(domain->kobj,
+-				  &domain->sysfs_domain_in_use.attr);
++	if (domain->ports_kobj)
++		kobject_del(domain->ports_kobj);
++
+ 	if (domain->kobj)
+ 		kobject_del(domain->kobj);
+ }
+@@ -543,6 +550,39 @@ static ssize_t octtx_domain_in_use_show(struct device *dev,
+ 	return snprintf(buf, PAGE_SIZE, "%d\n", domain->in_use);
+ }
+ 
++static ssize_t octtx_netport_stats_show(struct kobject *kobj,
++					struct kobj_attribute *attr, char *buf)
++{
++	struct octtx_bgx_port *port;
++	int ret;
++
++	port = container_of(kobj, struct octtx_bgx_port, kobj);
++	if (!port)
++		return 0;
++
++	ret = bgx->get_port_stats(port);
++	if (ret)
++		return 0;
++	ret = pki->get_bgx_port_stats(port);
++	if (ret)
++		return 0;
++	port->stats.rxucast = port->stats.rxpkts -
++			      port->stats.rxbcast - port->stats.rxmcast;
++	port->stats.txucast = port->stats.txpkts -
++			      port->stats.txbcast - port->stats.txmcast;
++	return snprintf(buf, PAGE_SIZE,
++			"%lld %lld %lld %lld %lld %lld %lld\n"
++			"%lld %lld %lld %lld %lld %lld %lld\n",
++			port->stats.rxpkts, port->stats.rxbytes,
++			port->stats.rxdrop, port->stats.rxerr,
++			port->stats.rxucast, port->stats.rxbcast,
++			port->stats.rxmcast,
++			port->stats.txpkts, port->stats.txbytes,
++			port->stats.txdrop, port->stats.txerr,
++			port->stats.txucast, port->stats.txbcast,
++			port->stats.txmcast);
++}
++
+ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 			   int fpa_count, int ssow_count, int pko_count,
+ 			   int pki_count, int tim_count, int bgx_count,
+@@ -552,6 +592,7 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ {
+ 	void *ssow_ram_mbox_addr = NULL;
+ 	struct octtx_domain *domain;
++	struct kobj_attribute *kattr;
+ 	u16 domain_id;
+ 	int ret = -EINVAL;
+ 	int node = 0;
+@@ -727,8 +768,7 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 	 * domain->bgx_port[i].port_idx = i; -- domain-local port index.
+ 	 * domain->bgx_port[i].port_gidx = n; -- global port index.
+ 	 * In this, default configuraiton, all available ports are
+-	 * given to this domain, except port 0, which is under
+-	 * Linux, hosting the dataplane application, control.
++	 * given to this domain.
+ 	 */
+ 	domain->bgx_count = bgx_count;
+ 	if (domain->bgx_count) {
+@@ -746,7 +786,6 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 		}
+ 		domain->bgx_domain_created = true;
+ 	}
+-
+ 	/* Now that we know which exact ports we have, set pkinds for them. */
+ 	for (i = 0; i < domain->bgx_count; i++) {
+ 		ret = pki->add_bgx_port(node, domain_id, &domain->bgx_port[i]);
+@@ -768,8 +807,22 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 				domain->bgx_port[i].glb_port_idx);
+ 			goto error;
+ 		}
++		/* sysfs entry: */
++		ret = kobject_init_and_add(&domain->bgx_port[i].kobj,
++					   get_ktype(domain->ports_kobj),
++					   domain->ports_kobj, "net%d", i);
++		if (ret)
++			goto error;
++		kattr = &domain->bgx_port[i].sysfs_stats;
++		kattr->show = octtx_netport_stats_show;
++		kattr->attr.name = "stats";
++		kattr->attr.mode = 0444;
++		sysfs_attr_init(&kattr->attr);
++		ret = sysfs_create_file(&domain->bgx_port[i].kobj,
++					&kattr->attr);
++		if (ret < 0)
++			goto error;
+ 	}
+-
+ 	/* remove this once PKO init extends for LBK. */
+ 	domain->pko_vf_count = port_count;
+ 	if (domain->pko_vf_count) {
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+index 79fb8911a73c..79818b16820f 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -479,6 +479,7 @@ struct pki_com_s {
+ 			    struct octtx_bgx_port *port);
+ 	int (*add_lbk_port)(u32 node, u16 domain_id,
+ 			    struct octtx_lbk_port *port);
++	int (*get_bgx_port_stats)(struct octtx_bgx_port *port);
+ };
+ 
+ extern struct pki_com_s pki_com;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+index 7330d72833e6..ad5b67627e62 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -349,6 +349,20 @@ static void install_default_vlan(struct pki_t *pki)
+ 
+ /*locks should be used by caller
+  */
++static struct pki_t *pki_get_pf(u32 id)
++{
++	struct pki_t *pki = NULL;
++	struct pki_t *curr;
++
++	list_for_each_entry(curr, &octeontx_pki_devices, list) {
++		if (curr->id == id) {
++			pki = curr;
++			break;
++		}
++	}
++	return pki;
++}
++
+ static struct pkipf_vf *pki_get_vf(u32 id, u16 domain_id)
+ {
+ 	struct pki_t *pki = NULL;
+@@ -648,13 +662,29 @@ int pki_add_lbk_port(u32 id, u16 domain_id, struct octtx_lbk_port *port)
+ 	return pkind;
+ }
+ 
++int pki_get_bgx_port_stats(struct octtx_bgx_port *port)
++{
++	struct pki_t *pki;
++	u64 reg;
++
++	pki = pki_get_pf(port->node);
++	if (!pki)
++		return -EINVAL;
++	reg = pki_reg_read(pki, PKI_STATX_STAT5(port->pkind));
++	port->stats.rxbcast = reg & ((1ull << 47) - 1);
++	reg = pki_reg_read(pki, PKI_STATX_STAT6(port->pkind));
++	port->stats.rxmcast = reg & ((1ull << 47) - 1);
++	return 0;
++}
++
+ struct pki_com_s pki_com  = {
+ 	.create_domain = pki_create_domain,
+ 	.destroy_domain = pki_destroy_domain,
+ 	.reset_domain = pki_reset_domain,
+ 	.receive_message = pki_receive_message,
+ 	.add_bgx_port = pki_add_bgx_port,
+-	.add_lbk_port = pki_add_lbk_port
++	.add_lbk_port = pki_add_lbk_port,
++	.get_bgx_port_stats = pki_get_bgx_port_stats,
+ };
+ EXPORT_SYMBOL(pki_com);
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+index 332fb53d59d9..47e121405d3b 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+@@ -211,6 +211,60 @@ static struct octeontx_master_com_t sso_master_com = {
+ 	.send_message = ssopf_master_send_message,
+ };
+ 
++static ssize_t group_work_sched_show(struct device *dev,
++				     struct device_attribute *attr, char *buf)
++{
++	struct ssopf *curr, *sso = NULL;
++	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
++	int vfid = pdev->devfn;
++	u64 cnt;
++
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->pdev == pdev->physfn) {
++			sso = curr;
++			break;
++		}
++	}
++	if (!sso)
++		return 0;
++
++	cnt = readq_relaxed(sso->reg_base + SSO_PF_GRPX_WS_PC(vfid));
++	return snprintf(buf, PAGE_SIZE, "%lld\n", cnt);
++}
++
++static struct device_attribute group_work_sched_attr = {
++	.attr = {.name = "work_sched",  .mode = 0444},
++	.show = group_work_sched_show,
++	.store = NULL
++};
++
++static ssize_t group_work_admit_show(struct device *dev,
++				     struct device_attribute *attr, char *buf)
++{
++	struct ssopf *curr, *sso = NULL;
++	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
++	int vfid = pdev->devfn;
++	u64 cnt;
++
++	list_for_each_entry(curr, &octeontx_sso_devices, list) {
++		if (curr->pdev == pdev->physfn) {
++			sso = curr;
++			break;
++		}
++	}
++	if (!sso)
++		return 0;
++
++	cnt = readq_relaxed(sso->reg_base + SSO_PF_GRPX_WA_PC(vfid));
++	return snprintf(buf, PAGE_SIZE, "%lld\n", cnt);
++}
++
++static struct device_attribute group_work_admit_attr = {
++	.attr = {.name = "work_admit",  .mode = 0444},
++	.show = group_work_admit_show,
++	.store = NULL
++};
++
+ static int sso_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ {
+ 	struct ssopf *sso = NULL;
+@@ -245,9 +299,13 @@ static int sso_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ 					pci_domain_nr(sso->pdev->bus),
+ 					pci_iov_virtfn_bus(sso->pdev, i),
+ 					pci_iov_virtfn_devfn(sso->pdev, i));
+-			if (virtfn && kobj)
++			if (virtfn && kobj) {
++				sysfs_remove_file(&virtfn->dev.kobj,
++						  &group_work_admit_attr.attr);
++				sysfs_remove_file(&virtfn->dev.kobj,
++						  &group_work_sched_attr.attr);
+ 				sysfs_remove_link(kobj, virtfn->dev.kobj.name);
+-
++			}
+ 			dev_info(&sso->pdev->dev,
+ 				 "Free vf[%d] from domain:%d subdomain_id:%d\n",
+ 				 i, sso->vf[i].domain.domain_id, vf_idx);
+@@ -282,7 +340,7 @@ static u64 sso_pf_create_domain(u32 id, u16 domain_id,
+ 	int ret = 0, vf_idx = 0;
+ 
+ 	if (!kobj)
+-		return -EINVAL;
++		return 0;
+ 
+ 	spin_lock(&octeontx_sso_devices_lock);
+ 	list_for_each_entry(curr, &octeontx_sso_devices, list) {
+@@ -291,9 +349,10 @@ static u64 sso_pf_create_domain(u32 id, u16 domain_id,
+ 			break;
+ 		}
+ 	}
+-
+-	if (!sso)
+-		goto err_unlock;
++	if (!sso) {
++		spin_unlock(&octeontx_sso_devices_lock);
++		return 0;
++	}
+ 
+ 	for (i = 0; i < sso->total_vfs; i++) {
+ 		if (sso->vf[i].domain.in_use) {
+@@ -304,11 +363,19 @@ static u64 sso_pf_create_domain(u32 id, u16 domain_id,
+ 					pci_iov_virtfn_bus(sso->pdev, i),
+ 					pci_iov_virtfn_devfn(sso->pdev, i));
+ 			if (!virtfn)
+-				break;
++				goto err_unlock;
+ 			ret = sysfs_create_link(kobj, &virtfn->dev.kobj,
+ 						virtfn->dev.kobj.name);
+ 			if (ret < 0)
+ 				goto err_unlock;
++			ret = sysfs_create_file(&virtfn->dev.kobj,
++						&group_work_sched_attr.attr);
++			if (ret < 0)
++				goto err_unlock;
++			ret = sysfs_create_file(&virtfn->dev.kobj,
++						&group_work_admit_attr.attr);
++			if (ret < 0)
++				goto err_unlock;
+ 
+ 			sso->vf[i].domain.domain_id = domain_id;
+ 			sso->vf[i].domain.subdomain_id = vf_idx;
+@@ -358,11 +425,8 @@ static u64 sso_pf_create_domain(u32 id, u16 domain_id,
+ 			}
+ 		}
+ 	}
+-
+-	if (vf_idx != num_grps) {
+-		grp_mask = 0;
++	if (vf_idx != num_grps)
+ 		goto err_unlock;
+-	}
+ 
+ 	spin_unlock(&octeontx_sso_devices_lock);
+ 	return grp_mask;
+@@ -370,7 +434,7 @@ static u64 sso_pf_create_domain(u32 id, u16 domain_id,
+ err_unlock:
+ 	spin_unlock(&octeontx_sso_devices_lock);
+ 	sso_pf_destroy_domain(id, domain_id, kobj);
+-	return grp_mask;
++	return 0;
+ }
+ 
+ static int sso_pf_send_message(u32 id, u16 domain_id,
+@@ -559,7 +623,6 @@ int sso_pf_get_value(u32 id, u64 offset, u64 *val)
+ 		spin_unlock(&octeontx_sso_devices_lock);
+ 		return -EINVAL;
+ 	}
+-
+ 	*val = sso_reg_read(sso, offset);
+ 	spin_unlock(&octeontx_sso_devices_lock);
+ 	return 0;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+index da337ddd6c69..440f36c20cbb 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+@@ -42,10 +42,9 @@ static int ssow_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ 			break;
+ 		}
+ 	}
+-
+ 	if (!ssow) {
+-		ret = -ENODEV;
+-		goto unlock;
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return -ENODEV;
+ 	}
+ 
+ 	for (i = 0; i < ssow->total_vfs; i++) {
+@@ -69,10 +68,8 @@ static int ssow_pf_destroy_domain(u32 id, u16 domain_id, struct kobject *kobj)
+ 			reg = 0;
+ 			reg = SSO_MAP_GMID(1); /* write reset value '1'*/
+ 			ret = sso_pf_set_value(id, SSO_PF_HWSX_GMCTL(i), reg);
+-			if (ret < 0) {
+-				ret = -EIO;
++			if (ret < 0)
+ 				goto unlock;
+-			}
+ 
+ 			identify(&ssow->vf[i], 0x0, 0x0);
+ 			iounmap(ssow->vf[i].domain.reg_base);
+@@ -95,7 +92,7 @@ static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
+ 	struct ssowpf *curr;
+ 	struct pci_dev *virtfn;
+ 	resource_size_t vf_start;
+-	u64 i, reg = 0;
++	u64 i, reg;
+ 	int vf_idx = 0, ret = 0;
+ 
+ 	if (!kobj)
+@@ -108,10 +105,9 @@ static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
+ 			break;
+ 		}
+ 	}
+-
+ 	if (!ssow) {
+-		ret = -ENODEV;
+-		goto err_unlock;
++		spin_unlock(&octeontx_ssow_devices_lock);
++		return -ENODEV;
+ 	}
+ 
+ 	for (i = 0; i < ssow->total_vfs; i++) {
+@@ -123,7 +119,8 @@ static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
+ 					pci_iov_virtfn_bus(ssow->pdev, i),
+ 					pci_iov_virtfn_devfn(ssow->pdev, i));
+ 			if (!virtfn)
+-				break;
++				goto err_unlock;
++
+ 			ret = sysfs_create_link(kobj, &virtfn->dev.kobj,
+ 						virtfn->dev.kobj.name);
+ 			if (ret < 0)
+@@ -139,13 +136,9 @@ static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
+ 
+ 			reg = 0;
+ 			reg = SSO_MAP_GMID(ssow->vf[i].domain.gmid);
+-			ret = sso_pf_set_value(id,
+-					       SSO_PF_HWSX_GMCTL(i),
+-					       reg);
+-			if (ret < 0) {
+-				ret = -EIO;
++			ret = sso_pf_set_value(id, SSO_PF_HWSX_GMCTL(i), reg);
++			if (ret < 0)
+ 				goto err_unlock;
+-			}
+ 
+ 			/* Clear out groupmask, have VF enable the groups it
+ 			 * wants
+@@ -154,48 +147,38 @@ static int ssow_pf_create_domain(u32 id, u16 domain_id, u32 vf_count,
+ 					       SSO_PF_HWSX_SX_GRPMASK(i, 0), 0);
+ 			ret |= sso_pf_set_value(id,
+ 					       SSO_PF_HWSX_SX_GRPMASK(i, 1), 0);
+-			if (ret < 0) {
+-				ret = -EIO;
++			if (ret < 0)
+ 				goto err_unlock;
+-			}
+ 
+ 			ssow->vf[i].ram_mbox_addr =
+-				ioremap(SSOW_RAM_MBOX(i),
+-					SSOW_RAM_MBOX_SIZE);
+-			if (!ssow->vf[i].ram_mbox_addr) {
+-				ret = -ENOMEM;
++				ioremap(SSOW_RAM_MBOX(i), SSOW_RAM_MBOX_SIZE);
++			if (!ssow->vf[i].ram_mbox_addr)
+ 				goto err_unlock;
+-			}
++
+ 			vf_start = SSOW_VF_BASE(i);
+ 			ssow->vf[i].domain.reg_base =
+ 				ioremap(vf_start, SSOW_VF_SIZE);
+-			if (!ssow->vf[i].domain.reg_base) {
+-				ret = -ENOMEM;
++			if (!ssow->vf[i].domain.reg_base)
+ 				goto err_unlock;
+-			}
+ 
+ 			identify(&ssow->vf[i], domain_id, vf_idx);
+ 			vf_idx++;
+ 			if (vf_idx == vf_count) {
+ 				ssow->vfs_in_use += vf_count;
+-				ret = 0;
+ 				break;
+ 			}
+ 		}
+ 	}
+-
+-	if (vf_idx != vf_count) {
+-		ret = -ENODEV;
++	if (vf_idx != vf_count)
+ 		goto err_unlock;
+-	}
+ 
+ 	spin_unlock(&octeontx_ssow_devices_lock);
+-	return ret;
++	return 0;
+ 
+ err_unlock:
+ 	spin_unlock(&octeontx_ssow_devices_lock);
+ 	ssow_pf_destroy_domain(id, domain_id, kobj);
+-	return ret;
++	return -ENODEV;
+ }
+ 
+ static int ssow_pf_get_ram_mbox_addr(u32 node, u16 domain_id,
+@@ -212,7 +195,6 @@ static int ssow_pf_get_ram_mbox_addr(u32 node, u16 domain_id,
+ 			break;
+ 		}
+ 	}
+-
+ 	if (!ssow) {
+ 		spin_unlock(&octeontx_ssow_devices_lock);
+ 		return -ENODEV;
+@@ -230,8 +212,7 @@ static int ssow_pf_get_ram_mbox_addr(u32 node, u16 domain_id,
+ 
+ 	if (i != ssow->total_vfs)
+ 		return 0;
+-	else
+-		return -ENOENT;
++	return -ENOENT;
+ }
+ 
+ static int ssow_pf_receive_message(u32 id, u16 domain_id,
+@@ -392,7 +373,6 @@ int ssow_reset_domain(u32 id, u16 domain_id, u64 grp_mask)
+ 			break;
+ 		}
+ 	}
+-
+ 	if (!ssow) {
+ 		ret = -EINVAL;
+ 		goto unlock;
+-- 
+2.14.1
+

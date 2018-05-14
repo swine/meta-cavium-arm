@@ -1,0 +1,31 @@
+From e3e05ff42b5f2ed0e7509172b5bf9d5540079ef8 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lb@semihalf.com>
+Date: Mon, 11 Sep 2017 15:11:06 +0200
+Subject: [PATCH 246/375] octeontx: fix alloc failure when DMA_CMA is set
+
+When DMA_CMA option was set in kernel configuration then allocation
+for SSO and PKO failed because it tried to allocate much more memory
+than really needed.
+
+Signed-off-by: Lukasz Bartosik <lb@semihalf.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+index 98a794ae3038..9f77b60f7029 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+@@ -141,6 +141,9 @@ static int fpa_vf_addmemory(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
+ 	u32 i, j, ret = 0;
+ 
+ 	chunk_size = MAX_ORDER_NR_PAGES * PAGE_SIZE;
++	if (chunk_size > num_buffers * buf_len)
++		chunk_size = num_buffers * buf_len;
++
+ 	buffs_per_chunk = chunk_size / buf_len;
+ 	fpa->vhpool_memvec_size = (num_buffers + buffs_per_chunk - 1) /
+ 				   buffs_per_chunk;
+-- 
+2.14.1
+

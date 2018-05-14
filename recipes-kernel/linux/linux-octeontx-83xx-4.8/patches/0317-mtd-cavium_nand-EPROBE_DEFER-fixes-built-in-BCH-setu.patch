@@ -1,0 +1,202 @@
+From 9930e2504946709d43ece6a08dd664a693d2b87b Mon Sep 17 00:00:00 2001
+From: Peter Swain <peter.swain@cavium.com>
+Date: Wed, 7 Mar 2018 19:32:07 -0800
+Subject: [PATCH 317/375] mtd: cavium_nand: EPROBE_DEFER fixes built-in BCH
+ setup
+
+Previous version worked when modular, but not when _probe()s
+were called out of order in PCI scan.
+Now -EPROBE_DEFER is used in the cavium_nand->bch_vf->bch_pf
+setup dance, so behaves correctly when built =y or =m.
+
+Optional BCH driver is not built into cavium_nand,
+because the engine could also be used in copy mode as a dma-engine
+(not implemented, but a good reson to keep modules separate).
+
+Exported symbols for cavm_bch_{get,put}{v,p}()
+impose a module dependency, making BCH=m NAND=y illegal.
+Kconfig defaults BCH=y when NAND=y, and BCH=m when NAND=m,
+but there's no means to *enforce* this in Kconfig,
+so it's checked at build time.
+
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/mtd/nand/cavium/Kconfig       |  7 ++++---
+ drivers/mtd/nand/cavium/bch_pf.c      |  6 +++++-
+ drivers/mtd/nand/cavium/bch_vf.c      | 10 ++++++----
+ drivers/mtd/nand/cavium/cavium_nand.c | 30 +++++++++++++++++++++++++-----
+ 4 files changed, 40 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/mtd/nand/cavium/Kconfig b/drivers/mtd/nand/cavium/Kconfig
+index 112b2e4a2566..d8ee594abb02 100644
+--- a/drivers/mtd/nand/cavium/Kconfig
++++ b/drivers/mtd/nand/cavium/Kconfig
+@@ -19,9 +19,10 @@ config CAVIUM_BCH
+ 	depends on PCI_MSI && 64BIT
+ 	default MTD_NAND_CAVIUM
+ 	help
+-	  Support for Cavium BCH block found in octeon-tx series of
+-	  processors.
++	  Optional support for Cavium BCH block found in OcteonTX
++	  series of SoCs.
+ 	  Currently used for hardware assist to MTD_NAND_CAVIUM,
+ 	  potentially also usable as a general dma_engine.
+ 
+-	  To compile this as a module, choose M here.
++	  If being used with MTD_NAND_CAVIUM=y, choose Y here,
++	  otherwise, to compile this as a module, choose M here.
+diff --git a/drivers/mtd/nand/cavium/bch_pf.c b/drivers/mtd/nand/cavium/bch_pf.c
+index 29c72b5ce765..4e4659cd242c 100644
+--- a/drivers/mtd/nand/cavium/bch_pf.c
++++ b/drivers/mtd/nand/cavium/bch_pf.c
+@@ -179,6 +179,8 @@ exit:
+ 	return ret;
+ }
+ 
++static void *token = (void *)(-EPROBE_DEFER);
++
+ static int bch_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -234,6 +236,7 @@ static int bch_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	INIT_LIST_HEAD(&bch->list);
+ 	mutex_lock(&octeontx_bch_devices_lock);
+ 	list_add(&bch->list, &octeontx_bch_devices);
++	token = (void *)pdev;
+ 	mutex_unlock(&octeontx_bch_devices_lock);
+ 
+ 	if (!no_vf)
+@@ -258,6 +261,7 @@ static void bch_remove(struct pci_dev *pdev)
+ 		return;
+ 
+ 	mutex_lock(&octeontx_bch_devices_lock);
++	token = ERR_PTR(-EPROBE_DEFER);
+ 	bch_disable(bch);
+ 	list_for_each_entry(curr, &octeontx_bch_devices, list) {
+ 		if (curr == bch) {
+@@ -279,7 +283,7 @@ static void bch_remove(struct pci_dev *pdev)
+ void *cavm_bch_getp(void)
+ {
+ 	try_module_get(THIS_MODULE);
+-	return (void *)1;
++	return token;
+ }
+ EXPORT_SYMBOL(cavm_bch_getp);
+ 
+diff --git a/drivers/mtd/nand/cavium/bch_vf.c b/drivers/mtd/nand/cavium/bch_vf.c
+index bfbccdcbbb95..e4798b759baa 100644
+--- a/drivers/mtd/nand/cavium/bch_vf.c
++++ b/drivers/mtd/nand/cavium/bch_vf.c
+@@ -20,13 +20,13 @@
+  * bch_vf is held by cavium_nand, or a possible dmaengine client
+  * bch_bp is ref to BF driver, whether VF sees it at this security level or not
+  */
+-static void *bch_pf;
++static void *bch_pf = (void *)(-EPROBE_DEFER);
+ #ifdef DEBUG
+ static int waits[3]; /*visible wait-loop count*/
+ module_param_array(waits, int, NULL, 0444);
+ #define WAIT_COUNT(n)	(void)(waits[n]++)
+ #else
+-static struct bch_vf *bch_vf;
++static struct bch_vf *bch_vf = (void *)(-EPROBE_DEFER);
+ #define WAIT_COUNT(n)	(void)0
+ #endif
+ 
+@@ -263,15 +263,17 @@ void *cavm_bch_getv(void)
+ {
+ 	if (!bch_vf)
+ 		return NULL;
+-	try_module_get(THIS_MODULE);
+ 	bch_pf = cavm_bch_getp();
++	if (IS_ERR_OR_NULL(bch_pf))
++		return bch_pf;
++	try_module_get(THIS_MODULE);
+ 	return bch_vf;
+ }
+ EXPORT_SYMBOL(cavm_bch_getv);
+ 
+ void cavm_bch_putv(void *token)
+ {
+-	if (token) {
++	if (!IS_ERR_OR_NULL(token)) {
+ 		module_put(THIS_MODULE);
+ 		cavm_bch_putp(bch_pf);
+ 	}
+diff --git a/drivers/mtd/nand/cavium/cavium_nand.c b/drivers/mtd/nand/cavium/cavium_nand.c
+index 6287411c7f7d..b2a63a662073 100644
+--- a/drivers/mtd/nand/cavium/cavium_nand.c
++++ b/drivers/mtd/nand/cavium/cavium_nand.c
+@@ -1290,6 +1290,21 @@ module_param(trace, int, 0644);
+ #endif
+ 
+ #if IS_ENABLED(CONFIG_CAVIUM_BCH)
++
++/*
++ * Optional BCH driver is not built into cavium_nand,
++ * because the engine can also be used in copy mode as a dma-engine
++ * (not implemented, but a good reson to keep modules separate).
++ * Kconfig defaults BCH=y when NAND=y, and BCH=m when NAND=m,
++ * but there's no means to *enforce* this in Kconfig,
++ * so check at build time.
++ */
++# if defined(CONFIG_CAVIUM_BCH_MODULE)
++#  if !defined(CONFIG_MTD_NAND_CAVIUM_MODULE)
++#   error if CONFIG_CAVIUM_BCH=m, CONFIG_MTD_NAND_CAVIUM=m is required
++#  endif
++# endif
++
+ static void cavm_bch_reset(void)
+ {
+ 	cavm_bch_putv(bch_vf);
+@@ -1662,11 +1677,13 @@ static int octeon_nand_calc_bch_ecc_strength(struct nand_chip *nand)
+ 	while (index > 0 && !(ecc->options & NAND_ECC_MAXIMIZE) &&
+ 			strengths[index - 1] >= ecc->strength)
+ 		index--;
++
+ 	do {
+ 		need = DIV_ROUND_UP(15 * strengths[index], 8);
+ 		if (need <= oobchunk - 2)
+ 			break;
+ 	} while (index > 0);
++
+ 	ecc->strength = strengths[index];
+ 	ecc->bytes = need;
+ 
+@@ -1750,7 +1767,8 @@ static void cvm_nfc_chip_sizing(struct nand_chip *nand)
+ 			mtd->subpage_sft = fls(ecc->steps) - 1;
+ 
+ #if IS_ENABLED(CONFIG_CAVIUM_BCH)
+-		if (ecc->mode != NAND_ECC_SOFT && bch_vf &&
++		if (ecc->mode != NAND_ECC_SOFT &&
++				!IS_ERR_OR_NULL(bch_vf) &&
+ 				!octeon_nand_calc_bch_ecc_strength(nand)) {
+ 			struct cvm_nfc *tn = to_cvm_nfc(nand->controller);
+ 			struct device *dev = tn->dev;
+@@ -1920,6 +1938,12 @@ static int cvm_nfc_probe(struct pci_dev *pdev,
+ 	struct cvm_nfc *tn;
+ 	int ret;
+ 
++#if IS_ENABLED(CONFIG_CAVIUM_BCH)
++	bch_vf = cavm_bch_getv();
++	if (IS_ERR(bch_vf))
++		return PTR_ERR(bch_vf);
++#endif
++
+ 	tn = devm_kzalloc(dev, sizeof(*tn), GFP_KERNEL);
+ 	if (!tn)
+ 		return -ENOMEM;
+@@ -1982,10 +2006,6 @@ static int cvm_nfc_probe(struct pci_dev *pdev,
+ 	if (ret)
+ 		goto unclk;
+ 
+-#if IS_ENABLED(CONFIG_CAVIUM_BCH)
+-	bch_vf = cavm_bch_getv();
+-#endif
+-
+ 	cvm_nfc_init(tn);
+ 	ret = cvm_nfc_chips_init(tn);
+ 	if (ret) {
+-- 
+2.14.1
+

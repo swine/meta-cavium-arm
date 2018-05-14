@@ -1,0 +1,80 @@
+From da2ea700f3541f7c17fd197a917ee936463651fe Mon Sep 17 00:00:00 2001
+From: Sascha Hauer <s.hauer@pengutronix.de>
+Date: Thu, 15 Sep 2016 10:32:49 +0200
+Subject: [PATCH 309/375] mtd: nand: Expose data interface for ONFI mode 0
+
+The nand layer will need ONFI mode 0 to use it as timing mode
+before and right after reset.
+
+Signed-off-by: Sascha Hauer <s.hauer@pengutronix.de>
+Signed-off-by: Boris Brezillon <boris.brezillon@free-electrons.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/mtd/nand/nand_timings.c | 40 ++++++++++++++++++++++++++++++++++++++++
+ include/linux/mtd/nand.h        |  2 ++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/drivers/mtd/nand/nand_timings.c b/drivers/mtd/nand/nand_timings.c
+index e81470a8ac67..d346e411b5e2 100644
+--- a/drivers/mtd/nand/nand_timings.c
++++ b/drivers/mtd/nand/nand_timings.c
+@@ -251,3 +251,43 @@ const struct nand_sdr_timings *onfi_async_timing_mode_to_sdr_timings(int mode)
+ 	return &onfi_sdr_timings[mode];
+ }
+ EXPORT_SYMBOL(onfi_async_timing_mode_to_sdr_timings);
++
++/**
++ * onfi_init_data_interface - [NAND Interface] Initialize a data interface from
++ * given ONFI mode
++ * @iface: The data interface to be initialized
++ * @mode: The ONFI timing mode
++ */
++int onfi_init_data_interface(struct nand_chip *chip,
++			     struct nand_data_interface *iface,
++			     enum nand_data_interface_type type,
++			     int timing_mode)
++{
++	if (type != NAND_SDR_IFACE)
++		return -EINVAL;
++
++	if (timing_mode < 0 || timing_mode >= ARRAY_SIZE(onfi_sdr_timings))
++		return -EINVAL;
++
++	*iface = onfi_sdr_timings[timing_mode];
++
++	/*
++	 * TODO: initialize timings that cannot be deduced from timing mode:
++	 * tR, tPROG, tCCS, ...
++	 * These information are part of the ONFI parameter page.
++	 */
++
++	return 0;
++}
++EXPORT_SYMBOL(onfi_init_data_interface);
++
++/**
++ * nand_get_default_data_interface - [NAND Interface] Retrieve NAND
++ * data interface for mode 0. This is used as default timing after
++ * reset.
++ */
++const struct nand_data_interface *nand_get_default_data_interface(void)
++{
++	return &onfi_sdr_timings[0];
++}
++EXPORT_SYMBOL(nand_get_default_data_interface);
+diff --git a/include/linux/mtd/nand.h b/include/linux/mtd/nand.h
+index a7e9f1334033..cb40925f31cf 100644
+--- a/include/linux/mtd/nand.h
++++ b/include/linux/mtd/nand.h
+@@ -1161,6 +1161,8 @@ static inline int jedec_feature(struct nand_chip *chip)
+ 
+ /* get timing characteristics from ONFI timing mode. */
+ const struct nand_sdr_timings *onfi_async_timing_mode_to_sdr_timings(int mode);
++/* get data interface from ONFI timing mode 0, used after reset. */
++const struct nand_data_interface *nand_get_default_data_interface(void);
+ 
+ int nand_check_erased_ecc_chunk(void *data, int datalen,
+ 				void *ecc, int ecclen,
+-- 
+2.14.1
+

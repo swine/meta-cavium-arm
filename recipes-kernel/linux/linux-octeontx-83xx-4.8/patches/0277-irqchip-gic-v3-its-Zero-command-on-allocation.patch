@@ -1,0 +1,35 @@
+From 9df37986983d2e1c00930950f5caee8f1adb230f Mon Sep 17 00:00:00 2001
+From: Marc Zyngier <marc.zyngier@arm.com>
+Date: Wed, 28 Mar 2018 10:45:15 +0530
+Subject: [PATCH 277/375] irqchip/gic-v3-its: Zero command on allocation
+
+When reusing commands from the ring buffer, it would be better
+to zero them out, even if the ITS should ignore the unused
+fields.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+Signed-off-by: Geetha sowjanya <gakula@caviumnetworks.com>
+---
+ drivers/irqchip/irq-gic-v3-its.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/irqchip/irq-gic-v3-its.c b/drivers/irqchip/irq-gic-v3-its.c
+index e2ab8ad91339..6a23bd496fa0 100644
+--- a/drivers/irqchip/irq-gic-v3-its.c
++++ b/drivers/irqchip/irq-gic-v3-its.c
+@@ -419,6 +419,12 @@ static struct its_cmd_block *its_allocate_entry(struct its_node *its)
+ 	if (its->cmd_write == (its->cmd_base + ITS_CMD_QUEUE_NR_ENTRIES))
+ 		its->cmd_write = its->cmd_base;
+ 
++	/* Clear command  */
++	cmd->raw_cmd[0] = 0;
++	cmd->raw_cmd[1] = 0;
++	cmd->raw_cmd[2] = 0;
++	cmd->raw_cmd[3] = 0;
++
+ 	return cmd;
+ }
+ 
+-- 
+2.14.1
+

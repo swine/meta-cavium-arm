@@ -1,0 +1,39 @@
+From 39ae246e0a6b2cb40ff4cf884fe174f9ff3e448a Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Fri, 10 Nov 2017 14:38:20 +0530
+Subject: [PATCH 256/375] net: thunderx: Fix TCP/UDP checksum offload for IPv6
+ pkts
+
+This fixes a previous patch which missed some changes
+and due to which L3 checksum offload was getting enabled
+for IPv6 pkts. And HW is dropping these pkts as it assumes
+the pkt is IPv4 when IP csum offload is set in the SQ
+descriptor.
+
+Fixes: bbbb494fd005 ("net: thunderx: Enable TSO and checksum offloads for
+ipv6")
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index 977490adb5ad..f9c51b904fd2 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -1209,10 +1209,11 @@ nicvf_sq_add_hdr_subdesc(struct nicvf *nic, struct snd_queue *sq, int qentry,
+ 
+ 	/* Offload checksum calculation to HW */
+ 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+-		hdr->csum_l3 = 1; /* Enable IP csum calculation */
+ 		hdr->l3_offset = skb_network_offset(skb);
+ 		hdr->l4_offset = skb_transport_offset(skb);
+ 
++		/* Enable IP HDR csum calculation for V4 pkts */
++		hdr->csum_l3 = (ip.v4->version == 4) ? 1 : 0;
+ 		proto = (ip.v4->version == 4) ? ip.v4->protocol :
+ 			ip.v6->nexthdr;
+ 
+-- 
+2.14.1
+

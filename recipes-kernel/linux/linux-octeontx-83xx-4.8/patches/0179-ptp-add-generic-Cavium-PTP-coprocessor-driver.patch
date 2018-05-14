@@ -1,0 +1,1424 @@
+From bd66e1d883e034fe76c75397847623139b141094 Mon Sep 17 00:00:00 2001
+From: Radoslaw Biernacki <rad@semihalf.com>
+Date: Fri, 22 Apr 2016 15:59:42 +0200
+Subject: [PATCH 179/375] ptp: add generic Cavium PTP coprocessor driver
+
+The Cavium PTP coprocessor can be found in LiquidIO and ThunderX products.
+This patch modify the existing LiquidIO driver in scope of PTP and adds a new
+PTP driver for ThunderX MIO_PTP in a way that both drivers share the common
+code base. The registers and associated structures definition is now placed in
+drivers/ptp/cavium_ptp_regs.h
+The implementation of generic Cavium PTP driver is now in
+drivers/ptp_cavium.[ch]
+
+By introducing common Cavium PTP coprocessor adjtime() and adjfreq() functions,
+this patch also fixes bug in LiquidIO for PTP compensation register handling.
+The hardware adds the clock compensation value to the PTP clock value on every
+coprocessor cycle. Typical convention is that it represent number of nanosecond
+between each cycle. From the other hand ptp_adjfreq() API function gets the ppb
+parameter, which means a deviation from base PTP clock frequency in Parts Per
+Billion. As a result, the compensation value should be modified according to
+following formula:
+comp = tbase + tbase*ppb/1G where tbase is the initial compensation value.
+Previously in LiquidIO compensation value was incremented or decremented by
+ppb << 32 / clock_rate at each call of ptp_adjfreq(). This was invalid and made
+PTP adjustments unstable. Adding the mentioned value to previous adjustment value
+didn't reflect the desire change, which in turn requires even more adjustment.
+In the end PTP clock adjustment did a masive overshot and reach its upper or
+lower limit in just few adj. calls.
+
+Signed-off-by: Radoslaw Biernacki <rad@semihalf.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ drivers/net/ethernet/cavium/Kconfig                |   2 +-
+ drivers/net/ethernet/cavium/liquidio/cn66xx_regs.h |  16 +-
+ drivers/net/ethernet/cavium/liquidio/lio_ethtool.c |   5 +-
+ drivers/net/ethernet/cavium/liquidio/lio_main.c    | 211 ++--------
+ .../net/ethernet/cavium/liquidio/octeon_network.h  |  13 +-
+ drivers/ptp/Kconfig                                |  28 ++
+ drivers/ptp/Makefile                               |   2 +
+ drivers/ptp/cavium_ptp.c                           | 293 ++++++++++++++
+ drivers/ptp/cavium_ptp.h                           |  53 +++
+ drivers/ptp/cavium_ptp_regs.h                      | 425 +++++++++++++++++++++
+ drivers/ptp/cavium_thunderx_ptp.c                  | 184 +++++++++
+ 11 files changed, 1036 insertions(+), 196 deletions(-)
+ create mode 100644 drivers/ptp/cavium_ptp.c
+ create mode 100644 drivers/ptp/cavium_ptp.h
+ create mode 100644 drivers/ptp/cavium_ptp_regs.h
+ create mode 100644 drivers/ptp/cavium_thunderx_ptp.c
+
+diff --git a/drivers/net/ethernet/cavium/Kconfig b/drivers/net/ethernet/cavium/Kconfig
+index 3c8fb4646474..d9ea20adb064 100644
+--- a/drivers/net/ethernet/cavium/Kconfig
++++ b/drivers/net/ethernet/cavium/Kconfig
+@@ -53,7 +53,7 @@ config	THUNDER_NIC_RGX
+ config LIQUIDIO
+ 	tristate "Cavium LiquidIO support"
+ 	depends on 64BIT
+-	select PTP_1588_CLOCK
++	select PTP_1588_CLOCK_CAVIUM_PTP
+ 	select FW_LOADER
+ 	select LIBCRC32C
+ 	---help---
+diff --git a/drivers/net/ethernet/cavium/liquidio/cn66xx_regs.h b/drivers/net/ethernet/cavium/liquidio/cn66xx_regs.h
+index 5e3aff242ad3..449896b2fa5b 100644
+--- a/drivers/net/ethernet/cavium/liquidio/cn66xx_regs.h
++++ b/drivers/net/ethernet/cavium/liquidio/cn66xx_regs.h
+@@ -507,20 +507,8 @@
+ #define    CN6XXX_CIU_SOFT_RST            0x0001070000000740ULL
+ 
+ /*############################ MIO #########################*/
+-#define    CN6XXX_MIO_PTP_CLOCK_CFG       0x0001070000000f00ULL
+-#define    CN6XXX_MIO_PTP_CLOCK_LO        0x0001070000000f08ULL
+-#define    CN6XXX_MIO_PTP_CLOCK_HI        0x0001070000000f10ULL
+-#define    CN6XXX_MIO_PTP_CLOCK_COMP      0x0001070000000f18ULL
+-#define    CN6XXX_MIO_PTP_TIMESTAMP       0x0001070000000f20ULL
+-#define    CN6XXX_MIO_PTP_EVT_CNT         0x0001070000000f28ULL
+-#define    CN6XXX_MIO_PTP_CKOUT_THRESH_LO 0x0001070000000f30ULL
+-#define    CN6XXX_MIO_PTP_CKOUT_THRESH_HI 0x0001070000000f38ULL
+-#define    CN6XXX_MIO_PTP_CKOUT_HI_INCR   0x0001070000000f40ULL
+-#define    CN6XXX_MIO_PTP_CKOUT_LO_INCR   0x0001070000000f48ULL
+-#define    CN6XXX_MIO_PTP_PPS_THRESH_LO   0x0001070000000f50ULL
+-#define    CN6XXX_MIO_PTP_PPS_THRESH_HI   0x0001070000000f58ULL
+-#define    CN6XXX_MIO_PTP_PPS_HI_INCR     0x0001070000000f60ULL
+-#define    CN6XXX_MIO_PTP_PPS_LO_INCR     0x0001070000000f68ULL
++
++#define    CN6XXX_MIO_PTP_BASE            0x0001070000000000ULL
+ 
+ #define    CN6XXX_MIO_QLM4_CFG            0x00011800000015B0ULL
+ #define    CN6XXX_MIO_RST_BOOT            0x0001180000001600ULL
+diff --git a/drivers/net/ethernet/cavium/liquidio/lio_ethtool.c b/drivers/net/ethernet/cavium/liquidio/lio_ethtool.c
+index 289eb8907922..56dfb767049a 100644
+--- a/drivers/net/ethernet/cavium/liquidio/lio_ethtool.c
++++ b/drivers/net/ethernet/cavium/liquidio/lio_ethtool.c
+@@ -1443,8 +1443,9 @@ static int lio_get_ts_info(struct net_device *netdev,
+ 		SOF_TIMESTAMPING_RX_SOFTWARE |
+ 		SOF_TIMESTAMPING_SOFTWARE;
+ 
+-	if (lio->ptp_clock)
+-		info->phc_index = ptp_clock_index(lio->ptp_clock);
++	if (lio->cavium_ptp_clock)
++		info->phc_index = ptp_clock_index(
++				lio->cavium_ptp_clock->ptp_clock);
+ 	else
+ 		info->phc_index = -1;
+ 
+diff --git a/drivers/net/ethernet/cavium/liquidio/lio_main.c b/drivers/net/ethernet/cavium/liquidio/lio_main.c
+index 20d6942edf40..cce99c18bfb3 100644
+--- a/drivers/net/ethernet/cavium/liquidio/lio_main.c
++++ b/drivers/net/ethernet/cavium/liquidio/lio_main.c
+@@ -24,7 +24,7 @@
+ #include <linux/net_tstamp.h>
+ #include <linux/if_vlan.h>
+ #include <linux/firmware.h>
+-#include <linux/ptp_clock_kernel.h>
++#include "../drivers/ptp/cavium_ptp.h"
+ #include <net/vxlan.h>
+ #include "liquidio_common.h"
+ #include "octeon_droq.h"
+@@ -1560,6 +1560,32 @@ static void free_netsgbuf(void *buf)
+ 	tx_buffer_free(skb);
+ }
+ 
++u64 lio_cavium_ptp_reg_read(struct cavium_ptp_clock_info *info, u64 offset)
++{
++	struct lio *lio = container_of(info, struct lio, cavium_ptp_info);
++	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
++
++	return lio_pci_readq(oct, CN6XXX_MIO_PTP_BASE + offset);
++}
++
++void lio_cavium_ptp_reg_write(struct cavium_ptp_clock_info *info,
++			      u64 offset, u64 val)
++{
++	struct lio *lio = container_of(info, struct lio, cavium_ptp_info);
++	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
++
++	lio_pci_writeq(oct, val, CN6XXX_MIO_PTP_BASE + offset);
++}
++
++static void lio_cavium_ptp_adjtime(struct cavium_ptp_clock_info *info,
++				   s64 delta)
++{
++	struct lio *lio = container_of(info, struct lio, cavium_ptp_info);
++
++	/* ptp_adjust is read without spin_lock */
++	lio->ptp_adjust = delta;
++}
++
+ /**
+  * \brief Unmap and free gather buffer with response
+  * @param buf buffer
+@@ -1609,170 +1635,6 @@ static void free_netsgbuf_with_resp(void *buf)
+ 	check_txq_state(lio, skb);
+ }
+ 
+-/**
+- * \brief Adjust ptp frequency
+- * @param ptp PTP clock info
+- * @param ppb how much to adjust by, in parts-per-billion
+- */
+-static int liquidio_ptp_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
+-{
+-	struct lio *lio = container_of(ptp, struct lio, ptp_info);
+-	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
+-	u64 comp, delta;
+-	unsigned long flags;
+-	bool neg_adj = false;
+-
+-	if (ppb < 0) {
+-		neg_adj = true;
+-		ppb = -ppb;
+-	}
+-
+-	/* The hardware adds the clock compensation value to the
+-	 * PTP clock on every coprocessor clock cycle, so we
+-	 * compute the delta in terms of coprocessor clocks.
+-	 */
+-	delta = (u64)ppb << 32;
+-	do_div(delta, oct->coproc_clock_rate);
+-
+-	spin_lock_irqsave(&lio->ptp_lock, flags);
+-	comp = lio_pci_readq(oct, CN6XXX_MIO_PTP_CLOCK_COMP);
+-	if (neg_adj)
+-		comp -= delta;
+-	else
+-		comp += delta;
+-	lio_pci_writeq(oct, comp, CN6XXX_MIO_PTP_CLOCK_COMP);
+-	spin_unlock_irqrestore(&lio->ptp_lock, flags);
+-
+-	return 0;
+-}
+-
+-/**
+- * \brief Adjust ptp time
+- * @param ptp PTP clock info
+- * @param delta how much to adjust by, in nanosecs
+- */
+-static int liquidio_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
+-{
+-	unsigned long flags;
+-	struct lio *lio = container_of(ptp, struct lio, ptp_info);
+-
+-	spin_lock_irqsave(&lio->ptp_lock, flags);
+-	lio->ptp_adjust += delta;
+-	spin_unlock_irqrestore(&lio->ptp_lock, flags);
+-
+-	return 0;
+-}
+-
+-/**
+- * \brief Get hardware clock time, including any adjustment
+- * @param ptp PTP clock info
+- * @param ts timespec
+- */
+-static int liquidio_ptp_gettime(struct ptp_clock_info *ptp,
+-				struct timespec64 *ts)
+-{
+-	u64 ns;
+-	unsigned long flags;
+-	struct lio *lio = container_of(ptp, struct lio, ptp_info);
+-	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
+-
+-	spin_lock_irqsave(&lio->ptp_lock, flags);
+-	ns = lio_pci_readq(oct, CN6XXX_MIO_PTP_CLOCK_HI);
+-	ns += lio->ptp_adjust;
+-	spin_unlock_irqrestore(&lio->ptp_lock, flags);
+-
+-	*ts = ns_to_timespec64(ns);
+-
+-	return 0;
+-}
+-
+-/**
+- * \brief Set hardware clock time. Reset adjustment
+- * @param ptp PTP clock info
+- * @param ts timespec
+- */
+-static int liquidio_ptp_settime(struct ptp_clock_info *ptp,
+-				const struct timespec64 *ts)
+-{
+-	u64 ns;
+-	unsigned long flags;
+-	struct lio *lio = container_of(ptp, struct lio, ptp_info);
+-	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
+-
+-	ns = timespec_to_ns(ts);
+-
+-	spin_lock_irqsave(&lio->ptp_lock, flags);
+-	lio_pci_writeq(oct, ns, CN6XXX_MIO_PTP_CLOCK_HI);
+-	lio->ptp_adjust = 0;
+-	spin_unlock_irqrestore(&lio->ptp_lock, flags);
+-
+-	return 0;
+-}
+-
+-/**
+- * \brief Check if PTP is enabled
+- * @param ptp PTP clock info
+- * @param rq request
+- * @param on is it on
+- */
+-static int
+-liquidio_ptp_enable(struct ptp_clock_info *ptp __attribute__((unused)),
+-		    struct ptp_clock_request *rq __attribute__((unused)),
+-		    int on __attribute__((unused)))
+-{
+-	return -EOPNOTSUPP;
+-}
+-
+-/**
+- * \brief Open PTP clock source
+- * @param netdev network device
+- */
+-static void oct_ptp_open(struct net_device *netdev)
+-{
+-	struct lio *lio = GET_LIO(netdev);
+-	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
+-
+-	spin_lock_init(&lio->ptp_lock);
+-
+-	snprintf(lio->ptp_info.name, 16, "%s", netdev->name);
+-	lio->ptp_info.owner = THIS_MODULE;
+-	lio->ptp_info.max_adj = 250000000;
+-	lio->ptp_info.n_alarm = 0;
+-	lio->ptp_info.n_ext_ts = 0;
+-	lio->ptp_info.n_per_out = 0;
+-	lio->ptp_info.pps = 0;
+-	lio->ptp_info.adjfreq = liquidio_ptp_adjfreq;
+-	lio->ptp_info.adjtime = liquidio_ptp_adjtime;
+-	lio->ptp_info.gettime64 = liquidio_ptp_gettime;
+-	lio->ptp_info.settime64 = liquidio_ptp_settime;
+-	lio->ptp_info.enable = liquidio_ptp_enable;
+-
+-	lio->ptp_adjust = 0;
+-
+-	lio->ptp_clock = ptp_clock_register(&lio->ptp_info,
+-					     &oct->pci_dev->dev);
+-
+-	if (IS_ERR(lio->ptp_clock))
+-		lio->ptp_clock = NULL;
+-}
+-
+-/**
+- * \brief Init PTP clock
+- * @param oct octeon device
+- */
+-static void liquidio_ptp_init(struct octeon_device *oct)
+-{
+-	u64 clock_comp, cfg;
+-
+-	clock_comp = (u64)NSEC_PER_SEC << 32;
+-	do_div(clock_comp, oct->coproc_clock_rate);
+-	lio_pci_writeq(oct, clock_comp, CN6XXX_MIO_PTP_CLOCK_COMP);
+-
+-	/* Enable */
+-	cfg = lio_pci_readq(oct, CN6XXX_MIO_PTP_CLOCK_CFG);
+-	lio_pci_writeq(oct, cfg | 0x01, CN6XXX_MIO_PTP_CLOCK_CFG);
+-}
+-
+ /**
+  * \brief Load firmware to device
+  * @param oct octeon device
+@@ -2278,7 +2140,16 @@ static int liquidio_open(struct net_device *netdev)
+ 		oct->props[lio->ifidx].napi_enabled = 1;
+ 	}
+ 
+-	oct_ptp_open(netdev);
++	lio->ptp_adjust = 0;
++	lio->cavium_ptp_info = (struct cavium_ptp_clock_info) {
++		.clock_rate = oct->coproc_clock_rate,
++		.name = netdev->name,
++		.reg_read = lio_cavium_ptp_reg_read,
++		.reg_write = lio_cavium_ptp_reg_write,
++		.adjtime_clbck = lio_cavium_ptp_adjtime,
++	};
++	lio->cavium_ptp_clock = cavium_ptp_register(&lio->cavium_ptp_info,
++						    &oct->pci_dev->dev);
+ 
+ 	ifstate_set(lio, LIO_IFSTATE_RUNNING);
+ 
+@@ -2330,9 +2201,9 @@ static int liquidio_stop(struct net_device *netdev)
+ 
+ 	cleanup_tx_poll_fn(netdev);
+ 
+-	if (lio->ptp_clock) {
+-		ptp_clock_unregister(lio->ptp_clock);
+-		lio->ptp_clock = NULL;
++	if (lio->cavium_ptp_clock) {
++		cavium_ptp_remove(lio->cavium_ptp_clock);
++		lio->cavium_ptp_clock = NULL;
+ 	}
+ 
+ 	dev_info(&oct->pci_dev->dev, "%s interface is stopped\n", netdev->name);
+@@ -3801,8 +3672,6 @@ static int liquidio_init_nic_module(struct octeon_device *oct)
+ 		goto octnet_init_failure;
+ 	}
+ 
+-	liquidio_ptp_init(oct);
+-
+ 	/* Initialize interrupt moderation params */
+ 	intrmod_cfg = &((struct octeon_device *)oct)->intrmod;
+ 	intrmod_cfg->rx_enable = 1;
+diff --git a/drivers/net/ethernet/cavium/liquidio/octeon_network.h b/drivers/net/ethernet/cavium/liquidio/octeon_network.h
+index fb820dc7fcb7..d6ef3321362f 100644
+--- a/drivers/net/ethernet/cavium/liquidio/octeon_network.h
++++ b/drivers/net/ethernet/cavium/liquidio/octeon_network.h
+@@ -28,7 +28,7 @@
+ #define __OCTEON_NETWORK_H__
+ #include <linux/version.h>
+ #include <linux/dma-mapping.h>
+-#include <linux/ptp_clock_kernel.h>
++#include "../drivers/ptp/cavium_ptp.h"
+ 
+ #define LIO_MAX_MTU_SIZE (OCTNET_MAX_FRM_SIZE - OCTNET_FRM_HEADER_SIZE)
+ #define LIO_MIN_MTU_SIZE 68
+@@ -111,13 +111,10 @@ struct lio {
+ 	/** Copy of ctrl reg in phy */
+ 	u32 led_ctrl_val;
+ 
+-	/* PTP clock information */
+-	struct ptp_clock_info ptp_info;
+-	struct ptp_clock *ptp_clock;
+-	s64 ptp_adjust;
+-
+-	/* for atomic access to Octeon PTP reg and data struct */
+-	spinlock_t ptp_lock;
++	/* Cavium PTP clock information */
++	struct cavium_ptp_clock_info cavium_ptp_info;
++	struct cavium_ptp_clock *cavium_ptp_clock;
++	s64 ptp_adjust; /* shadow copy of adjust for fast operations */
+ 
+ 	/* Interface info */
+ 	u32	intf_open;
+diff --git a/drivers/ptp/Kconfig b/drivers/ptp/Kconfig
+index ee3de3421f2d..fcb483a98f26 100644
+--- a/drivers/ptp/Kconfig
++++ b/drivers/ptp/Kconfig
+@@ -53,6 +53,34 @@ config PTP_1588_CLOCK_IXP46X
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called ptp_ixp46x.
+ 
++config PTP_1588_CLOCK_CAVIUM_PTP
++	tristate "Cavium PTP coprocessor as PTP clock"
++	select PTP_1588_CLOCK
++	default y
++	help
++          This driver adds support for using the Cavium PTP coprocessor as a
++          PTP clock. This clock is only useful if your PTP programs are getting
++          hardware time stamps on the PTP Ethernet packets using the
++          SO_TIMESTAMPING API.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called ptp_ixp46x.
++
++config PTP_1588_CLOCK_CAVIUM_THUNDERX_PTP
++	tristate "Cavium Thunder PTP coprocessor as PTP clock"
++	depends on 64BIT
++	default ARCH_THUNDER
++	select PTP_1588_CLOCK_CAVIUM_PTP
++	default y
++	help
++          This driver adds support for using the Cavium PTP coprocessor present
++          in ThunderX SoC as a PTP clock. This clock is only useful if your PTP
++          programs are getting hardware time stamps on the PTP Ethernet packets
++          using the SO_TIMESTAMPING API.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called ptp_ixp46x.
++
+ comment "Enable PHYLIB and NETWORK_PHY_TIMESTAMPING to see the additional clocks."
+ 	depends on PHYLIB=n || NETWORK_PHY_TIMESTAMPING=n
+ 
+diff --git a/drivers/ptp/Makefile b/drivers/ptp/Makefile
+index 8b58597298de..095daa3648f3 100644
+--- a/drivers/ptp/Makefile
++++ b/drivers/ptp/Makefile
+@@ -6,3 +6,5 @@ ptp-y					:= ptp_clock.o ptp_chardev.o ptp_sysfs.o
+ obj-$(CONFIG_PTP_1588_CLOCK)		+= ptp.o
+ obj-$(CONFIG_PTP_1588_CLOCK_IXP46X)	+= ptp_ixp46x.o
+ obj-$(CONFIG_PTP_1588_CLOCK_PCH)	+= ptp_pch.o
++obj-$(CONFIG_PTP_1588_CLOCK_CAVIUM_PTP)	+= cavium_ptp.o
++obj-$(CONFIG_PTP_1588_CLOCK_CAVIUM_THUNDERX_PTP)	+= cavium_thunderx_ptp.o
+diff --git a/drivers/ptp/cavium_ptp.c b/drivers/ptp/cavium_ptp.c
+new file mode 100644
+index 000000000000..e6f73025b2a8
+--- /dev/null
++++ b/drivers/ptp/cavium_ptp.c
+@@ -0,0 +1,293 @@
++/**********************************************************************
++* Author: Cavium, Inc.
++*
++* Contact: support@cavium.com
++*          Please include "LiquidIO" in the subject.
++*
++* Copyright (c) 2003-2015 Cavium, Inc.
++*
++* This file is free software; you can redistribute it and/or modify
++* it under the terms of the GNU General Public License, Version 2, as
++* published by the Free Software Foundation.
++*
++* This file is distributed in the hope that it will be useful, but
++* AS-IS and WITHOUT ANY WARRANTY; without even the implied warranty
++* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, TITLE, or
++* NONINFRINGEMENT.  See the GNU General Public License for more
++* details.
++*
++* This file may also be available under a different license from Cavium.
++* Contact Cavium, Inc. for more information
++**********************************************************************/
++
++#include <linux/device.h>
++#include <linux/module.h>
++
++#include "cavium_ptp_regs.h"
++#include "cavium_ptp.h"
++
++#define DRV_NAME         "Cavium generic PTP Driver"
++#define DRV_VERSION      "1.0"
++
++/*
++ * Interrupt service routine
++ */
++
++/* static irqreturn_t isr(int irq, void *priv) */
++
++/*
++ * PTP clock operations
++ */
++
++/**
++ * \brief Adjust ptp frequency
++ * @param ptp PTP clock info
++ * @param ppb how much to adjust by, in parts-per-billion
++ */
++static int cavium_ptp_adjfreq(struct ptp_clock_info *ptp_info, s32 ppb)
++{
++	struct cavium_ptp_clock *cavium_ptp_clock =
++		container_of(ptp_info, struct cavium_ptp_clock, ptp_info);
++	struct cavium_ptp_clock_info *cavium_ptp_info =
++		cavium_ptp_clock->cavium_ptp_info;
++	union ptp_clock_comp clock_comp;
++	u64 comp;
++	u64 adj;
++	unsigned long flags;
++	int neg_adj = 0;
++
++	if (ppb < 0) {
++		neg_adj = 1;
++		ppb = -ppb;
++	}
++
++	/* The hardware adds the clock compensation value to the PTP clock on
++	 * every coprocessor clock cycle. Typical convention is that it
++	 * represent number of nanosecond betwen each cycle. In this convention
++	 * Compensation value is in 64 bit fixed-point representation where
++	 * upper 32 bits are number of nanoseconds and lower is fractions of
++	 * nanosecond.
++	 * The ppb represent the ratio in "parts per bilion" by which the
++	 * compensation value should be corrected.
++	 * To calculate new compenstation value we use 64bit fixed point
++	 * arithmetic on following formula comp = tbase + tbase*ppb/1G where
++	 * tbase is the basic compensation value calculated initialy in
++	 * cavium_ptp_init() -> tbase = 1/Hz. Then we use endian independent
++	 * structure definition to write data to PTP register */
++	comp = ((u64)1000000000ull << 32) / cavium_ptp_clock->clock_rate;
++	adj = comp * ppb;
++	adj = div_u64(adj, 1000000000ull);
++	comp = neg_adj ? comp - adj : comp + adj;
++	clock_comp.s.nanosec = comp >> 32;
++	clock_comp.s.frnanosec = comp & 0xFFFFFFFF;
++
++	spin_lock_irqsave(&cavium_ptp_clock->spin_lock, flags);
++	cavium_ptp_info->reg_write(cavium_ptp_info,
++				   PTP_CLOCK_COMP, clock_comp.u64);
++	spin_unlock_irqrestore(&cavium_ptp_clock->spin_lock, flags);
++
++	return 0;
++}
++
++/**
++ * \brief Adjust ptp time
++ * @param ptp PTP clock info
++ * @param delta how much to adjust by, in nanosecs
++ */
++static int cavium_ptp_adjtime(struct ptp_clock_info *ptp_info, s64 delta)
++{
++	struct cavium_ptp_clock *cavium_ptp_clock =
++		container_of(ptp_info, struct cavium_ptp_clock, ptp_info);
++	struct cavium_ptp_clock_info *cavium_ptp_info =
++		cavium_ptp_clock->cavium_ptp_info;
++	unsigned long flags;
++
++	spin_lock_irqsave(&cavium_ptp_clock->spin_lock, flags);
++	cavium_ptp_clock->ptp_adjust += delta;
++	spin_unlock_irqrestore(&cavium_ptp_clock->spin_lock, flags);
++
++	/* notify child module about the time adjust */
++	if (cavium_ptp_info->adjtime_clbck)
++		cavium_ptp_info->adjtime_clbck(cavium_ptp_info, delta);
++
++	return 0;
++}
++
++/**
++ * \brief Get hardware clock time, including any adjustment
++ * @param ptp PTP clock info
++ * @param ts timespec
++ */
++static int cavium_ptp_gettime(struct ptp_clock_info *ptp_info,
++				  struct timespec64 *ts)
++{
++	struct cavium_ptp_clock *cavium_ptp_clock =
++		container_of(ptp_info, struct cavium_ptp_clock, ptp_info);
++	struct cavium_ptp_clock_info *cavium_ptp_info =
++		cavium_ptp_clock->cavium_ptp_info;
++	union ptp_clock_hi clock;
++	unsigned long flags;
++	u32 remainder;
++
++	spin_lock_irqsave(&cavium_ptp_clock->spin_lock, flags);
++	clock.u64 = cavium_ptp_info->reg_read(cavium_ptp_info, PTP_CLOCK_HI);
++	/* adjust also need spinlock */
++	clock.u64 += cavium_ptp_clock->ptp_adjust;
++	spin_unlock_irqrestore(&cavium_ptp_clock->spin_lock, flags);
++
++	ts->tv_sec = div_u64_rem(clock.s.nanosec, 1000000000ULL, &remainder);
++	ts->tv_nsec = remainder;
++
++	return 0;
++}
++
++/**
++ * \brief Set hardware clock time. Reset adjustment
++ * @param ptp PTP clock info
++ * @param ts timespec
++ */
++static int cavium_ptp_settime(struct ptp_clock_info *ptp_info,
++				  const struct timespec64 *ts)
++{
++	struct cavium_ptp_clock *cavium_ptp_clock =
++		container_of(ptp_info, struct cavium_ptp_clock, ptp_info);
++	struct cavium_ptp_clock_info *cavium_ptp_info =
++		cavium_ptp_clock->cavium_ptp_info;
++	union ptp_clock_hi clock;
++	unsigned long flags;
++
++	clock.s.nanosec = timespec_to_ns(ts);
++
++	spin_lock_irqsave(&cavium_ptp_clock->spin_lock, flags);
++	cavium_ptp_info->reg_write(cavium_ptp_info, PTP_CLOCK_HI, clock.u64);
++	cavium_ptp_clock->ptp_adjust = 0; /* adjust also need spinlock */
++	spin_unlock_irqrestore(&cavium_ptp_clock->spin_lock, flags);
++
++	return 0;
++}
++
++/**
++ * \brief Check if PTP is enabled
++ * @param ptp PTP clock info
++ * @param rq request
++ * @param on is it on
++ */
++static int cavium_ptp_enable(struct ptp_clock_info *ptp_info,
++				 struct ptp_clock_request *rq, int on)
++{
++	return -EOPNOTSUPP;
++}
++
++
++
++struct cavium_ptp_clock*
++cavium_ptp_register(struct cavium_ptp_clock_info *cavium_ptp_info,
++			struct device *dev)
++{
++	struct cavium_ptp_clock *cavium_ptp_clock = NULL;
++	union ptp_clock_cfg clock_cfg;
++	union ptp_clock_comp clock_comp;
++	u64 val;
++
++	cavium_ptp_clock = devm_kzalloc(dev, sizeof(*cavium_ptp_clock),
++					GFP_KERNEL);
++	if (!cavium_ptp_clock)
++		return NULL;
++
++	/* initialize genetic Cavium PTP structure */
++	cavium_ptp_clock->cavium_ptp_info = cavium_ptp_info;
++	spin_lock_init(&cavium_ptp_clock->spin_lock);
++	cavium_ptp_clock->ptp_adjust = 0;
++	cavium_ptp_clock->clock_rate = cavium_ptp_info->clock_rate;
++	cavium_ptp_clock->ptp_info = (struct ptp_clock_info) {
++		.owner		= THIS_MODULE,
++		.max_adj	= 1000000000ull,
++		.n_ext_ts	= 0,
++		.n_pins		= 0,
++		.pps		= 0,
++		.adjfreq	= cavium_ptp_adjfreq,
++		.adjtime	= cavium_ptp_adjtime,
++		.gettime64	= cavium_ptp_gettime,
++		.settime64	= cavium_ptp_settime,
++		.enable		= cavium_ptp_enable,
++	};
++	snprintf(cavium_ptp_clock->ptp_info.name, 16, "%s",
++		 cavium_ptp_info->name);
++
++	/* enable PTP HW module */
++	clock_cfg.u64 = cavium_ptp_info->reg_read(
++		cavium_ptp_info, PTP_CLOCK_CFG);
++	clock_cfg.s.ptp_en = 1;
++	cavium_ptp_info->reg_write(cavium_ptp_info, PTP_CLOCK_CFG,
++				   clock_cfg.u64);
++
++	/* The hardware adds the clock compensation value to the PTP clock on
++	 * every coprocessor clock cycle. Typical convention is tha it represent
++	 * number of nanosecond betwen each cycle. In this convention
++	 * Compensation value is in 64 bit fixed-point representation where
++	 * upper 32 bits are number of nanoseconds and lower is fractions of
++	 * nanosecond. To calculate it we use 64bit fixed point arithmetic on
++	 * following formula comp = t = 1/Hz. Then we use endian independent
++	 * structire definition to write data to PTP register */
++	val = ((u64)1000000000ull << 32) / cavium_ptp_clock->clock_rate;
++	clock_comp.s.nanosec = val >> 32;
++	clock_comp.s.frnanosec = val & 0xFFFFFFFF;
++	cavium_ptp_info->reg_write(cavium_ptp_info, PTP_CLOCK_COMP,
++				   clock_comp.u64);
++
++	/* register PTP clock in kernel */
++	cavium_ptp_clock->ptp_clock =
++		ptp_clock_register(&cavium_ptp_clock->ptp_info, dev);
++	if (IS_ERR(cavium_ptp_clock->ptp_clock))
++		goto err_stop_cavium_ptp;
++
++	return cavium_ptp_clock;
++
++err_stop_cavium_ptp:
++	/* stop PTP HW module */
++	clock_cfg.u64 = cavium_ptp_info->reg_read(
++		cavium_ptp_info, PTP_CLOCK_CFG);
++	clock_cfg.s.ptp_en = 0;
++	cavium_ptp_info->reg_write(cavium_ptp_info, PTP_CLOCK_CFG,
++				   clock_cfg.u64);
++
++	devm_kfree(dev, cavium_ptp_clock);
++	return NULL;
++}
++EXPORT_SYMBOL(cavium_ptp_register);
++
++void cavium_ptp_remove(struct cavium_ptp_clock *cavium_ptp_clock)
++{
++	union ptp_clock_cfg clock_cfg;
++	struct cavium_ptp_clock_info *cavium_ptp_info =
++		cavium_ptp_clock->cavium_ptp_info;
++
++	/* stop PTP HW module */
++	clock_cfg.u64 = cavium_ptp_info->reg_read(
++		cavium_ptp_info, PTP_CLOCK_CFG);
++	clock_cfg.s.ptp_en = 0;
++	cavium_ptp_info->reg_write(cavium_ptp_info, PTP_CLOCK_CFG,
++				   clock_cfg.u64);
++
++	ptp_clock_unregister(cavium_ptp_clock->ptp_clock);
++}
++EXPORT_SYMBOL(cavium_ptp_remove);
++
++static int __init cavium_ptp_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return 0;
++}
++
++static void __exit cavium_ptp_cleanup_module(void)
++{
++}
++
++module_init(cavium_ptp_init_module);
++module_exit(cavium_ptp_cleanup_module);
++
++MODULE_AUTHOR("Cavium Networks, <support@cavium.com>");
++MODULE_LICENSE("GPL v2");
++MODULE_DESCRIPTION(DRV_NAME);
++MODULE_VERSION(DRV_VERSION);
+diff --git a/drivers/ptp/cavium_ptp.h b/drivers/ptp/cavium_ptp.h
+new file mode 100644
+index 000000000000..97889e4e65e7
+--- /dev/null
++++ b/drivers/ptp/cavium_ptp.h
+@@ -0,0 +1,53 @@
++/**********************************************************************
++* Author: Cavium, Inc.
++*
++* Contact: support@cavium.com
++*          Please include "LiquidIO" in the subject.
++*
++* Copyright (c) 2003-2015 Cavium, Inc.
++*
++* This file is free software; you can redistribute it and/or modify
++* it under the terms of the GNU General Public License, Version 2, as
++* published by the Free Software Foundation.
++*
++* This file is distributed in the hope that it will be useful, but
++* AS-IS and WITHOUT ANY WARRANTY; without even the implied warranty
++* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, TITLE, or
++* NONINFRINGEMENT.  See the GNU General Public License for more
++* details.
++*
++* This file may also be available under a different license from Cavium.
++* Contact Cavium, Inc. for more information
++**********************************************************************/
++
++#ifndef __CAVIUM_PTP_H__
++#define __CAVIUM_PTP_H__
++
++#include <linux/ptp_clock_kernel.h>
++
++struct cavium_ptp_clock_info {
++	u32 clock_rate;
++	const char *name;
++	u64 (*reg_read)(struct cavium_ptp_clock_info *info, u64 offset);
++	void (*reg_write)(struct cavium_ptp_clock_info *info, u64 offset,
++			  u64 val);
++	void (*adjtime_clbck)(struct cavium_ptp_clock_info *info, s64 delta);
++};
++
++struct cavium_ptp_clock {
++	/* PTP clock information */
++	spinlock_t spin_lock;
++	struct ptp_clock *ptp_clock;
++	struct ptp_clock_info ptp_info;
++	s64 ptp_adjust;
++	u32 clock_rate;
++
++	/* descendant data */
++	struct cavium_ptp_clock_info *cavium_ptp_info;
++};
++
++extern struct cavium_ptp_clock *cavium_ptp_register(
++	struct cavium_ptp_clock_info *info, struct device *dev);
++extern void cavium_ptp_remove(struct cavium_ptp_clock *cavium_ptp_clock);
++
++#endif /* __CAVIUM_PTP_H__ */
+diff --git a/drivers/ptp/cavium_ptp_regs.h b/drivers/ptp/cavium_ptp_regs.h
+new file mode 100644
+index 000000000000..56c5bf960e4e
+--- /dev/null
++++ b/drivers/ptp/cavium_ptp_regs.h
+@@ -0,0 +1,425 @@
++/**********************************************************************
++* Author: Cavium, Inc.
++*
++* Contact: support@cavium.com
++*		Please include "LiquidIO" in the subject.
++*
++* Copyright (c) 2003-2015 Cavium, Inc.
++*
++* This file is free software; you can redistribute it and/or modify
++* it under the terms of the GNU General Public License, Version 2, as
++* published by the Free Software Foundation.
++*
++* This file is distributed in the hope that it will be useful, but
++* AS-IS and WITHOUT ANY WARRANTY; without even the implied warranty
++* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, TITLE, or
++* NONINFRINGEMENT.	See the GNU General Public License for more
++* details.
++*
++* This file may also be available under a different license from Cavium.
++* Contact Cavium, Inc. for more information
++**********************************************************************/
++
++#ifndef __CAVIUM_PTP_REGS_H__
++#define __CAVIUM_PTP_REGS_H__
++
++#define PTP_CLOCK_CFG			(0xF00ULL)
++#define PTP_CLOCK_LO			(0xF08ULL)
++#define PTP_CLOCK_HI			(0xF10ULL)
++#define PTP_CLOCK_COMP			(0xF18ULL)
++#define PTP_TIMESTAMP			(0xF20ULL)
++#define PTP_EVT_CNT			(0xF28ULL)
++#define PTP_CKOUT_THRESH_LO		(0xF30ULL)
++#define PTP_CKOUT_THRESH_HI		(0xF38ULL)
++#define PTP_CKOUT_HI_INCR		(0xF40ULL)
++#define PTP_CKOUT_LO_INCR		(0xF48ULL)
++#define PTP_PPS_THRESH_LO		(0xF50ULL)
++#define PTP_PPS_THRESH_HI		(0xF58ULL)
++#define PTP_PPS_HI_INCR			(0xF60ULL)
++#define PTP_PPS_LO_INCR			(0xF68ULL)
++#define PTP_INT				(0xF70ULL)
++#define PTP_INT_W1S			(0xF78ULL)
++#define PTP_DPLL_INCR			(0xF80ULL)
++#define PTP_DPLL_ERR_THRESH		(0xF88ULL)
++#define PTP_DPLL_ERR_INT		(0xF90ULL)
++#define PTP_INT_ENA_W1C			(0xFA0ULL)
++#define PTP_INT_ENA_W1S			(0xFA8ULL)
++
++/* ***********************************************************************
++ * REGISTERS */
++
++union ptp_clock_cfg {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	ptp_en		: 1;
++		uint64_t	ext_clk_en	: 1;
++		uint64_t	ext_clk_in	: 6;
++		uint64_t	tstmp_en	: 1;
++		uint64_t	tstmp_edge	: 1;
++		uint64_t	tstmp_in	: 6;
++		uint64_t	evcnt_en	: 1;
++		uint64_t	evcnt_edge	: 1;
++		uint64_t	evcnt_in	: 6;
++		uint64_t	ckout_en	: 1;
++		uint64_t	ckout_inv	: 1;
++		uint64_t	rsvd2		: 4;
++		uint64_t	pps_en		: 1;
++		uint64_t	pps_inv		: 1;
++		uint64_t	rsvd1		: 6;
++		uint64_t	ext_clk_edge	: 2;
++		uint64_t	ckout		: 1;
++		uint64_t	pps		: 1;
++		uint64_t	rsvd0		: 22;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 22;
++		uint64_t	pps		: 1;
++		uint64_t	ckout		: 1;
++		uint64_t	ext_clk_edge	: 2;
++		uint64_t	rsvd1		: 6;
++		uint64_t	pps_inv		: 1;
++		uint64_t	pps_en		: 1;
++		uint64_t	rsvd2		: 4;
++		uint64_t	ckout_inv	: 1;
++		uint64_t	ckout_en	: 1;
++		uint64_t	evcnt_in	: 6;
++		uint64_t	evcnt_edge	: 1;
++		uint64_t	evcnt_en	: 1;
++		uint64_t	tstmp_in	: 6;
++		uint64_t	tstmp_edge	: 1;
++		uint64_t	tstmp_en	: 1;
++		uint64_t	ext_clk_in	: 6;
++		uint64_t	ext_clk_en	: 1;
++		uint64_t	ptp_en		: 1;
++#endif
++	} __packed s;
++};
++
++union ptp_clock_lo {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	rsvd0		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_clock_hi {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#endif
++	} __packed s;
++};
++
++union ptp_clock_comp {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	nanosec		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_timestamp {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#endif
++	} __packed s;
++};
++
++union ptp_evt_cnt {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	cntr		: 64;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	cntr		: 64;
++#endif
++	} __packed s;
++};
++
++union ptp_ckout_thresh_lo {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	rsvd0		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_ckout_thresh_hi {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#endif
++	} __packed s;
++};
++
++union ptp_ckout_hi_incr {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	nanosec		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_ckout_lo_incr {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	nanosec		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_pps_thresh_lo {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	rsvd0		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_pps_thresh_hi {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 64;
++#endif
++	} __packed s;
++};
++
++union ptp_pps_hi_incr {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	nanosec		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_pps_lo_incr {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	nanosec		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_int {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	evt_int		: 1;
++		uint64_t	dpll_int	: 1;
++		uint64_t	rsvd0		: 62;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 62;
++		uint64_t	dpll_int	: 1;
++		uint64_t	evt_int		: 1;
++#endif
++	} __packed s;
++};
++
++union ptp_int_w1s {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	evt_int		: 1;
++		uint64_t	dpll_int	: 1;
++		uint64_t	rsvd0		: 62;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 62;
++		uint64_t	dpll_int	: 1;
++		uint64_t	evt_int		: 1;
++#endif
++	} __packed s;
++};
++
++union ptp_dpll_incr {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	frnanosec	: 32;
++		uint64_t	nanosec		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	nanosec		: 32;
++		uint64_t	frnanosec	: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_dpll_err_thresh {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	min		: 32;
++		uint64_t	max		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	max		: 32;
++		uint64_t	min		: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_dpll_err_int {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 32;
++		uint64_t	n_sclk		: 32;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	n_sclk		: 32;
++		uint64_t	rsvd0		: 32;
++#endif
++	} __packed s;
++};
++
++union ptp_int_ena_w1c {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	evt_int		: 1;
++		uint64_t	dpll_int	: 1;
++		uint64_t	rsvd0		: 62;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 62;
++		uint64_t	dpll_int	: 1;
++		uint64_t	evt_int		: 1;
++#endif
++	} __packed s;
++};
++
++union ptp_int_ena_w1s {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	evt_int		: 1;
++		uint64_t	dpll_int	: 1;
++		uint64_t	rsvd0		: 62;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 62;
++		uint64_t	dpll_int	: 1;
++		uint64_t	evt_int		: 1;
++#endif
++	} __packed s;
++};
++
++union ptp_msix_vecx_addr {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	secvec		: 1;
++		uint64_t	rsvd1		: 1;
++		uint64_t	addr		: 47;
++		uint64_t	rsvd0		: 15;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 15;
++		uint64_t	addr		: 47;
++		uint64_t	rsvd1		: 1;
++		uint64_t	secvec		: 1;
++#endif
++	} __packed s;
++};
++
++union ptp_msix_vecx_ctl {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	data		: 20;
++		uint64_t	rsvd1		: 12;
++		uint64_t	mask		: 1;
++		uint64_t	rsvd0		: 31;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	rsvd0		: 31;
++		uint64_t	mask		: 1;
++		uint64_t	rsvd1		: 12;
++		uint64_t	data		: 20;
++#endif
++	} __packed s;
++};
++
++union ptp_msix_pbax {
++	uint64_t u64;
++	uint32_t u32[2];
++	struct {
++#if defined(__LITTLE_ENDIAN_BITFIELD)
++		uint64_t	pend		: 64;
++#elif defined(__BIG_ENDIAN_BITFIELD)
++		uint64_t	pend		: 64;
++#endif
++	} __packed s;
++};
++
++#endif /* __CAVIUM_PTP_REGS_H__ */
+diff --git a/drivers/ptp/cavium_thunderx_ptp.c b/drivers/ptp/cavium_thunderx_ptp.c
+new file mode 100644
+index 000000000000..81076c63e2f1
+--- /dev/null
++++ b/drivers/ptp/cavium_thunderx_ptp.c
+@@ -0,0 +1,184 @@
++/**********************************************************************
++* Author: Cavium, Inc.
++*
++* Contact: support@cavium.com
++*          Please include "LiquidIO" in the subject.
++*
++* Copyright (c) 2003-2015 Cavium, Inc.
++*
++* This file is free software; you can redistribute it and/or modify
++* it under the terms of the GNU General Public License, Version 2, as
++* published by the Free Software Foundation.
++*
++* This file is distributed in the hope that it will be useful, but
++* AS-IS and WITHOUT ANY WARRANTY; without even the implied warranty
++* of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, TITLE, or
++* NONINFRINGEMENT.  See the GNU General Public License for more
++* details.
++*
++* This file may also be available under a different license from Cavium.
++* Contact Cavium, Inc. for more information
++**********************************************************************/
++
++#include <linux/device.h>
++#include <linux/module.h>
++#include <linux/pci.h>
++
++#include "cavium_ptp.h"
++
++#define NSEC_PER_SEC     1000000000L
++#define DRV_NAME         "Cavium Thunder PTP Driver"
++#define DRV_VERSION      "1.0"
++
++/* PCI device IDs */
++#define PCI_DEVICE_ID_THUNDER_PTP	0xA00C
++
++struct thunder_ptp_clock {
++	void __iomem *reg_base;
++	struct pci_dev *pdev;
++	struct cavium_ptp_clock *cavium_ptp_clock;
++	struct cavium_ptp_clock_info cavium_ptp_info;
++};
++
++/*
++ * Register access functions
++ */
++
++/* The Cavium PTP can *only* be found in SoCs containing the ThunderX ARM64 CPU
++ * implementation.  All accesses to the device registers on this platform are
++ * implicitly strongly ordered with respect to memory accesses. So
++ * writeq_relaxed() and readq_relaxed() are safe to use with no memory barriers
++ * in this driver.  The readq()/writeq() functions add explicit ordering
++ * operation which in this case are redundant, and only add overhead.
++ */
++
++static u64 thunder_ptp_reg_read(struct cavium_ptp_clock_info *info,
++				    u64 offset)
++{
++	struct thunder_ptp_clock *thunder_ptp_clock =
++		container_of(info, struct thunder_ptp_clock, cavium_ptp_info);
++	void __iomem *addr = thunder_ptp_clock->reg_base + offset;
++
++	return readq_relaxed(addr);
++}
++
++static void thunder_ptp_reg_write(struct cavium_ptp_clock_info *info,
++				      u64 offset, u64 val)
++{
++	struct thunder_ptp_clock *thunder_ptp_clock =
++		container_of(info, struct thunder_ptp_clock, cavium_ptp_info);
++	void __iomem *addr = thunder_ptp_clock->reg_base + offset;
++
++	writeq_relaxed(val, addr);
++}
++
++/* module operations */
++
++static int thunder_ptp_probe(struct pci_dev *pdev,
++				 const struct pci_device_id *ent)
++{
++	int err;
++	struct thunder_ptp_clock *thunder_ptp_clock = NULL;
++	struct device *dev = &pdev->dev;
++
++	thunder_ptp_clock = devm_kzalloc(dev, sizeof(*thunder_ptp_clock),
++					 GFP_KERNEL);
++	if (!thunder_ptp_clock)
++		return -ENOMEM;
++	thunder_ptp_clock->pdev = pdev;
++	pci_set_drvdata(pdev, thunder_ptp_clock);
++
++	err = pci_enable_device(pdev);
++	if (err) {
++		dev_err(dev, "Failed to enable PCI device\n");
++		pci_set_drvdata(pdev, NULL);
++		return err;
++	}
++
++	err = pci_request_regions(pdev, DRV_NAME);
++	if (err) {
++		dev_err(dev, "PCI request regions failed 0x%x\n", err);
++		goto err_disable_device;
++	}
++
++	/* MAP configuration registers */
++	thunder_ptp_clock->reg_base = ioremap(pci_resource_start(pdev, 0),
++					    pci_resource_len(pdev, 0));
++	if (!thunder_ptp_clock->reg_base) {
++		dev_err(dev, "BGX: Cannot map CSR memory space, aborting\n");
++		err = -ENOMEM;
++		goto err_release_regions;
++	}
++
++	/* register the cavium_ptp_clock */
++	thunder_ptp_clock->cavium_ptp_info = (struct cavium_ptp_clock_info) {
++		/* \TODO Below we need to give the SCLK which is:
++		 * PLL_REF_CLK (= 50 MHz) × [PNR_MUL]
++		 * PNR_MUL can be obtained from RST_BOOT[PNR_MUL] */
++		.clock_rate = 16ull * 50000000ull,
++		.name = "ThunderX PTP",
++		.reg_read = thunder_ptp_reg_read,
++		.reg_write = thunder_ptp_reg_write,
++		.adjtime_clbck = NULL,
++	};
++	thunder_ptp_clock->cavium_ptp_clock = cavium_ptp_register(
++		&thunder_ptp_clock->cavium_ptp_info, dev);
++	if (IS_ERR(thunder_ptp_clock->cavium_ptp_clock))
++		goto err_release_regions;
++
++	return 0;
++
++err_release_regions:
++	pci_release_regions(pdev);
++err_disable_device:
++	pci_disable_device(pdev);
++	pci_set_drvdata(pdev, NULL);
++
++	devm_kfree(dev, thunder_ptp_clock);
++	return err;
++}
++
++static void thunder_ptp_remove(struct pci_dev *pdev)
++{
++	struct thunder_ptp_clock *thunder_ptp_clock = pci_get_drvdata(pdev);
++
++	cavium_ptp_remove(thunder_ptp_clock->cavium_ptp_clock);
++	iounmap(thunder_ptp_clock->reg_base);
++	pci_release_regions(pdev);
++	pci_disable_device(pdev);
++	pci_set_drvdata(pdev, NULL);
++}
++
++/* Supported devices */
++static const struct pci_device_id thunder_ptp_id_table[] = {
++	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_THUNDER_PTP) },
++	{ 0, }  /* end of table */
++};
++
++static struct pci_driver thunder_ptp_driver = {
++	.name = DRV_NAME,
++	.id_table = thunder_ptp_id_table,
++	.probe = thunder_ptp_probe,
++	.remove = thunder_ptp_remove,
++};
++
++static int __init thunder_ptp_init_module(void)
++{
++	pr_info("%s, ver %s\n", DRV_NAME, DRV_VERSION);
++
++	return pci_register_driver(&thunder_ptp_driver);
++}
++
++static void __exit thunder_ptp_cleanup_module(void)
++{
++	pci_unregister_driver(&thunder_ptp_driver);
++}
++
++module_init(thunder_ptp_init_module);
++module_exit(thunder_ptp_cleanup_module);
++
++MODULE_AUTHOR("Cavium Networks, <support@cavium.com>");
++MODULE_LICENSE("GPL v2");
++MODULE_DESCRIPTION(DRV_NAME);
++MODULE_VERSION(DRV_VERSION);
++MODULE_DEVICE_TABLE(pci, thunder_ptp_id_table);
+-- 
+2.14.1
+

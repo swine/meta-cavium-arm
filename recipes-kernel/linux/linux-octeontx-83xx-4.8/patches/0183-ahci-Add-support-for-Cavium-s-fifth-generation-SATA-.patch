@@ -1,0 +1,46 @@
+From 837f03d3c37d1965fc9b77c3568bb9f06d2b5016 Mon Sep 17 00:00:00 2001
+From: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+Date: Tue, 18 Jul 2017 16:47:15 -0700
+Subject: [PATCH 183/375] ahci: Add support for Cavium's fifth generation SATA
+ controller
+
+This patch adds support for Cavium's fifth generation SATA controller.
+It is an on-chip controller and complies with AHCI 1.3.1. As the
+controller uses 64-bit addresses it cannot use the standard AHCI BAR5
+and so uses BAR4.
+
+Signed-off-by: Radha Mohan Chintakuntla <rchintakuntla@cavium.com>
+---
+ drivers/ata/ahci.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/ata/ahci.c b/drivers/ata/ahci.c
+index 90eabaf81215..88265f72a2b6 100644
+--- a/drivers/ata/ahci.c
++++ b/drivers/ata/ahci.c
+@@ -55,6 +55,7 @@ enum {
+ 	AHCI_PCI_BAR_STA2X11	= 0,
+ 	AHCI_PCI_BAR_CAVIUM	= 0,
+ 	AHCI_PCI_BAR_ENMOTUS	= 2,
++	AHCI_PCI_BAR_CAVIUM_GEN5	= 4,
+ 	AHCI_PCI_BAR_STANDARD	= 5,
+ };
+ 
+@@ -1578,8 +1579,12 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		ahci_pci_bar = AHCI_PCI_BAR_STA2X11;
+ 	else if (pdev->vendor == 0x1c44 && pdev->device == 0x8000)
+ 		ahci_pci_bar = AHCI_PCI_BAR_ENMOTUS;
+-	else if (pdev->vendor == 0x177d && pdev->device == 0xa01c)
+-		ahci_pci_bar = AHCI_PCI_BAR_CAVIUM;
++	else if (pdev->vendor == PCI_VENDOR_ID_CAVIUM) {
++		if (pdev->device == 0xa01c)
++			ahci_pci_bar = AHCI_PCI_BAR_CAVIUM;
++		if (pdev->device == 0xa084)
++			ahci_pci_bar = AHCI_PCI_BAR_CAVIUM_GEN5;
++	}
+ 
+ 	/* acquire resources */
+ 	rc = pcim_enable_device(pdev);
+-- 
+2.14.1
+

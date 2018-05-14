@@ -1,0 +1,43 @@
+From 4ceda6172266aacbc9367291ed82dec25c759615 Mon Sep 17 00:00:00 2001
+From: Eric Auger <eric.auger@redhat.com>
+Date: Fri, 27 Jan 2017 02:23:53 -0800
+Subject: [PATCH 083/375] genirq/msi: Set IRQ_DOMAIN_FLAG_MSI on MSI domain
+ creation
+
+Now we have a flag value indicating an IRQ domain implements MSI,
+let's set it on msi_create_irq_domain().
+
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Marc Zyngier <marc.zyngier@arm.com>
+Tested-by: Tomasz Nowicki <tomasz.nowicki@caviumnetworks.com>
+Tested-by: Bharat Bhushan <bharat.bhushan@nxp.com>
+
+---
+
+v7 -> v8
+- Added Marc's R-b
+
+v6: new
+---
+---
+ kernel/irq/msi.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/irq/msi.c b/kernel/irq/msi.c
+index 19e9dfbe97fa..485e1f9a7bdf 100644
+--- a/kernel/irq/msi.c
++++ b/kernel/irq/msi.c
+@@ -250,8 +250,8 @@ struct irq_domain *msi_create_irq_domain(struct fwnode_handle *fwnode,
+ 	if (info->flags & MSI_FLAG_USE_DEF_CHIP_OPS)
+ 		msi_domain_update_chip_ops(info);
+ 
+-	return irq_domain_create_hierarchy(parent, 0, 0, fwnode,
+-					   &msi_domain_ops, info);
++	return irq_domain_create_hierarchy(parent, IRQ_DOMAIN_FLAG_MSI, 0,
++					   fwnode, &msi_domain_ops, info);
+ }
+ 
+ int msi_domain_prepare_irqs(struct irq_domain *domain, struct device *dev,
+-- 
+2.14.1
+

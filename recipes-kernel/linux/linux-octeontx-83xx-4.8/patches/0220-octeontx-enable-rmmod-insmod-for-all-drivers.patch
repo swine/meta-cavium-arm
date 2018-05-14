@@ -1,0 +1,830 @@
+From 5cd85377da26f6ce9edbf410f9707d221019b299 Mon Sep 17 00:00:00 2001
+From: Stanislaw Kardach <kda@semihalf.com>
+Date: Thu, 27 Jul 2017 13:15:02 +0200
+Subject: [PATCH 220/375] octeontx: enable rmmod/insmod for all drivers
+
+Enable unloading/reloading of all octeontx modules:
+- add FPA domain teardown for flushing in-kernel created domains
+- fix size of pool stack in fpa_vf_setup
+- remove FPA_VF_VHAURA_CNT_LIMIT limit from fpa_vf_setup
+- set default values for FPA_VF_VHPOOL_START_ADDR,
+  FPA_VF_VHPOOL_END_ADDR registers in fpa_pf_destroy
+- clear value of FPA_VF_VHAURA_CNT in fpa_pf_destroy
+- free of XAQ buffers in sso_remove
+- fix user VF counting in each coprocessor
+
+Signed-off-by: Lukasz Bartosik <lb@semihalf.com>
+Signed-off-by: Stanislaw Kardach <kda@semihalf.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpa.h    |   3 +
+ .../net/ethernet/cavium/octeontx-83xx/fpapf_main.c |  18 ++-
+ .../net/ethernet/cavium/octeontx-83xx/fpavf_main.c | 112 +++++++++++++--
+ .../net/ethernet/cavium/octeontx-83xx/lbk_main.c   |   8 +-
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  |   1 +
+ .../net/ethernet/cavium/octeontx-83xx/pki_main.c   |  12 +-
+ .../net/ethernet/cavium/octeontx-83xx/pkopf_main.c |  58 ++++++++
+ .../net/ethernet/cavium/octeontx-83xx/ssopf_main.c |  21 ++-
+ .../ethernet/cavium/octeontx-83xx/ssowpf_main.c    |   8 +-
+ .../net/ethernet/cavium/octeontx-83xx/timpf_main.c | 153 ++++++++++++---------
+ 10 files changed, 302 insertions(+), 92 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h b/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+index 34908191ae14..6cc8114e82a3 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+@@ -208,6 +208,7 @@ struct fpavf {
+ 	u64			num_buffers;
+ 	u64			alloc_thold;
+ 
++	/* VA of pool memory start in contiguous allocation */
+ 	void			*vhpool_addr;
+ 	dma_addr_t		vhpool_iova;
+ 	u64			vhpool_size;
+@@ -220,6 +221,7 @@ struct fpavf {
+ #define FPA_VF_FLAG_CONT_MEM	0x1
+ #define FPA_VF_FLAG_DISC_MEM	0x2
+ 	u32			flags;
++	struct iommu_domain	*iommu_domain;
+ 
+ 	struct octeontx_master_com_t *master;
+ 	void			*master_data;
+@@ -232,6 +234,7 @@ struct fpavf_com_s {
+ 	u64 (*alloc)(struct fpavf*, u32);
+ 	int (*refill)(struct fpavf *fpa);
+ 	void (*add_alloc)(struct fpavf *fpa, int count);
++	int (*teardown)(struct fpavf *fpa);
+ };
+ 
+ extern struct fpavf_com_s fpavf_com;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+index 4571bc573a5d..797ddf122132 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -251,7 +251,7 @@ static int fpa_pf_destroy_domain(u32 id, u16 domain_id,
+ 	struct fpapf *fpa = NULL;
+ 	struct pci_dev *virtfn;
+ 	struct fpapf *curr;
+-	int i, vf_idx = 0;
++	int i, j, vf_idx = 0;
+ 	u64 reg;
+ 
+ 	spin_lock(&octeontx_fpa_devices_lock);
+@@ -270,15 +270,23 @@ static int fpa_pf_destroy_domain(u32 id, u16 domain_id,
+ 	for (i = 0; i < fpa->total_vfs; i++) {
+ 		if (fpa->vf[i].domain.in_use &&
+ 		    fpa->vf[i].domain.domain_id == domain_id) {
++			reg = 0x1 << 7;
+ 			writeq_relaxed(0x0, fpa->vf[i].domain.reg_base +
+ 					FPA_VF_VHPOOL_START_ADDR(0));
+ 			reg = -1;
++			writeq_relaxed(reg, fpa->vf[i].domain.reg_base +
++					FPA_VF_VHPOOL_END_ADDR(0));
++
+ 			writeq_relaxed(reg, fpa->vf[i].domain.reg_base +
+ 				       FPA_VF_VHAURA_CNT_THRESHOLD(0));
+ 
+ 			writeq_relaxed(reg, fpa->vf[i].domain.reg_base +
+ 					FPA_VF_VHPOOL_THRESHOLD(0));
+ 
++			for (j = 0; j < FPA_AURA_SET_SIZE; j++)
++				writeq_relaxed(0x0, fpa->vf[i].domain.reg_base
++					       + FPA_VF_VHAURA_CNT(j));
++
+ 			iounmap(fpa->vf[i].domain.reg_base);
+ 
+ 			virtfn = pci_get_domain_bus_and_slot(
+@@ -292,15 +300,12 @@ static int fpa_pf_destroy_domain(u32 id, u16 domain_id,
+ 
+ 			dev_info(&fpa->pdev->dev,
+ 				 "Free vf[%d] from domain:%d subdomain_id:%d\n",
+-				 i, fpa->vf[i].domain.domain_id, vf_idx);
++				 i, fpa->vf[i].domain.domain_id, vf_idx++);
+ 			memset(&fpa->vf[i], 0, sizeof(struct octeontx_pf_vf));
+ 			reg = FPA_MAP_VALID(0) | FPA_MAP_VHAURASET(i)
+ 				| FPA_MAP_GAURASET(0)
+ 				| FPA_MAP_GMID(fpa->vf[i].domain.gmid);
+ 			fpa_reg_write(fpa, FPA_PF_MAPX(i), reg);
+-
+-			vf_idx++;
+-			fpa->vf[i].domain.in_use = false;
+ 		}
+ 	}
+ 
+@@ -783,7 +788,8 @@ static int fpa_sriov_configure(struct pci_dev *pdev, int numvfs)
+ 			ret = numvfs;
+ 		}
+ 	}
+-	dev_notice(&fpa->pdev->dev, " Pools Enabled: %d\n", ret);
++
++	dev_notice(&fpa->pdev->dev, "VFs enabled: %d\n", ret);
+ 	return ret;
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+index 8687951ac3f7..60d18f472158 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpavf_main.c
+@@ -11,6 +11,7 @@
+ #include <linux/pci.h>
+ #include <linux/delay.h>
+ #include <linux/slab.h>
++#include <linux/iommu.h>
+ 
+ #include "fpa.h"
+ 
+@@ -59,6 +60,14 @@ static u64 fpa_vf_alloc(struct fpavf *fpa, u32 aura)
+ 	return addr;
+ }
+ 
++static inline u64 fpa_vf_iova_to_phys(struct fpavf *fpa, dma_addr_t dma_addr)
++{
++	/* Translation is installed only when IOMMU is present */
++	if (fpa->iommu_domain)
++		return iommu_iova_to_phys(fpa->iommu_domain, dma_addr);
++	return dma_addr;
++}
++
+ static int fpa_vf_do_test(struct fpavf *fpa, u64 num_buffers)
+ {
+ 	u64 *buf;
+@@ -98,7 +107,7 @@ static int fpa_vf_do_test(struct fpavf *fpa, u64 num_buffers)
+ 
+ static int fpa_vf_addbuffers(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
+ {
+-	dma_addr_t iova;
++	dma_addr_t iova, first_addr = -1, last_addr = 0;
+ 	void *addr;
+ 	struct page *p;
+ 
+@@ -114,8 +123,14 @@ static int fpa_vf_addbuffers(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
+ 				      DMA_BIDIRECTIONAL);
+ 		fpa_vf_free(fpa, 0, iova, 0);
+ 		num_buffers--;
++		if (iova > last_addr)
++			last_addr = iova;
++		if (iova < first_addr)
++			first_addr = iova;
+ 	}
+-
++	fpavf_reg_write(fpa, FPA_VF_VHPOOL_START_ADDR(0), first_addr);
++	fpavf_reg_write(fpa, FPA_VF_VHPOOL_END_ADDR(0),
++			last_addr + PAGE_SIZE - 1);
+ 	return 0;
+ }
+ 
+@@ -133,6 +148,10 @@ static int fpa_vf_addmemory(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
+ 		return -ENOMEM;
+ 	}
+ 
++	fpavf_reg_write(fpa, FPA_VF_VHPOOL_START_ADDR(0), fpa->vhpool_iova);
++	fpavf_reg_write(fpa, FPA_VF_VHPOOL_END_ADDR(0),
++			fpa->vhpool_iova + fpa->vhpool_size - 1);
++
+ 	iova = fpa->vhpool_iova;
+ 	while (num_buffers) {
+ 		fpa_vf_free(fpa, 0, iova, 0);
+@@ -146,16 +165,16 @@ static int fpa_vf_addmemory(struct fpavf *fpa, u64 num_buffers, u32 buf_len)
+ static int fpa_vf_setup(struct fpavf *fpa, u64 num_buffers, u32 buf_len,
+ 			u32 flags)
+ {
+-	u64 reg;
++	struct mbox_fpa_cfg cfg;
+ 	struct mbox_hdr hdr;
+ 	union mbox_data req;
+ 	union mbox_data resp;
+-	struct mbox_fpa_cfg cfg;
++	u64 reg;
+ 	int ret;
+ 
+ 	buf_len = round_up(buf_len, FPA_LN_SIZE);
+-	num_buffers = round_up(num_buffers, FPA_LN_SIZE);
+-	fpa->pool_size = num_buffers * FPA_LN_SIZE;
++	fpa->pool_size = (num_buffers + fpa->stack_ln_ptrs - 1)
++			  / fpa->stack_ln_ptrs * FPA_LN_SIZE;
+ 
+ 	fpa->pool_addr = dma_zalloc_coherent(&fpa->pdev->dev, fpa->pool_size,
+ 			&fpa->pool_iova, GFP_KERNEL);
+@@ -169,6 +188,7 @@ static int fpa_vf_setup(struct fpavf *fpa, u64 num_buffers, u32 buf_len,
+ 	fpa->alloc_count = ((atomic_t) { (0) });
+ 	fpa->alloc_thold = (num_buffers * 10) / 100;
+ 	fpa->buf_len = buf_len;
++	fpa->flags = flags;
+ 
+ 	req.data = 0;
+ 	hdr.coproc = FPA_COPROC;
+@@ -190,10 +210,6 @@ static int fpa_vf_setup(struct fpavf *fpa, u64 num_buffers, u32 buf_len,
+ 	if (ret || hdr.res_code)
+ 		return -EINVAL;
+ 
+-	/*disable buffer check*/
+-	fpavf_reg_write(fpa, FPA_VF_VHPOOL_START_ADDR(0), 0ULL);
+-	fpavf_reg_write(fpa, FPA_VF_VHPOOL_END_ADDR(0), 0xffffffffffffffffULL);
+-
+ 	if (flags & FPA_VF_FLAG_CONT_MEM)
+ 		fpa_vf_addmemory(fpa, num_buffers, buf_len);
+ 	else
+@@ -213,11 +229,81 @@ static int fpa_vf_setup(struct fpavf *fpa, u64 num_buffers, u32 buf_len,
+ 
+ 	/*Setup THRESHOLD*/
+ 	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_THRESHOLD(0), num_buffers / 2);
+-	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_LIMIT(0), num_buffers - 110);
+ 
+ 	return 0;
+ }
+ 
++static int fpa_vf_teardown(struct fpavf *fpa)
++{
++	union mbox_data resp;
++	struct mbox_hdr hdr;
++	union mbox_data req;
++	u64 avail, iova;
++	u64 *buf;
++	int ret;
++
++	if (!fpa)
++		return -ENODEV;
++
++	req.data = 0;
++	hdr.coproc = FPA_COPROC;
++	hdr.msg = FPA_STOP_COUNT;
++	hdr.vfid = fpa->subdomain_id;
++	ret = fpa->master->send_message(&hdr, &req, &resp, fpa->master_data,
++					NULL);
++	if (ret || hdr.res_code)
++		return -EINVAL;
++
++	/* Remove limits on the aura */
++	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_THRESHOLD(0), -1);
++	fpavf_reg_write(fpa, FPA_VF_VHAURA_CNT_LIMIT(0), -1);
++	/* There can be two types of memory allocation for FPA VF:
++	 * contiguous (FPA_VF_FLAG_CONT_MEM) or not (FPA_VF_FLAG_DISC_MEM).
++	 * If contiguous memory was requested, then a segment of memory was
++	 * allocated at address fpa->vhpool_addr of size fpa->vhpool_size.
++	 * For each address from that region taken out of the pool, do not
++	 * free it, instead free the whole segment at the end.
++	 * In other case (or if fpa->refill() was called) each buffer is a
++	 * single page. For that case, free each buffer as it's taken out of the
++	 * pool.
++	 */
++	avail = fpavf_reg_read(fpa, FPA_VF_VHPOOL_AVAILABLE(0));
++	while (avail) {
++		iova = fpa_vf_alloc(fpa, 0);
++		if (iova >= fpa->vhpool_iova &&
++		    iova < fpa->vhpool_iova + fpa->vhpool_size &&
++		    fpa->flags & FPA_VF_FLAG_CONT_MEM) {
++			avail = fpavf_reg_read(fpa, FPA_VF_VHPOOL_AVAILABLE(0));
++			continue;
++		}
++		/* If there is a NAT_ALIGN bug here, it means that we'll get a
++		 * different address from FPA than the beginning of the page.
++		 * Therefore we're aligning the address to page size.
++		 */
++		if (iova == 0) {
++			dev_err(&fpa->pdev->dev,
++				"NULL buffer in pool %d of domain %d\n",
++				fpa->subdomain_id, fpa->domain_id);
++			avail = fpavf_reg_read(fpa, FPA_VF_VHPOOL_AVAILABLE(0));
++			continue;
++		}
++		iova = PAGE_ALIGN(iova);
++		dma_unmap_single(&fpa->pdev->dev, iova, PAGE_SIZE,
++				 DMA_BIDIRECTIONAL);
++		buf = phys_to_virt(fpa_vf_iova_to_phys(fpa, iova));
++		free_page((u64)buf);
++		avail = fpavf_reg_read(fpa, FPA_VF_VHPOOL_AVAILABLE(0));
++	}
++	/* If allocation was contiguous, free that region */
++	if (fpa->flags & FPA_VF_FLAG_CONT_MEM)
++		dma_free_coherent(&fpa->pdev->dev, fpa->vhpool_size,
++				  fpa->vhpool_addr, fpa->vhpool_iova);
++	/* Finally free the stack */
++	dma_free_coherent(&fpa->pdev->dev, fpa->pool_size,
++			  fpa->pool_addr, fpa->pool_iova);
++	return 0;
++}
++
+ static struct fpavf *fpa_vf_get(u16 domain_id, u16 subdomain_id,
+ 				struct octeontx_master_com_t *master,
+ 				void *master_data)
+@@ -313,6 +399,7 @@ struct fpavf_com_s fpavf_com = {
+ 	.alloc = fpa_vf_alloc,
+ 	.refill = fpa_vf_refill,
+ 	.add_alloc = fpa_vf_add_alloc,
++	.teardown = fpa_vf_teardown,
+ };
+ EXPORT_SYMBOL(fpavf_com);
+ 
+@@ -433,6 +520,9 @@ static int fpavf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 		return err;
+ 	}
+ 
++	/* Get iommu domain for iova to physical addr conversion */
++	fpa->iommu_domain = iommu_get_domain_for_dev(&pdev->dev);
++
+ 	INIT_LIST_HEAD(&fpa->list);
+ 	spin_lock(&octeontx_fpavf_devices_lock);
+ 	list_add(&fpa->list, &octeontx_fpavf_devices);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+index bb9bad65015a..2aa3ce813f77 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+@@ -434,10 +434,11 @@ static int lbk_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	int err, node;
+ 
+ 	/* Setup interface with NIC driver */
+-	thlbk = try_then_request_module(symbol_get(thunder_lbk_com),
+-					"thunder_lbk");
+-	if (!thlbk)
++	thlbk = try_then_request_module(symbol_get(thunder_lbk_com), "nicpf");
++	if (!thlbk) {
++		dev_err(dev, "Error thunder_lbk_com symbol not found");
+ 		return -ENODEV;
++	}
+ 
+ 	/* Setup LBK Device */
+ 	lbk = devm_kzalloc(dev, sizeof(*lbk), GFP_KERNEL);
+@@ -521,6 +522,7 @@ static void lbk_remove(struct pci_dev *pdev)
+ 		}
+ 	}
+ 	spin_unlock(&octeontx_lbk_lock);
++	symbol_put(thunder_lbk_com);
+ }
+ 
+ static const struct pci_device_id lbk_id_table[] = {
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index aefdbd8142e8..de38d82e880c 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -1277,6 +1277,7 @@ static void __exit octeontx_cleanup_module(void)
+ 	symbol_put(pkopf_com);
+ 	symbol_put(timpf_com);
+ 	symbol_put(lbk_com);
++	symbol_put(thunder_bgx_com);
+ }
+ 
+ module_init(octeontx_init_module);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+index 2f5aad84510a..d3ec24e526ea 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -304,6 +304,8 @@ static int pki_destroy_domain(u32 id, u16 domain_id,
+ 			identify(&pki->vf[i], 0x0, 0x0);
+ 		}
+ 	}
++
++	pki->vfs_in_use -= vf_idx;
+ 	spin_unlock(&octeontx_pki_devices_lock);
+ 	return 0;
+ }
+@@ -317,7 +319,7 @@ static int pki_create_domain(u32 id, u16 domain_id,
+ 	resource_size_t vf_start;
+ 	struct pci_dev *virtfn;
+ 	struct pki_t *curr;
+-	bool found = false;
++	int vf_idx = 0;
+ 	int i, ret = 0;
+ 	u8 stream;
+ 	u64 cfg;
+@@ -378,16 +380,17 @@ static int pki_create_domain(u32 id, u16 domain_id,
+ 
+ 			identify(&pki->vf[i], pki->vf[i].domain.domain_id,
+ 				 pki->vf[i].domain.subdomain_id);
+-			found = true;
++			vf_idx++;
+ 			break;
+ 		}
+ 	}
+ 
+-	if (!found) {
++	if (!vf_idx) {
+ 		ret = -ENODEV;
+ 		goto err_unlock;
+ 	}
+ 
++	pki->vfs_in_use += vf_idx;
+ 	spin_unlock(&octeontx_pki_devices_lock);
+ 	return ret;
+ 
+@@ -667,6 +670,8 @@ static int pki_sriov_configure(struct pci_dev *pdev, int numvfs)
+ 			ret = numvfs;
+ 		}
+ 	}
++
++	dev_notice(&pki->pdev->dev, "VFs enabled: %d\n", ret);
+ 	return ret;
+ }
+ 
+@@ -741,6 +746,7 @@ static void pki_remove(struct pci_dev *pdev)
+ 	}
+ 	spin_unlock(&octeontx_pki_devices_lock);
+ 
++	pki_sriov_configure(pdev, 0);
+ 	pki_irq_free(pki);
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+index ada3c2bcd9b6..9cb3e83774e0 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pkopf_main.c
+@@ -293,6 +293,7 @@ static int pko_pf_destroy_domain(u32 id, u16 domain_id,
+ 		}
+ 	}
+ 
++	pko->vfs_in_use -= vf_idx;
+ 	spin_unlock(&octeontx_pko_devices_lock);
+ 
+ 	return 0;
+@@ -906,6 +907,26 @@ static int pko_enable(struct pkopf *pko)
+ 	return 0;
+ }
+ 
++static int pko_disable(struct pkopf *pko)
++{
++	u64 reg;
++	int retry = 0;
++
++	pko_reg_write(pko, PKO_PF_ENABLE, 0x0);
++
++	while (true) {
++		reg = pko_reg_read(pko, PKO_PF_STATUS);
++		if ((reg & 0x100) == 0)
++			break;
++		usleep_range(10000, 20000);
++		retry++;
++		if (retry > 10)
++			return -ENODEV;
++	}
++
++	return 0;
++}
++
+ static int setup_dpfi(struct pkopf *pko)
+ {
+ 	int err;
+@@ -964,6 +985,37 @@ static int setup_dpfi(struct pkopf *pko)
+ 	return 0;
+ }
+ 
++static int teardown_dpfi(struct pkopf *pko)
++{
++	int retry = 0;
++	u64 reg;
++
++	pko_reg_write(pko, PKO_PF_DPFI_FLUSH, 1);
++
++	while (true) {
++		reg = pko_reg_read(pko, PKO_PF_DPFI_STATUS);
++		if ((reg & 0x1) == 0x1)
++			break;
++		usleep_range(10000, 20000);
++		retry++;
++		if (retry > 10) {
++			dev_err(&pko->pdev->dev, "Failed to flush DPFI.\n");
++			return -ENODEV;
++		}
++	}
++	if ((reg >> 32) > 0)
++		dev_err(&pko->pdev->dev,
++			"DPFI cache not empty after flush, left %lld\n",
++			reg >> 32);
++	pko_reg_write(pko, PKO_PF_DPFI_GMCTL, 0);
++	pko_reg_write(pko, PKO_PF_DPFI_ENA, 0);
++
++	fpavf->teardown(fpa);
++	fpapf->destroy_domain(pko->id, FPA_PKO_DPFI_GMID, NULL, NULL);
++
++	return 0;
++}
++
+ static int pko_init(struct pkopf *pko)
+ {
+ 	u64 reg;
+@@ -1045,6 +1097,8 @@ static int pko_sriov_configure(struct pci_dev *pdev, int numvfs)
+ 			ret = numvfs;
+ 		}
+ 	}
++
++	dev_notice(&pko->pdev->dev, "VFs enabled: %d\n", ret);
+ 	return ret;
+ }
+ 
+@@ -1129,6 +1183,10 @@ static void pko_remove(struct pci_dev *pdev)
+ 	if (!pko)
+ 		return;
+ 
++	pko_disable(pko);
++	teardown_dpfi(pko);
++	symbol_put(fpavf_com);
++	symbol_put(fpapf_com);
+ 	pko_irq_free(pko);
+ 	pko_sriov_configure(pdev, 0);
+ }
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+index 0e2b28c946c9..c0946fdb30b7 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+@@ -253,7 +253,7 @@ static int sso_pf_destroy_domain(u32 id, u16 domain_id,
+ 
+ 			dev_info(&sso->pdev->dev,
+ 				 "Free vf[%d] from domain:%d subdomain_id:%d\n",
+-				 i, sso->vf[i].domain.domain_id, vf_idx);
++				 i, sso->vf[i].domain.domain_id, vf_idx++);
+ 
+ 			/* Unmap groups */
+ 			reg = SSO_MAP_VALID(0) | SSO_MAP_VHGRP(i) |
+@@ -261,7 +261,6 @@ static int sso_pf_destroy_domain(u32 id, u16 domain_id,
+ 				SSO_MAP_GMID(sso->vf[i].domain.gmid);
+ 			sso_reg_write(sso, SSO_PF_MAPX(i), reg);
+ 
+-			vf_idx++;
+ 			identify(&sso->vf[i], 0xFFFF, 0xFFFF);
+ 			iounmap(sso->vf[i].domain.reg_base);
+ 		}
+@@ -1224,6 +1223,8 @@ static int sso_sriov_configure(struct pci_dev *pdev, int numvfs)
+ 			ret = numvfs;
+ 		}
+ 	}
++
++	dev_notice(&sso->pdev->dev, "VFs enabled: %d\n", ret);
+ 	return ret;
+ }
+ 
+@@ -1316,15 +1317,31 @@ static void sso_remove(struct pci_dev *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct ssopf *sso = pci_get_drvdata(pdev);
++	u64 sso_reg, addr;
++	u16 nr_grps;
++	int i;
+ 
+ 	if (!sso)
+ 		return;
+ 
+ 	flush_scheduled_work();
++	/* Make sure the SSO is disabled */
++	sso_reg = sso_reg_read(sso, SSO_PF_AW_CFG);
++	sso_reg &= (~1ULL);
++	sso_reg_write(sso, SSO_PF_AW_CFG, sso_reg);
+ 	kfree(ram_mbox_buf);
++	sso_reg = sso_reg_read(sso, SSO_PF_CONST);
++	nr_grps = (sso_reg >> SSO_CONST_GRP_SHIFT) & SSO_CONST_GRP_MASK;
++	for (i = 0; i < nr_grps; i++) {
++		addr = sso_reg_read(sso, SSO_PF_XAQX_HEAD_PTR(i));
++		if (addr)
++			fpavf->free(fpa, FPA_SSO_XAQ_AURA, addr, 0);
++	}
++	fpavf->teardown(fpa);
+ 	fpapf->destroy_domain(sso->id, FPA_SSO_XAQ_GMID, NULL, NULL);
+ 	symbol_put(fpapf_com);
+ 	symbol_put(fpavf_com);
++	symbol_put(rst_com);
+ 	sso_irq_free(sso);
+ 	sso_sriov_configure(pdev, 0);
+ 	sso_fini(sso);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+index 94c2207e0b1c..6faffdc1cd4c 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+@@ -66,7 +66,7 @@ static int ssow_pf_destroy_domain(u32 id, u16 domain_id,
+ 							     name);
+ 			dev_info(&ssow->pdev->dev,
+ 				 "Free vf[%d] from domain:%d subdomain_id:%d\n",
+-				 i, ssow->vf[i].domain.domain_id, vf_idx);
++				 i, ssow->vf[i].domain.domain_id, vf_idx++);
+ 			/* sso: clear hws's gmctl register */
+ 			reg = 0;
+ 			reg = SSO_MAP_GMID(1); /* write reset value '1'*/
+@@ -75,7 +75,7 @@ static int ssow_pf_destroy_domain(u32 id, u16 domain_id,
+ 				ret = -EIO;
+ 				goto unlock;
+ 			}
+-			vf_idx++;	/* HWS cnt */
++
+ 			identify(&ssow->vf[i], 0x0, 0x0);
+ 			iounmap(ssow->vf[i].domain.reg_base);
+ 			ssow->vf[i].domain.in_use = false;
+@@ -84,9 +84,7 @@ static int ssow_pf_destroy_domain(u32 id, u16 domain_id,
+ 
+ unlock:
+ 	ssow->vfs_in_use -= vf_idx;
+-
+ 	spin_unlock(&octeontx_ssow_devices_lock);
+-
+ 	return ret;
+ }
+ 
+@@ -506,6 +504,8 @@ static int ssow_sriov_configure(struct pci_dev *pdev, int numvfs)
+ 			ret = numvfs;
+ 		}
+ 	}
++
++	dev_notice(&ssow->pdev->dev, "VFs enabled: %d\n", ret);
+ 	return ret;
+ }
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+index 376fa48e6131..2b819628b23f 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/timpf_main.c
+@@ -290,43 +290,56 @@ static int tim_pf_destroy_domain(u32 id, u16 domain_id,
+ {
+ 	struct timpf *tim = NULL;
+ 	struct pci_dev *virtfn;
++	struct timpf *curr;
+ 	struct timpf_vf *vf;
+ 	int i, vf_idx = 0;
++	int ret = 0;
+ 	u64 reg;
+ 
+ 	spin_lock(&octeontx_tim_dev_lock);
+-	list_for_each_entry(tim, &octeontx_tim_devices, list) {
+-		for (i = 0; i < tim->total_vfs; i++) {
+-			vf = &tim->vf[i];
+-			if (vf->domain.in_use &&
+-			    vf->domain.domain_id == domain_id) {
+-				vf->domain.in_use = false;
+-
+-				virtfn = pci_get_domain_bus_and_slot(
+-					   pci_domain_nr(tim->pdev->bus),
+-					   pci_iov_virtfn_bus(tim->pdev, i),
+-					   pci_iov_virtfn_devfn(tim->pdev, i));
+-				if (virtfn && kobj && g_name)
+-					sysfs_remove_link_from_group(kobj,
+-								     g_name,
+-								     virtfn->
+-								     dev.kobj.
+-								     name);
+-				dev_info(&tim->pdev->dev,
+-					 "Free vf[%d] from domain:%d subdomain_id:%d\n",
+-					 i, tim->vf[i].domain.domain_id,
+-					 vf_idx++);
+-				/* Cleanup MMU info.*/
+-				reg = tim_reg_read(tim, TIM_RING_GMCTL(i));
+-				reg &= ~0xFFFFull; /*GMID*/
+-				tim_reg_write(tim, TIM_RING_GMCTL(i), reg);
+-				identify(vf, 0x0, 0x0);
+-				iounmap(tim->vf[i].domain.reg_base);
+-			}
++	list_for_each_entry(curr, &octeontx_tim_devices, list) {
++		if (curr->id == id) {
++			tim = curr;
++			break;
+ 		}
+ 	}
++
++	if (!tim) {
++		ret = -ENODEV;
++		goto err_unlock;
++	}
++
++	for (i = 0; i < tim->total_vfs; i++) {
++		vf = &tim->vf[i];
++		if (vf->domain.in_use &&
++		    vf->domain.domain_id == domain_id) {
++			vf->domain.in_use = false;
++
++			virtfn = pci_get_domain_bus_and_slot(
++				   pci_domain_nr(tim->pdev->bus),
++				   pci_iov_virtfn_bus(tim->pdev, i),
++				   pci_iov_virtfn_devfn(tim->pdev, i));
++			if (virtfn && kobj && g_name)
++				sysfs_remove_link_from_group(kobj, g_name,
++							     virtfn->dev.kobj.
++							     name);
++			dev_info(&tim->pdev->dev,
++				 "Free vf[%d] from domain:%d subdomain_id:%d\n",
++				 i, vf->domain.domain_id,
++				 vf_idx++);
++			/* Cleanup MMU info.*/
++			reg = tim_reg_read(tim, TIM_RING_GMCTL(i));
++			reg &= ~0xFFFFull; /*GMID*/
++			tim_reg_write(tim, TIM_RING_GMCTL(i), reg);
++			identify(vf, 0x0, 0x0);
++			iounmap(tim->vf[i].domain.reg_base);
++		}
++	}
++	tim->vfs_in_use -= vf_idx;
++
++err_unlock:
+ 	spin_unlock(&octeontx_tim_dev_lock);
+-	return 0;
++	return ret;
+ }
+ 
+ static int tim_pf_create_domain(u32 id, u16 domain_id, u32 num_vfs,
+@@ -334,8 +347,9 @@ static int tim_pf_create_domain(u32 id, u16 domain_id, u32 num_vfs,
+ 		struct kobject *kobj, char *g_name)
+ {
+ 	struct timpf *tim = NULL;
+-	struct timpf_vf *vf;
+ 	struct pci_dev *virtfn;
++	struct timpf_vf *vf;
++	struct timpf *curr;
+ 	resource_size_t ba;
+ 	u64 reg = 0, gmid;
+ 	int i, vf_idx = 0, ret = 0;
+@@ -345,41 +359,51 @@ static int tim_pf_create_domain(u32 id, u16 domain_id, u32 num_vfs,
+ 	gmid = get_gmid(domain_id);
+ 
+ 	spin_lock(&octeontx_tim_dev_lock);
+-	list_for_each_entry(tim, &octeontx_tim_devices, list) {
+-		for (i = 0; i < tim->total_vfs; i++) {
+-			vf = &tim->vf[i];
+-			if (vf->domain.in_use)
+-				continue;
++	list_for_each_entry(curr, &octeontx_tim_devices, list) {
++		if (curr->id == id) {
++			tim = curr;
++			break;
++		}
++	}
+ 
+-			virtfn = pci_get_domain_bus_and_slot(
+-					pci_domain_nr(tim->pdev->bus),
+-					pci_iov_virtfn_bus(tim->pdev, i),
+-					pci_iov_virtfn_devfn(tim->pdev, i));
+-			if (!virtfn)
+-				break;
+-			sysfs_add_link_to_group(kobj, g_name,
+-						&virtfn->dev.kobj,
+-						virtfn->dev.kobj.name);
+-
+-			ba = pci_resource_start(tim->pdev, PCI_TIM_PF_CFG_BAR);
+-			ba += TIM_VF_OFFSET(i);
+-			vf->domain.reg_base = ioremap(ba, TIM_VF_CFG_SIZE);
+-			vf->domain.domain_id = domain_id;
+-			vf->domain.subdomain_id = vf_idx;
+-			vf->domain.gmid = get_gmid(domain_id);
+-			vf->domain.master = com;
+-			vf->domain.master_data = domain;
+-			vf->domain.in_use = true;
+-
+-			reg = ((uint64_t)i + 1) << 16 /*STRM*/ | gmid; /*GMID*/
+-			tim_reg_write(tim, TIM_RING_GMCTL(i), reg);
++	if (!tim) {
++		ret = -ENODEV;
++		goto err_unlock;
++	}
+ 
+-			identify(vf, domain_id, vf_idx);
+-			vf_idx++;
+-			if (vf_idx == num_vfs) {
+-				tim->vfs_in_use += num_vfs;
+-				break;
+-			}
++	for (i = 0; i < tim->total_vfs; i++) {
++		vf = &tim->vf[i];
++		if (vf->domain.in_use)
++			continue;
++
++		virtfn = pci_get_domain_bus_and_slot(
++				pci_domain_nr(tim->pdev->bus),
++				pci_iov_virtfn_bus(tim->pdev, i),
++				pci_iov_virtfn_devfn(tim->pdev, i));
++		if (!virtfn)
++			break;
++		sysfs_add_link_to_group(kobj, g_name,
++					&virtfn->dev.kobj,
++					virtfn->dev.kobj.name);
++
++		ba = pci_resource_start(tim->pdev, PCI_TIM_PF_CFG_BAR);
++		ba += TIM_VF_OFFSET(i);
++		vf->domain.reg_base = ioremap(ba, TIM_VF_CFG_SIZE);
++		vf->domain.domain_id = domain_id;
++		vf->domain.subdomain_id = vf_idx;
++		vf->domain.gmid = get_gmid(domain_id);
++		vf->domain.master = com;
++		vf->domain.master_data = domain;
++		vf->domain.in_use = true;
++
++		reg = ((uint64_t)i + 1) << 16 /*STRM*/ | gmid; /*GMID*/
++		tim_reg_write(tim, TIM_RING_GMCTL(i), reg);
++
++		identify(vf, domain_id, vf_idx);
++		vf_idx++;
++		if (vf_idx == num_vfs) {
++			tim->vfs_in_use += num_vfs;
++			break;
+ 		}
+ 	}
+ 
+@@ -590,6 +614,8 @@ static int tim_sriov_configure(struct pci_dev *pdev, int numvfs)
+ 			ret = numvfs;
+ 		}
+ 	}
++
++	dev_notice(&tim->pdev->dev, "VFs enabled: %d\n", ret);
+ 	return ret;
+ }
+ 
+@@ -663,6 +689,7 @@ static void tim_remove(struct pci_dev *pdev)
+ 	}
+ 	spin_unlock(&octeontx_tim_dev_lock);
+ 
++	symbol_put(rst_com);
+ 	tim_irq_free(tim);
+ 	tim_sriov_configure(pdev, 0);
+ }
+-- 
+2.14.1
+

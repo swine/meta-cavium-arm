@@ -1,0 +1,38 @@
+From ca66663fbc0834fbf45ab5c968e8bd8ae784b903 Mon Sep 17 00:00:00 2001
+From: Wei Yongjun <weiyj.lk@gmail.com>
+Date: Mon, 15 Aug 2016 22:51:29 +0000
+Subject: [PATCH 024/375] net: thunderx: Remove unnecessary pci_set_drvdata()
+
+The driver core clears the driver data to NULL after device_release
+or on probe failure. Thus, it is not needed to manually clear the
+device driver data to NULL.
+
+Signed-off-by: Wei Yongjun <weiyj.lk@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/net/ethernet/cavium/thunder/thunder_xcv.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/thunder_xcv.c b/drivers/net/ethernet/cavium/thunder/thunder_xcv.c
+index 9210d04e4b5d..67befedef709 100644
+--- a/drivers/net/ethernet/cavium/thunder/thunder_xcv.c
++++ b/drivers/net/ethernet/cavium/thunder/thunder_xcv.c
+@@ -194,7 +194,6 @@ err_release_regions:
+ err_disable_device:
+ 	pci_disable_device(pdev);
+ err_kfree:
+-	pci_set_drvdata(pdev, NULL);
+ 	devm_kfree(dev, xcv);
+ 	xcv = NULL;
+ 	return err;
+@@ -211,7 +210,6 @@ static void xcv_remove(struct pci_dev *pdev)
+ 
+ 	pci_release_regions(pdev);
+ 	pci_disable_device(pdev);
+-	pci_set_drvdata(pdev, NULL);
+ }
+ 
+ static struct pci_driver xcv_driver = {
+-- 
+2.14.1
+

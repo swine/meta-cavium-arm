@@ -1,0 +1,70 @@
+From a19d18a650786839e4ce5ee2451f77d925300414 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Mon, 3 Apr 2017 11:31:07 -0700
+Subject: [PATCH 187/375] octeontx-sso: rd and wr correct tmo value
+
+Fix correctly transalates tmo value in decimal to SSO_NW_TIM bit types.
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Signed-off-by: Santosh Shukla <santosh.shukla@caviumnetworks.com>
+---
+ .../net/ethernet/cavium/octeontx-83xx/ssopf_main.c | 26 +++++++++++++++++-----
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+index e903e2e71aa6..99fbff1be6f0 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssopf_main.c
+@@ -119,7 +119,12 @@ static u64 sso_pf_get_tmo(struct ssopf *sso)
+ 
+ 	/* Get current tick */
+ 	nw_clk = sso_reg_read(sso, SSO_PF_NW_TIM) & 0x3ff;
++	nw_clk += 1;
+ 
++	/* Conevrt from set-Bit to multiple of 1024 clock cycles
++	 * Refer HRM: SSO_NW_TIM
++	 */
++	nw_clk <<= 10;
+ 	/* Get SCLK */
+ 	sclk_freq = rst->get_sclk_freq(sso->id);
+ 
+@@ -137,6 +142,12 @@ static void sso_pf_set_tmo(struct ssopf *sso, u64 ns)
+ 
+ 	/* Transalate nsec to clock */
+ 	nw_clk = NSEC2CLKS(ns, sclk_freq);
++	/* Conevrt from set-Bit to multiple of 1024 clock cycles
++	 * Refer HRM: SSO_NW_TIM
++	 */
++	nw_clk >>= 10;
++	if (nw_clk)
++		nw_clk -= 1;
+ 
+ 	/* write new clk value to Bit pos 9:0 of SSO_NW_TIM */
+ 	sso_reg_write(sso, SSO_PF_NW_TIM, nw_clk & 0x3ff);
+@@ -153,14 +164,17 @@ static u32 sso_pf_ns_to_iter(struct ssopf *sso, u32 wait_ns)
+ 	/* Transalate nsec to clock */
+ 	new_tmo = NSEC2CLKS(wait_ns, sclk_freq);
+ 
+-	/* 2. Get NW_TIM clock and translate to sclk_freq */
++	/*Get NW_TIM clock and translate to sclk_freq */
+ 	cur_tmo = sso_reg_read(sso, SSO_PF_NW_TIM) & 0x3ff;
+-	cur_tmo *= PLL_REF_CLK;
++	cur_tmo += 1;
++	/* Conevrt from set-Bit to multiple of 1024 clock cycles
++	 * Refer HRM: SSO_NW_TIM
++	 */
++	cur_tmo <<= 10;
+ 
+-	if (new_tmo > cur_tmo)
+-		getwork_iter = (new_tmo - cur_tmo) / cur_tmo;
+-	else
+-		getwork_iter = 1; /* min 1 iter */
++	getwork_iter = new_tmo / cur_tmo;
++	if (!getwork_iter)
++		getwork_iter = 1;
+ 
+ 	return getwork_iter;
+ }
+-- 
+2.14.1
+

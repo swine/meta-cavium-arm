@@ -1,0 +1,70 @@
+From 4803ec78e74f5b28e874328b449d10c864ff1ab9 Mon Sep 17 00:00:00 2001
+From: Jan Glauber <jglauber@cavium.com>
+Date: Fri, 19 May 2017 15:11:09 +0200
+Subject: [PATCH 334/375] mmc: cavium: Prevent crash with incomplete DT
+
+In case the DT specifies neither a regulator nor a gpio
+for the shared power the driver will crash accessing the regulator.
+Prevent the crash by checking the regulator before use.
+
+Use mmc_regulator_get_supply() instead of open coding the same
+logic.
+
+Signed-off-by: Jan Glauber <jglauber@cavium.com>
+---
+ drivers/mmc/host/cavium.c | 25 ++++++++++---------------
+ 1 file changed, 10 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/mmc/host/cavium.c b/drivers/mmc/host/cavium.c
+index df81423b96f2..1a9f4fb07e52 100644
+--- a/drivers/mmc/host/cavium.c
++++ b/drivers/mmc/host/cavium.c
+@@ -839,14 +839,14 @@ static void cvm_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ 		cvm_mmc_reset_bus(slot);
+ 		if (host->global_pwr_gpiod)
+ 			host->set_shared_power(host, 0);
+-		else
++		else if (!IS_ERR(mmc->supply.vmmc))
+ 			mmc_regulator_set_ocr(mmc, mmc->supply.vmmc, 0);
+ 		break;
+ 
+ 	case MMC_POWER_UP:
+ 		if (host->global_pwr_gpiod)
+ 			host->set_shared_power(host, 1);
+-		else
++		else if (!IS_ERR(mmc->supply.vmmc))
+ 			mmc_regulator_set_ocr(mmc, mmc->supply.vmmc, ios->vdd);
+ 		break;
+ 	}
+@@ -968,20 +968,15 @@ static int cvm_mmc_of_parse(struct device *dev, struct cvm_mmc_slot *slot)
+ 		return -EINVAL;
+ 	}
+ 
+-	mmc->supply.vmmc = devm_regulator_get_optional(dev, "vmmc");
+-	if (IS_ERR(mmc->supply.vmmc)) {
+-		if (PTR_ERR(mmc->supply.vmmc) == -EPROBE_DEFER)
+-			return -EPROBE_DEFER;
+-		/*
+-		 * Legacy Octeon firmware has no regulator entry, fall-back to
+-		 * a hard-coded voltage to get a sane OCR.
+-		 */
++	ret = mmc_regulator_get_supply(mmc);
++	if (ret == -EPROBE_DEFER)
++		return ret;
++	/*
++	 * Legacy Octeon firmware has no regulator entry, fall-back to
++	 * a hard-coded voltage to get a sane OCR.
++	 */
++	if (IS_ERR(mmc->supply.vmmc))
+ 		mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
+-	} else {
+-		ret = mmc_regulator_get_ocrmask(mmc->supply.vmmc);
+-		if (ret > 0)
+-			mmc->ocr_avail = ret;
+-	}
+ 
+ 	/* Common MMC bindings */
+ 	ret = mmc_of_parse(mmc);
+-- 
+2.14.1
+

@@ -1,0 +1,30 @@
+From 7dcd3efcc0d07d1579956588a5b902b18114b118 Mon Sep 17 00:00:00 2001
+From: AKASHI Takahiro <takahiro.akashi@linaro.org>
+Date: Mon, 3 Apr 2017 11:24:39 +0900
+Subject: [PATCH 167/375] arm64: kdump: enable kdump in defconfig
+
+Kdump is enabled by default as kexec is.
+
+Signed-off-by: AKASHI Takahiro <takahiro.akashi@linaro.org>
+Acked-by: Catalin Marinas <catalin.marinas@arm.com>
+Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+(cherry picked from commit 3f5c1e1e761981b41d0be22f9aadfc7458fcc786)
+---
+ arch/arm64/configs/defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index eadf4855ad2d..e181132af2d2 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -77,6 +77,7 @@ CONFIG_CMA=y
+ CONFIG_SECCOMP=y
+ CONFIG_XEN=y
+ CONFIG_KEXEC=y
++CONFIG_CRASH_DUMP=y
+ # CONFIG_CORE_DUMP_DEFAULT_ELF_HEADERS is not set
+ CONFIG_COMPAT=y
+ CONFIG_CPU_IDLE=y
+-- 
+2.14.1
+

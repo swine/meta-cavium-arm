@@ -1,0 +1,140 @@
+From 7092239f943d113d1616717df30a9f504ebafda1 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Tue, 13 Jun 2017 09:21:57 -0700
+Subject: [PATCH 201/375] octeontx: implement pool QoS
+
+1. Implement pool quality of service messages:
+   FPA_SETAURALVL
+   FPA_GETAURALVL
+
+3. Implement RED and DROP configuration on PKI.
+
+Signed-off-by: Andriy Berestovskyy <Andriy.Berestovskyy@cavium.com>
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/fpa.h    |  2 +-
+ .../net/ethernet/cavium/octeontx-83xx/fpapf_main.c | 28 ++++++++++++++++++----
+ .../ethernet/cavium/octeontx-83xx/octeontx_mbox.h  |  8 +++++++
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    |  4 ++++
+ .../net/ethernet/cavium/octeontx-83xx/pki_config.c |  4 ++++
+ 5 files changed, 41 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h b/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+index 7b4fbff9d892..9fb1eda54c5e 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpa.h
+@@ -28,7 +28,7 @@
+ #define FPA_VF_MSIX_COUNT		1
+ #define FPA_MAX_VF			32
+ 
+-/* FPA FP register offsets */
++/* FPA PF register offsets */
+ #define FPA_PF_SFT_RST			0x0
+ #define FPA_PF_CONST			0x10
+ #define FPA_PF_CONST1			0x18
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+index 32f56190f55e..628777d3b612 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/fpapf_main.c
+@@ -105,6 +105,7 @@ static int fpa_pf_receive_message(u32 id, u16 domain_id,
+ 	struct fpapf_vf *vf;
+ 	struct fpapf *fpa = NULL;
+ 	struct mbox_fpa_cfg *cfg;
++	struct mbox_fpa_lvls *lvls;
+ 	unsigned int aura, pool;
+ 	u64 reg;
+ 	int i;
+@@ -211,11 +212,30 @@ static int fpa_pf_receive_message(u32 id, u16 domain_id,
+ 		break;
+ 
+ 	case FPA_SETAURALVL:
++		lvls = add_data;
++		aura = vf->hardware_aura_set * FPA_AURA_SET_SIZE +
++			(lvls->gaura % FPA_AURA_SET_SIZE);
++
++		fpa_reg_write(fpa, FPA_PF_AURAX_CNT_LEVELS(aura),
++			      lvls->cnt_levels);
++		fpa_reg_write(fpa, FPA_PF_AURAX_POOL_LEVELS(aura),
++			      lvls->pool_levels);
++		break;
++
+ 	case FPA_GETAURALVL:
+-		/* also take care - error handlig code path::
+-		 * overall in fpapf driver.
+-		 * break;
+-		 */
++		lvls = add_data;
++		aura = vf->hardware_aura_set * FPA_AURA_SET_SIZE +
++			(lvls->gaura % FPA_AURA_SET_SIZE);
++
++		lvls->cnt_levels = fpa_reg_read(fpa,
++				FPA_PF_AURAX_CNT_LEVELS(aura));
++		lvls->pool_levels = fpa_reg_read(fpa,
++				FPA_PF_AURAX_POOL_LEVELS(aura));
++
++		/* Update data read len */
++		resp->data = sizeof(struct mbox_fpa_lvls);
++		break;
++
+ 	default:
+ 		hdr->res_code = MBOX_RET_INVALID;
+ 		break;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+index aa605fbe75f9..ddf3a816d904 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_mbox.h
+@@ -225,6 +225,12 @@ struct mbox_fpa_cfg {
+ 	u64	aura_cfg;
+ };
+ 
++struct mbox_fpa_lvls {
++	u64	pool_levels;
++	u64	cnt_levels;
++	u16	gaura;
++};
++
+ /* SSOW */
+ struct mbox_ssow_identify {
+ 	u16	domain_id;
+@@ -712,6 +718,8 @@ struct mbox_pki_qos_entry {
+ 	u16 gaura;
+ 	u8 grptag_ok;
+ 	u8 grptag_bad;
++	u8 ena_red;
++	u8 ena_drop;
+ };
+ 
+ /* hardcoded TODO */
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+index e6b5e20771ba..4de26290ad18 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -266,6 +266,10 @@
+ #define PKI_QPG_TBLB_DSTAT_ID_SHIFT	0
+ #define PKI_QPG_TBLB_STRM_MASK		0xFFULL
+ #define PKI_QPG_TBLB_STRM_SHIFT		16
++#define PKI_QPG_TBLB_ENA_RED_MASK	0x1ULL
++#define PKI_QPG_TBLB_ENA_RED_SHIFT	29
++#define PKI_QPG_TBLB_ENA_DROP_MASK	0x1ULL
++#define PKI_QPG_TBLB_ENA_DROP_SHIFT	28
+ 
+ #define PKI_QPG_TBL_GAURA_MASK		0xFFFULL
+ #define PKI_QPG_TBL_GAURA_SHIFT		0
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+index 131b5e75ec4d..d3f24fc0c188 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_config.c
+@@ -279,6 +279,10 @@ int pki_port_create_qos(struct pkipf_vf *vf, u16 vf_id,
+ 		cfg = pki_reg_read(pki, PKI_QPG_TBLBX(qpg_base + i));
+ 		set_field(&cfg, PKI_QPG_TBLB_STRM_MASK,
+ 			  PKI_QPG_TBLB_STRM_SHIFT, vf->stream_id);
++		set_field(&cfg, PKI_QPG_TBLB_ENA_RED_MASK,
++			  PKI_QPG_TBLB_ENA_RED_SHIFT, qpg->ena_red);
++		set_field(&cfg, PKI_QPG_TBLB_ENA_DROP_MASK,
++			  PKI_QPG_TBLB_ENA_DROP_SHIFT, qpg->ena_drop);
+ 		pki_reg_write(pki, PKI_QPG_TBLBX(qpg_base + i), cfg);
+ 	}
+ 	for (i = 0; i < pki->max_cls; i++) {
+-- 
+2.14.1
+

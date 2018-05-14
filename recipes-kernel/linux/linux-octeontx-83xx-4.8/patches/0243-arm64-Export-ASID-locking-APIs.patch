@@ -1,0 +1,35 @@
+From 339e7e1a1d095c65b08fbfeedb08a496babd9335 Mon Sep 17 00:00:00 2001
+From: Chandrakala Chavva <cchavva@caviumnetworks.com>
+Date: Wed, 4 Oct 2017 14:29:37 -0700
+Subject: [PATCH 243/375] arm64: Export ASID locking APIs.
+
+These APIs are used by ethernet driver.
+
+Signed-off-by: Chandrakala Chavva <cchavva@caviumnetworks.com>
+---
+ arch/arm64/mm/context.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/mm/context.c b/arch/arm64/mm/context.c
+index b2167a36936f..62042741d9f3 100644
+--- a/arch/arm64/mm/context.c
++++ b/arch/arm64/mm/context.c
+@@ -139,6 +139,7 @@ int lock_context(struct mm_struct *mm, int index)
+ 	raw_spin_unlock_irqrestore(&cpu_asid_lock, flags);
+ 	return 0;
+ }
++EXPORT_SYMBOL(lock_context);
+ 
+ int unlock_context_by_index(int index)
+ {
+@@ -151,6 +152,7 @@ int unlock_context_by_index(int index)
+ 	raw_spin_unlock_irqrestore(&cpu_asid_lock, flags);
+ 	return 0;
+ }
++EXPORT_SYMBOL(unlock_context_by_index);
+ 
+ bool unlock_context_by_mm(struct mm_struct *mm)
+ {
+-- 
+2.14.1
+

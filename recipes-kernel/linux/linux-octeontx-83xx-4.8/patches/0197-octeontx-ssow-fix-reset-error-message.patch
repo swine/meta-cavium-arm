@@ -1,0 +1,44 @@
+From 349e8ef2793ac606186f9ac584065cb00c215008 Mon Sep 17 00:00:00 2001
+From: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+Date: Fri, 2 Jun 2017 12:33:09 -0700
+Subject: [PATCH 197/375] octeontx-ssow: fix reset error message
+
+Print error only if all the HWS not able to clean the WQEs.
+
+Signed-off-by: Tirumalesh Chalamarla <tchalamarla@caviumnetworks.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+index f867bba0e5bb..1fe96163aea7 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/ssowpf_main.c
+@@ -368,7 +368,7 @@ int ssow_reset_domain(u32 id, u16 domain_id, u64 grp_mask)
+ 	bool de_sched = false;
+ 	int retry = 0;
+ 	u64 addr;
+-	int count;
++	int count = 0;
+ 	struct wqe_s wqe;
+ 	u64 reg;
+ 	void __iomem *reg_base;
+@@ -430,13 +430,12 @@ int ssow_reset_domain(u32 id, u16 domain_id, u64 grp_mask)
+ 					retry++;
+ 				count = __get_sso_group_pend(id, grp_mask);
+ 			} while (count && retry < 1000);
+-			if (count)
+-				dev_err(&ssow->pdev->dev,
+-					"Failed to reset vf[%d]\n", i);
+ 			sso_pf_set_value(id, SSO_PF_HWSX_SX_GRPMASK(i, 0), 0);
+ 			sso_pf_set_value(id, SSO_PF_HWSX_SX_GRPMASK(i, 1), 0);
+ 		}
+ 	}
++	if (count)
++	dev_err(&ssow->pdev->dev, "Failed to reset vf[%d]\n", i);
+ 
+ 	for (i = 0; i < ssow->total_vfs; i++) {
+ 		if (ssow->vf[i].domain.in_use &&
+-- 
+2.14.1
+

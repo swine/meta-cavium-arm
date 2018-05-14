@@ -1,0 +1,38 @@
+From bba507bdd21aab416e74499ebbfbd34a0859476d Mon Sep 17 00:00:00 2001
+From: Eric Auger <eric.auger@redhat.com>
+Date: Fri, 27 Jan 2017 02:02:45 -0800
+Subject: [PATCH 061/375] iommu: Only map direct mapped regions
+
+As we introduced new reserved region types which do not require
+mapping, let's make sure we only map direct mapped regions.
+
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Tomasz Nowicki <tomasz.nowicki@caviumnetworks.com>
+Tested-by: Tomasz Nowicki <tomasz.nowicki@caviumnetworks.com>
+Tested-by: Bharat Bhushan <bharat.bhushan@nxp.com>
+
+---
+
+v3 -> v4:
+- use region's type and reword commit message and title
+---
+ drivers/iommu/iommu.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/iommu/iommu.c b/drivers/iommu/iommu.c
+index d5c5281e3470..04ff33971c1d 100644
+--- a/drivers/iommu/iommu.c
++++ b/drivers/iommu/iommu.c
+@@ -342,6 +342,9 @@ static int iommu_group_create_direct_mappings(struct iommu_group *group,
+ 		start = ALIGN(entry->start, pg_size);
+ 		end   = ALIGN(entry->start + entry->length, pg_size);
+ 
++		if (entry->type != IOMMU_RESV_DIRECT)
++			continue;
++
+ 		for (addr = start; addr < end; addr += pg_size) {
+ 			phys_addr_t phys_addr;
+ 
+-- 
+2.14.1
+

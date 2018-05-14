@@ -1,0 +1,38 @@
+From c87bb3f4a28ae53c6ca20007ad1339ccf2cb2070 Mon Sep 17 00:00:00 2001
+From: Wei Yongjun <weiyongjun1@huawei.com>
+Date: Tue, 23 Aug 2016 15:03:48 +0000
+Subject: [PATCH 343/375] spi: spi-cavium-thunderx: Add missing
+ clk_disable_unprepare()
+
+Add the missing clk_disable_unprepare() before return in the probe
+error handling case and remove.
+
+Signed-off-by: Wei Yongjun <weiyongjun1@huawei.com>
+Signed-off-by: Mark Brown <broonie@kernel.org>
+---
+ drivers/spi/spi-cavium-thunderx.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/spi/spi-cavium-thunderx.c b/drivers/spi/spi-cavium-thunderx.c
+index eff2a130ef0c..877937706240 100644
+--- a/drivers/spi/spi-cavium-thunderx.c
++++ b/drivers/spi/spi-cavium-thunderx.c
+@@ -80,6 +80,7 @@ static int thunderx_spi_probe(struct pci_dev *pdev,
+ 	return 0;
+ 
+ error:
++	clk_disable_unprepare(p->clk);
+ 	spi_master_put(master);
+ 	return ret;
+ }
+@@ -93,6 +94,7 @@ static void thunderx_spi_remove(struct pci_dev *pdev)
+ 	if (!p)
+ 		return;
+ 
++	clk_disable_unprepare(p->clk);
+ 	/* Put everything in a known state. */
+ 	writeq(0, p->register_base + OCTEON_SPI_CFG(p));
+ }
+-- 
+2.14.1
+

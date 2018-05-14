@@ -1,0 +1,90 @@
+From 379eed4104d10b18f62c17aefdf53ad50a7b4eae Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+Date: Fri, 16 Feb 2018 13:29:01 +0100
+Subject: [PATCH 295/375] crypto: cpt - display code on software error
+
+When software error happens display error code and dump registers.
+
+Signed-off-by: Lukasz Bartosik <lukasz.bartosik@cavium.com>
+---
+ drivers/crypto/cavium/cpt/cpt_hw_types.h     | 34 ++++++++++++++++++++++++++--
+ drivers/crypto/cavium/cpt/cptvf_reqmanager.c |  5 +++-
+ 2 files changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/crypto/cavium/cpt/cpt_hw_types.h b/drivers/crypto/cavium/cpt/cpt_hw_types.h
+index 49898dc10ad5..ab2ec2193277 100644
+--- a/drivers/crypto/cavium/cpt/cpt_hw_types.h
++++ b/drivers/crypto/cavium/cpt/cpt_hw_types.h
+@@ -690,13 +690,43 @@ union cptx_pf_qx_gmctl {
+ 	u64 u;
+ 	struct cptx_pf_qx_gmctl_s {
+ #if defined(__BIG_ENDIAN_BITFIELD) /* Word 0 - Big Endian */
+-		uint64_t reserved_24_63		: 40;
++		uint64_t reserved_24_63			: 40;
+ 		uint64_t strm				: 8;
+ 		uint64_t gmid				: 16;
+ #else /* Word 0 - Little Endian */
+ 		uint64_t gmid				: 16;
+ 		uint64_t strm				: 8;
+-		uint64_t reserved_24_63		: 40;
++		uint64_t reserved_24_63			: 40;
++#endif /* Word 0 - End */
++	} s;
++};
++
++/**
++ * Error Address/Error Codes
++ *
++ * In the event of a severe error, microcode writes an 8-byte Error Code
++ * value (ECODE) to host memory at the Rptr address specified by the host
++ * system (in the 64-byte request).
++ *
++ * Word0
++ *  [63:56](R) 8-bit completion code
++ *  [55:48](R) Number of the core that reported the severe error
++ *  [47:0] Lower 6 bytes of M−Inst word2. Used to assist in uniquely
++ *  identifying which specific instruction caused the error. This assumes
++ *  that each instruction has a unique result location (RPTR), at least
++ *  for a given period of time.
++ */
++union error_code {
++	u64 u;
++	struct error_code_s {
++#if defined(__BIG_ENDIAN_BITFIELD) /* Word 0 - Big Endian */
++		uint64_t ccode				: 8;
++		uint64_t coreid				: 8;
++		uint64_t rptr6				: 48;
++#else /* Word 0 - Little Endian */
++		uint64_t rptr6				: 48;
++		uint64_t coreid				: 8;
++		uint64_t ccode				: 8;
+ #endif /* Word 0 - End */
+ 	} s;
+ };
+diff --git a/drivers/crypto/cavium/cpt/cptvf_reqmanager.c b/drivers/crypto/cavium/cpt/cptvf_reqmanager.c
+index d86b04c483b1..cb187f11b59a 100644
+--- a/drivers/crypto/cavium/cpt/cptvf_reqmanager.c
++++ b/drivers/crypto/cavium/cpt/cptvf_reqmanager.c
+@@ -381,6 +381,7 @@ static inline void process_pending_queue(struct cpt_vf *cptvf,
+ 	union cpt_res_s *cpt_status = NULL;
+ 	void (*callback)(int, void *, void *);
+ 	void *callback_arg;
++	union error_code ecode;
+ 	u32 res_code, resume_index;
+ 	u8 ccode;
+ 
+@@ -432,8 +433,10 @@ static inline void process_pending_queue(struct cpt_vf *cptvf,
+ 		break;
+ 
+ 		case CPT_COMP_E_SWERR:
++			ecode.u = be64_to_cpu(*((u64 *) cpt_info->out_buffer));
+ 			dev_err(&pdev->dev,
+-				"Request failed with Software error\n");
++				"Request failed with Software error code %d\n",
++				ecode.s.ccode);
+ 			cpt_dump_req(req, pdev);
+ 		break;
+ 
+-- 
+2.14.1
+

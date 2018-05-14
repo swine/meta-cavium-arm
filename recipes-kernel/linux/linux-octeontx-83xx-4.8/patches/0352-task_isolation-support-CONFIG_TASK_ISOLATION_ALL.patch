@@ -1,0 +1,58 @@
+From 44019e3ed83f680bf8e3f7c8747515a36e1d3275 Mon Sep 17 00:00:00 2001
+From: Chris Metcalf <cmetcalf@mellanox.com>
+Date: Tue, 16 Aug 2016 17:19:34 -0400
+Subject: [PATCH 352/375] task_isolation: support CONFIG_TASK_ISOLATION_ALL
+
+This option, similar to NO_HZ_FULL_ALL, simplifies configuring
+a system to boot by default with all cores except the boot core
+running in task isolation mode.
+
+Signed-off-by: Chris Metcalf <cmetcalf@mellanox.com>
+---
+ init/Kconfig       | 10 ++++++++++
+ kernel/isolation.c |  6 ++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/init/Kconfig b/init/Kconfig
+index 757f5b0bed83..94183f13c21d 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -823,6 +823,16 @@ config TASK_ISOLATION
+ 	 You should say "N" unless you are intending to run a
+ 	 high-performance userspace driver or similar task.
+ 
++config TASK_ISOLATION_ALL
++	bool "Provide task isolation on all CPUs by default (except CPU 0)"
++	depends on TASK_ISOLATION
++	help
++	 If the user doesn't pass the task_isolation boot option to
++	 define the range of task isolation CPUs, consider that all
++	 CPUs in the system are task isolation by default.
++	 Note the boot CPU will still be kept outside the range to
++	 handle timekeeping duty, etc.
++
+ config BUILD_BIN2C
+ 	bool
+ 	default n
+diff --git a/kernel/isolation.c b/kernel/isolation.c
+index be7e95192e76..3dbb01ac503f 100644
+--- a/kernel/isolation.c
++++ b/kernel/isolation.c
+@@ -43,8 +43,14 @@ int __init task_isolation_init(void)
+ {
+ 	/* For offstack cpumask, ensure we allocate an empty cpumask early. */
+ 	if (!saw_boot_arg) {
++#ifdef CONFIG_TASK_ISOLATION_ALL
++		alloc_cpumask_var(&task_isolation_map, GFP_KERNEL);
++		cpumask_copy(task_isolation_map, cpu_possible_mask);
++		cpumask_clear_cpu(smp_processor_id(), task_isolation_map);
++#else
+ 		zalloc_cpumask_var(&task_isolation_map, GFP_KERNEL);
+ 		return 0;
++#endif
+ 	}
+ 
+ 	/*
+-- 
+2.14.1
+

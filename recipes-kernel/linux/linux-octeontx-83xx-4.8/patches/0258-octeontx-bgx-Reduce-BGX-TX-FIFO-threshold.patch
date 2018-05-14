@@ -1,0 +1,30 @@
+From 2e130c73c9187f7d9b8449e0e6d5cce6ee9c1fc5 Mon Sep 17 00:00:00 2001
+From: Yuri Tolstov <yuri.tolstov@cavium.com>
+Date: Sat, 18 Nov 2017 09:19:30 -0800
+Subject: [PATCH 258/375] octeontx-bgx: Reduce BGX TX FIFO threshold
+
+Due to big packet transfer latency jitter in PKO, the BGX TX FIFO
+threshold should not be higher than PKO TX FIFO, which is for XLAUI port
+is 10 KB. So, the threshold for this port is 8192 bytes.
+
+Signed-off-by: Yuri Tolstov <yuri.tolstov@cavium.com>
+---
+ drivers/net/ethernet/cavium/octeontx-83xx/bgx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+index 478a7997eae0..665ebad355e9 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/bgx.c
+@@ -213,7 +213,7 @@ static int bgx_port_initial_config(struct octtx_bgx_port *port)
+ 	switch (port->lmac_type) {
+ 	case OCTTX_BGX_LMAC_TYPE_40GR:
+ 		reg = 0x400;
+-		thr = 0x300;
++		thr = 0x200;
+ 		break;
+ 	case OCTTX_BGX_LMAC_TYPE_XAUI:
+ 	case OCTTX_BGX_LMAC_TYPE_RXAUI:
+-- 
+2.14.1
+

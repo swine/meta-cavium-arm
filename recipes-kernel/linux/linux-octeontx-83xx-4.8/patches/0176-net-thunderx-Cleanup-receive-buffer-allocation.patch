@@ -1,0 +1,81 @@
+From 77c3ca4d6f0bb77c819e4feb6f38f1a73f162885 Mon Sep 17 00:00:00 2001
+From: Sunil Goutham <sgoutham@cavium.com>
+Date: Tue, 2 May 2017 18:36:53 +0530
+Subject: [PATCH 176/375] net: thunderx: Cleanup receive buffer allocation
+
+Get rid of unnecessary double pointer references and type casting
+in receive buffer allocation code.
+
+Signed-off-by: Sunil Goutham <sgoutham@cavium.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/net/ethernet/cavium/thunder/nicvf_queues.c | 18 +++++++++---------
+ 1 file changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+index 90c5bc7d7344..e4a02a96d4f0 100644
+--- a/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
++++ b/drivers/net/ethernet/cavium/thunder/nicvf_queues.c
+@@ -145,7 +145,7 @@ static struct pgcache *nicvf_alloc_page(struct nicvf *nic,
+ 
+ /* Allocate buffer for packet reception */
+ static inline int nicvf_alloc_rcv_buffer(struct nicvf *nic, struct rbdr *rbdr,
+-					 gfp_t gfp, u32 buf_len, u64 **rbuf)
++					 gfp_t gfp, u32 buf_len, u64 *rbuf)
+ {
+ 	struct pgcache *pgcache = NULL;
+ 
+@@ -172,10 +172,10 @@ static inline int nicvf_alloc_rcv_buffer(struct nicvf *nic, struct rbdr *rbdr,
+ 		nic->rb_page = pgcache->page;
+ ret:
+ 	/* HW will ensure data coherency, CPU sync not required */
+-	*rbuf = (u64 *)((u64)dma_map_page_attrs(&nic->pdev->dev, nic->rb_page,
+-						nic->rb_page_offset, buf_len,
+-						DMA_FROM_DEVICE,
+-						DMA_ATTR_SKIP_CPU_SYNC));
++	*rbuf = (u64)dma_map_page_attrs(&nic->pdev->dev, nic->rb_page,
++					nic->rb_page_offset, buf_len,
++					DMA_FROM_DEVICE,
++					DMA_ATTR_SKIP_CPU_SYNC);
+ 	if (dma_mapping_error(&nic->pdev->dev, (dma_addr_t)*rbuf)) {
+ 		if (!nic->rb_page_offset)
+ 			__free_pages(nic->rb_page, 0);
+@@ -212,7 +212,7 @@ static int  nicvf_init_rbdr(struct nicvf *nic, struct rbdr *rbdr,
+ 			    int ring_len, int buf_size)
+ {
+ 	int idx;
+-	u64 *rbuf;
++	u64 rbuf;
+ 	struct rbdr_entry_t *desc;
+ 	int err;
+ 
+@@ -257,7 +257,7 @@ static int  nicvf_init_rbdr(struct nicvf *nic, struct rbdr *rbdr,
+ 		}
+ 
+ 		desc = GET_RBDR_DESC(rbdr, idx);
+-		desc->buf_addr = (u64)rbuf & ~(NICVF_RCV_BUF_ALIGN_BYTES - 1);
++		desc->buf_addr = rbuf & ~(NICVF_RCV_BUF_ALIGN_BYTES - 1);
+ 	}
+ 
+ 	nicvf_get_page(nic);
+@@ -330,7 +330,7 @@ static void nicvf_refill_rbdr(struct nicvf *nic, gfp_t gfp)
+ 	int refill_rb_cnt;
+ 	struct rbdr *rbdr;
+ 	struct rbdr_entry_t *desc;
+-	u64 *rbuf;
++	u64 rbuf;
+ 	int new_rb = 0;
+ 
+ refill:
+@@ -364,7 +364,7 @@ refill:
+ 			break;
+ 
+ 		desc = GET_RBDR_DESC(rbdr, tail);
+-		desc->buf_addr = (u64)rbuf & ~(NICVF_RCV_BUF_ALIGN_BYTES - 1);
++		desc->buf_addr = rbuf & ~(NICVF_RCV_BUF_ALIGN_BYTES - 1);
+ 		refill_rb_cnt--;
+ 		new_rb++;
+ 	}
+-- 
+2.14.1
+

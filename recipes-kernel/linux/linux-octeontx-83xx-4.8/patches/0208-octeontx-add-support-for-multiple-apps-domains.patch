@@ -1,0 +1,250 @@
+From 59c9f0095b616187dbc2f6a33430e28c6eca9663 Mon Sep 17 00:00:00 2001
+From: Lukasz Bartosik <lb@semihalf.com>
+Date: Thu, 20 Jul 2017 11:13:24 +0200
+Subject: [PATCH 208/375] octeontx: add support for multiple apps/domains
+
+Add support for multiple applications/domains to RM.
+
+Signed-off-by: Lukasz Bartosik <lb@semihalf.com>
+Reviewed-by: Stanislaw Kardach <kda@semihalf.com>
+Signed-off-by: Peter Swain <peter.swain@cavium.com>
+---
+ .../net/ethernet/cavium/octeontx-83xx/lbk_main.c   |  2 +-
+ .../net/ethernet/cavium/octeontx-83xx/octeontx.h   |  2 +
+ .../ethernet/cavium/octeontx-83xx/octeontx_main.c  | 48 +++++++++++++++++-----
+ drivers/net/ethernet/cavium/octeontx-83xx/pki.h    |  3 ++
+ .../net/ethernet/cavium/octeontx-83xx/pki_main.c   | 26 ++++++++++--
+ 5 files changed, 66 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+index 4c73956f00c5..bb9bad65015a 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/lbk_main.c
+@@ -476,7 +476,7 @@ static int lbk_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	/* Setup LBK Port */
+ 	if (lbk->iconn == LBK_CONNECT_E_PKI &&
+-			lbk->oconn == LBK_CONNECT_E_PKO) {
++	    lbk->oconn == LBK_CONNECT_E_PKO) {
+ 		port = &octeontx_lbk_ports[0];
+ 		port->ilbk = lbk_index_from_id(lbk->id);
+ 		port->olbk = lbk_index_from_id(lbk->id);
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+index 05b9633acae6..ddf76a3f9ef3 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx.h
+@@ -136,5 +136,7 @@ struct octtx_lbk_port {
+ 	void	*vnic; /* NIC port descriptor */
+ };
+ 
++extern atomic_t octtx_sso_reset[];
++
+ #endif
+ 
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+index eca480cf85d9..b0260ce78eaf 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/octeontx_main.c
+@@ -232,9 +232,9 @@ static ssize_t octtx_create_domain_store(struct device *dev,
+ 
+ 	ret = octeontx_create_domain(name, type, sso_count, fpa_count,
+ 				     ssow_count, pko_count, 1, tim_count,
+-					bgx_count, lbk_count,
+-					(const long int *)bgx_port,
+-					(const long int *)lbk_port);
++				     bgx_count, lbk_count,
++				     (const long int *)bgx_port,
++				     (const long int *)lbk_port);
+ 	if (ret)
+ 		goto error;
+ 
+@@ -497,9 +497,13 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 	int i;
+ 
+ 	list_for_each_entry(domain, &octeontx_domains, list) {
+-		if (!strcmp(name, domain->name))
++		if (!strcmp(name, domain->name)) {
++			dev_err(octtx_device,
++				"Domain name \"%s\" already exists\n", name);
+ 			return -EEXIST;
++		}
+ 	}
++
+ 	/*get DOMAIN ID */
+ 	while (!found) {
+ 		domain_id = atomic_add_return(1, &gbl_domain_id);
+@@ -595,11 +599,24 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 	 */
+ 	domain->lbk_count = lbk_count;
+ 	for (i = 0; i < domain->lbk_count; i++) {
++		if (lbk_port[i] > 1) {
++			dev_err(octtx_device, "LBK invalid port g%ld\n",
++				lbk_port[i]);
++			goto error;
++		}
++
+ 		domain->lbk_port[i].domain_id = domain_id;
+ 		domain->lbk_port[i].dom_port_idx = i;
+ 		domain->lbk_port[i].glb_port_idx = lbk_port[i];
+ 		domain->lbk_port[i].pkind = pki->add_lbk_port(node, domain_id,
+ 							&domain->lbk_port[i]);
++		if (domain->lbk_port[i].pkind < 0) {
++			dev_err(octtx_device,
++				"LBK failed to allocate PKIND for port l%d(g%d)\n",
++				domain->lbk_port[i].dom_port_idx,
++				domain->lbk_port[i].glb_port_idx);
++			goto error;
++		}
+ 	}
+ 	ret = lbk->create_domain(node, domain_id, domain->lbk_port, i,
+ 			&octtx_master_com, domain);
+@@ -651,7 +668,7 @@ int octeontx_create_domain(const char *name, int type, int sso_count,
+ 				     domain->bgx_port[i].pkind);
+ 		if (ret < 0) {
+ 			dev_err(octtx_device,
+-				"Failed to set PKIND for port l%d(g%d)\n",
++				"BGX failed to set PKIND for port l%d(g%d)\n",
+ 				domain->bgx_port[i].dom_port_idx,
+ 				domain->bgx_port[i].glb_port_idx);
+ 			goto error;
+@@ -852,7 +869,7 @@ void octtx_reset_domain(struct work_struct *work)
+ {
+ 	struct octtx_domain *domain;
+ 	int i, master_sso;
+-	extern atomic_t octtx_sso_reset[];
++	u64 mask = -1;
+ 	u64 val;
+ 
+ 	spin_lock(&octeontx_domains_lock);
+@@ -860,7 +877,7 @@ void octtx_reset_domain(struct work_struct *work)
+ 		/* find first SSO from domain */
+ 		master_sso = __ffs(domain->grp_mask);
+ 		for_each_set_bit(i, (unsigned long *)&domain->grp_mask,
+-				 sizeof(domain->aura_set) * 8) {
++				 sizeof(domain->grp_mask) * 8) {
+ 			val = atomic_read(&octtx_sso_reset[i]);
+ 			if ((master_sso == i) && val) {
+ 				spin_unlock(&octeontx_domains_lock);
+@@ -868,10 +885,18 @@ void octtx_reset_domain(struct work_struct *work)
+ 				spin_lock(&octeontx_domains_lock);
+ 			}
+ 			atomic_set(&octtx_sso_reset[i], 0);
+-			/*makesure the otherend receives it*/
+-			mb();
+ 		}
++		mask &= ~domain->grp_mask;
++	}
++
++	for_each_set_bit(i, (unsigned long *)&mask, sizeof(mask) * 8) {
++		if (atomic_read(&octtx_sso_reset[i]))
++			atomic_set(&octtx_sso_reset[i], 0);
+ 	}
++
++	/*make sure the other end receives it*/
++	mb();
++
+ 	spin_unlock(&octeontx_domains_lock);
+ 	queue_delayed_work(reset_domain, &dwork_reset, 10);
+ }
+@@ -915,6 +940,7 @@ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ 	else if (_IOC_TYPE(cmd) & _IOC_WRITE)
+ 		err = !access_ok(VERIFY_READ, (void __user *)arg,
+ 				 _IOC_SIZE(cmd));
++
+ 	if (err)
+ 		return -EFAULT;
+ 
+@@ -930,8 +956,8 @@ static long octtx_dev_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+ 		gpio.sp = gpio_usr.sp;
+ 		gpio.cpu = gpio_usr.cpu;
+ 		gpio.gpio_num = gpio_usr.gpio_num;
+-		ret = __install_el3_inthandler(gpio.gpio_num, gpio.sp, gpio.cpu,
+-					       gpio.isr_base);
++		ret = __install_el3_inthandler(gpio.gpio_num, gpio.sp,
++					       gpio.cpu, gpio.isr_base);
+ //		printk("%s::%d ttbr:%llx sp:%llx isr_base:%llx\n",
+ //		       __FILE__, __LINE__, gpio.ttbr, gpio.sp, gpio.isr_base);
+ 		break;
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+index ef90af005da9..2fa65680d662 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki.h
+@@ -286,6 +286,9 @@
+ 
+ #define PKI_STRM_CFG_GMID_MASK		0xFFFFULL
+ 
++#define PKI_VF_SIZE			0x10000
++#define PKI_VF_BASE(x)			(0x01e00000ULL | (PKI_VF_SIZE * (x)))
++
+ enum PKI_LTYPE_E {
+ 	PKI_LTYPE_E_NONE	= 0,
+ 	PKI_LTYPE_E_ENET	= 1,
+diff --git a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+index a0788e8ea5cf..2f5aad84510a 100644
+--- a/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
++++ b/drivers/net/ethernet/cavium/octeontx-83xx/pki_main.c
+@@ -252,6 +252,13 @@ static struct pkipf_vf *pki_get_vf(u32 id, u16 domain_id)
+ 		return NULL;
+ }
+ 
++static void identify(struct pkipf_vf *vf, u16 domain_id, u16 subdomain_id)
++{
++	u64 reg = (((u64)subdomain_id << 16) | domain_id);
++
++	writeq_relaxed(reg, vf->domain.reg_base);
++}
++
+ static int pki_destroy_domain(u32 id, u16 domain_id,
+ 			      struct kobject *kobj, char *g_name)
+ {
+@@ -294,6 +301,7 @@ static int pki_destroy_domain(u32 id, u16 domain_id,
+ 				pki->vf[i].bgx_port[port].valid = false;
+ 				pki->vf[i].lbk_port[port].valid = false;
+ 			}
++			identify(&pki->vf[i], 0x0, 0x0);
+ 		}
+ 	}
+ 	spin_unlock(&octeontx_pki_devices_lock);
+@@ -306,6 +314,7 @@ static int pki_create_domain(u32 id, u16 domain_id,
+ 		struct kobject *kobj, char *g_name)
+ {
+ 	struct pki_t *pki = NULL;
++	resource_size_t vf_start;
+ 	struct pci_dev *virtfn;
+ 	struct pki_t *curr;
+ 	bool found = false;
+@@ -356,10 +365,19 @@ static int pki_create_domain(u32 id, u16 domain_id,
+ 			pki->vf[i].max_auras = pki->max_auras;
+ 			pki->vf[i].max_qpgs = pki->max_qpgs;
+ 			pki->vf[i].max_pcam_ents = pki->max_pcam_ents;
+-			cfg = pki_reg_read(pki, PKI_STRMX_CFG(stream));
+-			cfg |= (pki->vf[i].domain.gmid) &
+-				PKI_STRM_CFG_GMID_MASK;
++			cfg = (pki->vf[i].domain.gmid) &
++			       PKI_STRM_CFG_GMID_MASK;
+ 			pki_reg_write(pki, PKI_STRMX_CFG(stream), cfg);
++			vf_start = PKI_VF_BASE(i);
++			pki->vf[i].domain.reg_base = ioremap(vf_start,
++							     PKI_VF_SIZE);
++			if (!pki->vf[i].domain.reg_base) {
++				ret = -ENOMEM;
++				goto err_unlock;
++			}
++
++			identify(&pki->vf[i], pki->vf[i].domain.domain_id,
++				 pki->vf[i].domain.subdomain_id);
+ 			found = true;
+ 			break;
+ 		}
+@@ -455,6 +473,8 @@ int pki_reset_domain(u32 id, u16 domain_id)
+ 			pki_port_reset_regs(vf->pki, &vf->lbk_port[i]);
+ 	}
+ 
++	identify(vf, vf->domain.domain_id, vf->domain.subdomain_id);
++
+ 	spin_unlock(&octeontx_pki_devices_lock);
+ 	return 0;
+ }
+-- 
+2.14.1
+

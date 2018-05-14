@@ -1,0 +1,223 @@
+From ef5c3cb030bca7d997be0b502432f04344b99648 Mon Sep 17 00:00:00 2001
+From: Robin Murphy <robin.murphy@arm.com>
+Date: Tue, 13 Sep 2016 10:54:14 +0100
+Subject: [PATCH 068/375] iommu: Introduce iommu_fwspec
+
+Introduce a common structure to hold the per-device firmware data that
+most IOMMU drivers need to keep track of. This enables us to configure
+much of that data from common firmware code, and consolidate a lot of
+the equivalent implementations, device look-up tables, etc. which are
+currently strewn across IOMMU drivers.
+
+This will also be enable us to address the outstanding "multiple IOMMUs
+on the platform bus" problem by tweaking IOMMU API calls to prefer
+dev->fwspec->ops before falling back to dev->bus->iommu_ops, and thus
+gracefully handle those troublesome systems which we currently cannot.
+
+As the first user, hook up the OF IOMMU configuration mechanism. The
+driver-defined nature of DT cells means that we still need the drivers
+to translate and add the IDs themselves, but future users such as the
+much less free-form ACPI IORT will be much simpler and self-contained.
+
+CC: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Suggested-by: Will Deacon <will.deacon@arm.com>
+Signed-off-by: Robin Murphy <robin.murphy@arm.com>
+Signed-off-by: Will Deacon <will.deacon@arm.com>
+---
+ drivers/iommu/iommu.c    | 58 ++++++++++++++++++++++++++++++++++++++++++++++++
+ drivers/iommu/of_iommu.c |  8 +++++--
+ include/linux/device.h   |  3 +++
+ include/linux/iommu.h    | 39 ++++++++++++++++++++++++++++++++
+ 4 files changed, 106 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/iommu/iommu.c b/drivers/iommu/iommu.c
+index 6ef476e8c81d..c9245987d50e 100644
+--- a/drivers/iommu/iommu.c
++++ b/drivers/iommu/iommu.c
+@@ -31,6 +31,7 @@
+ #include <linux/err.h>
+ #include <linux/pci.h>
+ #include <linux/bitops.h>
++#include <linux/property.h>
+ #include <trace/events/iommu.h>
+ 
+ static struct kset *iommu_group_kset;
+@@ -1768,3 +1769,60 @@ out:
+ 
+ 	return ret;
+ }
++
++int iommu_fwspec_init(struct device *dev, struct fwnode_handle *iommu_fwnode,
++		      const struct iommu_ops *ops)
++{
++	struct iommu_fwspec *fwspec = dev->iommu_fwspec;
++
++	if (fwspec)
++		return ops == fwspec->ops ? 0 : -EINVAL;
++
++	fwspec = kzalloc(sizeof(*fwspec), GFP_KERNEL);
++	if (!fwspec)
++		return -ENOMEM;
++
++	of_node_get(to_of_node(iommu_fwnode));
++	fwspec->iommu_fwnode = iommu_fwnode;
++	fwspec->ops = ops;
++	dev->iommu_fwspec = fwspec;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(iommu_fwspec_init);
++
++void iommu_fwspec_free(struct device *dev)
++{
++	struct iommu_fwspec *fwspec = dev->iommu_fwspec;
++
++	if (fwspec) {
++		fwnode_handle_put(fwspec->iommu_fwnode);
++		kfree(fwspec);
++		dev->iommu_fwspec = NULL;
++	}
++}
++EXPORT_SYMBOL_GPL(iommu_fwspec_free);
++
++int iommu_fwspec_add_ids(struct device *dev, u32 *ids, int num_ids)
++{
++	struct iommu_fwspec *fwspec = dev->iommu_fwspec;
++	size_t size;
++	int i;
++
++	if (!fwspec)
++		return -EINVAL;
++
++	size = offsetof(struct iommu_fwspec, ids[fwspec->num_ids + num_ids]);
++	if (size > sizeof(*fwspec)) {
++		fwspec = krealloc(dev->iommu_fwspec, size, GFP_KERNEL);
++		if (!fwspec)
++			return -ENOMEM;
++	}
++
++	for (i = 0; i < num_ids; i++)
++		fwspec->ids[fwspec->num_ids + i] = ids[i];
++
++	fwspec->num_ids += num_ids;
++	dev->iommu_fwspec = fwspec;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
+diff --git a/drivers/iommu/of_iommu.c b/drivers/iommu/of_iommu.c
+index 19e1e8f2f871..5b82862f571f 100644
+--- a/drivers/iommu/of_iommu.c
++++ b/drivers/iommu/of_iommu.c
+@@ -167,7 +167,9 @@ static const struct iommu_ops
+ 		return NULL;
+ 
+ 	ops = of_iommu_get_ops(iommu_spec.np);
+-	if (!ops || !ops->of_xlate || ops->of_xlate(&pdev->dev, &iommu_spec))
++	if (!ops || !ops->of_xlate ||
++	    iommu_fwspec_init(&pdev->dev, &iommu_spec.np->fwnode, ops) ||
++	    ops->of_xlate(&pdev->dev, &iommu_spec))
+ 		ops = NULL;
+ 
+ 	of_node_put(iommu_spec.np);
+@@ -196,7 +198,9 @@ const struct iommu_ops *of_iommu_configure(struct device *dev,
+ 		np = iommu_spec.np;
+ 		ops = of_iommu_get_ops(np);
+ 
+-		if (!ops || !ops->of_xlate || ops->of_xlate(dev, &iommu_spec))
++		if (!ops || !ops->of_xlate ||
++		    iommu_fwspec_init(dev, &np->fwnode, ops) ||
++		    ops->of_xlate(dev, &iommu_spec))
+ 			goto err_put_node;
+ 
+ 		of_node_put(np);
+diff --git a/include/linux/device.h b/include/linux/device.h
+index 38f02814d53a..bc41e87a969b 100644
+--- a/include/linux/device.h
++++ b/include/linux/device.h
+@@ -41,6 +41,7 @@ struct device_node;
+ struct fwnode_handle;
+ struct iommu_ops;
+ struct iommu_group;
++struct iommu_fwspec;
+ 
+ struct bus_attribute {
+ 	struct attribute	attr;
+@@ -765,6 +766,7 @@ struct device_dma_parameters {
+  * 		gone away. This should be set by the allocator of the
+  * 		device (i.e. the bus driver that discovered the device).
+  * @iommu_group: IOMMU group the device belongs to.
++ * @iommu_fwspec: IOMMU-specific properties supplied by firmware.
+  *
+  * @offline_disabled: If set, the device is permanently online.
+  * @offline:	Set after successful invocation of bus type's .offline().
+@@ -849,6 +851,7 @@ struct device {
+ 
+ 	void	(*release)(struct device *dev);
+ 	struct iommu_group	*iommu_group;
++	struct iommu_fwspec	*iommu_fwspec;
+ 
+ 	bool			offline_disabled:1;
+ 	bool			offline:1;
+diff --git a/include/linux/iommu.h b/include/linux/iommu.h
+index f5b0416c8c9e..12da492e77b0 100644
+--- a/include/linux/iommu.h
++++ b/include/linux/iommu.h
+@@ -343,10 +343,32 @@ extern struct iommu_group *pci_device_group(struct device *dev);
+ /* Generic device grouping function */
+ extern struct iommu_group *generic_device_group(struct device *dev);
+ 
++/**
++ * struct iommu_fwspec - per-device IOMMU instance data
++ * @ops: ops for this device's IOMMU
++ * @iommu_fwnode: firmware handle for this device's IOMMU
++ * @iommu_priv: IOMMU driver private data for this device
++ * @num_ids: number of associated device IDs
++ * @ids: IDs which this device may present to the IOMMU
++ */
++struct iommu_fwspec {
++	const struct iommu_ops	*ops;
++	struct fwnode_handle	*iommu_fwnode;
++	void			*iommu_priv;
++	unsigned int		num_ids;
++	u32			ids[1];
++};
++
++int iommu_fwspec_init(struct device *dev, struct fwnode_handle *iommu_fwnode,
++		      const struct iommu_ops *ops);
++void iommu_fwspec_free(struct device *dev);
++int iommu_fwspec_add_ids(struct device *dev, u32 *ids, int num_ids);
++
+ #else /* CONFIG_IOMMU_API */
+ 
+ struct iommu_ops {};
+ struct iommu_group {};
++struct iommu_fwspec {};
+ 
+ static inline bool iommu_present(struct bus_type *bus)
+ {
+@@ -559,6 +581,23 @@ static inline void iommu_device_unlink(struct device *dev, struct device *link)
+ {
+ }
+ 
++static inline int iommu_fwspec_init(struct device *dev,
++				    struct fwnode_handle *iommu_fwnode,
++				    const struct iommu_ops *ops)
++{
++	return -ENODEV;
++}
++
++static inline void iommu_fwspec_free(struct device *dev)
++{
++}
++
++static inline int iommu_fwspec_add_ids(struct device *dev, u32 *ids,
++				       int num_ids)
++{
++	return -ENODEV;
++}
++
+ #endif /* CONFIG_IOMMU_API */
+ 
+ #endif /* __LINUX_IOMMU_H */
+-- 
+2.14.1
+

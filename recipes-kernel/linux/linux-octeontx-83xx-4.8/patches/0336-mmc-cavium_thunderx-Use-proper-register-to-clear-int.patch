@@ -1,0 +1,31 @@
+From 656c468c702f4c5d69cef605529e6a168e323723 Mon Sep 17 00:00:00 2001
+From: Chandrakala Chavva <cchavva@caviumnetworks.com>
+Date: Mon, 5 Mar 2018 22:32:25 -0800
+Subject: [PATCH 336/375] mmc: cavium_thunderx: Use proper register to clear
+ interrupts
+
+The CSR at offset 0x80 (MIO_EMM_INT_W1S) actually sets interrupts instead
+of clearing the interrupts. So use MIO_EMM_INT CSR which clears the
+interrupts.
+
+Signed-off-by: Chandrakala Chavva <cchavva@caviumnetworks.com>
+---
+ drivers/mmc/host/cavium-thunderx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/mmc/host/cavium-thunderx.c b/drivers/mmc/host/cavium-thunderx.c
+index b6bc950dbc17..2dfbf13b433c 100644
+--- a/drivers/mmc/host/cavium-thunderx.c
++++ b/drivers/mmc/host/cavium-thunderx.c
+@@ -114,7 +114,7 @@ static int thunder_mmc_probe(struct pci_dev *pdev,
+ 	 * Clear out any pending interrupts that may be left over from
+ 	 * bootloader. Writing 1 to the bits clears them.
+ 	 */
+-	writeq(127, host->base + MIO_EMM_INT_EN(host));
++	writeq(127, host->base + MIO_EMM_INT(host));
+ 	writeq(3, host->base + MIO_EMM_DMA_INT_ENA_W1C(host));
+ 	/* Clear DMA FIFO */
+ 	writeq(BIT_ULL(16), host->base + MIO_EMM_DMA_FIFO_CFG(host));
+-- 
+2.14.1
+

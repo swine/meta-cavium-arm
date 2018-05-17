@@ -4,7 +4,7 @@
 inherit kernel
 
 PROVIDES += "virtual/kernel"
-COMPATIBLE_MACHINE = "cavium-octeontx-83xx"
+COMPATIBLE_MACHINE = "cavium-octeontx-83xx|cavium-octeontx-cn81xx|cavium-thunderx-cn88xx|qemuarm64"
 ARCH = "arm64"
 
 LICENSE = "GPLv2"

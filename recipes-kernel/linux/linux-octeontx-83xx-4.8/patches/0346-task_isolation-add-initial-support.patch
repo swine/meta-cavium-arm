@@ -83,8 +83,8 @@ Signed-off-by: Peter Swain <peter.swain@cavium.com>
  kernel/isolation.c                  | 218 ++++++++++++++++++++++++++++++++++++
  kernel/signal.c                     |   8 ++
  kernel/sys.c                        |   9 ++
- kernel/time/tick-sched.c            |  37 +++---
- 13 files changed, 390 insertions(+), 13 deletions(-)
+ kernel/time/tick-sched.c            |   36 +++--
+ 13 files changed, 389 insertions(+), 13 deletions(-)
  create mode 100644 include/linux/isolation.h
  create mode 100644 kernel/isolation.c
 
@@ -621,20 +621,19 @@ index 2ec7c00228f3..2daf5e5e5cd4 100644
  
  #include <asm/irq_regs.h>
  
-@@ -205,6 +206,12 @@ static bool can_stop_full_tick(struct tick_sched *ts)
+@@ -205,6 +206,11 @@ static bool can_stop_full_tick(struct tick_sched *ts)
  	return true;
  }
  
 +bool can_stop_my_full_tick(void)
 +{
-+	return can_stop_full_tick(smp_processor_id(),
-+				  this_cpu_ptr(&tick_cpu_sched));
++	return can_stop_full_tick(this_cpu_ptr(&tick_cpu_sched));
 +}
 +
  static void nohz_full_kick_func(struct irq_work *work)
  {
  	/* Empty, the tick restart happens on tick_nohz_irq_exit() */
-@@ -407,30 +414,34 @@ static int tick_nohz_cpu_down_callback(struct notifier_block *nfb,
+@@ -407,30 +413,34 @@ static int tick_nohz_cpu_down_callback(struct notifier_block *nfb,
  	return NOTIFY_OK;
  }
  
